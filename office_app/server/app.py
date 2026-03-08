@@ -215,7 +215,7 @@ class ToolCall(BaseModel):
     arguments: Dict[str, Any] = Field(default_factory=dict)
 
 
-app = FastAPI(title="Veridex Office Server", version="1.1.3")
+app = FastAPI(title="Veridex Office Server", version="1.1.4")
 
 
 @app.on_event("startup")
@@ -247,7 +247,7 @@ def tools() -> Dict[str, Any]:
             "office.memos_list",
             "office.memo_get",
         ],
-        "version": "1.1.3",
+        "version": "1.1.4",
     }
 
 
@@ -295,7 +295,7 @@ def handle_workspace_new(args: Dict[str, Any]) -> Dict[str, Any]:
     store.register_workspace(workspace_id, label)
 
     state = {
-        "schema_version": "1.1.3",
+        "schema_version": "1.1.4",
         "workspace_id": workspace_id,
         "active_room": "lobby",
         "active_persona": default_persona_for_external_room("lobby"),
@@ -321,7 +321,7 @@ def handle_office_bootstrap(args: Dict[str, Any]) -> Dict[str, Any]:
 
     if not state:
         state = {
-            "schema_version": "1.1.3",
+            "schema_version": "1.1.4",
             "workspace_id": workspace_id,
             "active_room": "lobby",
             "active_persona": default_persona_for_external_room("lobby"),
@@ -412,11 +412,8 @@ def handle_office_nancy_route(args: Dict[str, Any]) -> Dict[str, Any]:
     if not request_text:
         raise HTTPException(status_code=400, detail="request is required")
 
-    state = store.load_state(workspace_id)
-    if not state:
-        raise HTTPException(status_code=404, detail=f"Workspace not initialized: {workspace_id}")
+    route = pipeline.nancy_route(workspace_id, request_text)
 
-    route = pipeline.recommend_room(request_text)
     return {
         "structuredContent": {
             "workspace_id": workspace_id,
@@ -426,10 +423,10 @@ def handle_office_nancy_route(args: Dict[str, Any]) -> Dict[str, Any]:
             "recommended_persona": route["persona"],
             "recommended_persona_profile": persona_profile_for_name(route["persona"]),
             "reason": route["reason"],
-            "auto_routed": False,
-            "requires_confirmation": True,
-            "current_room": state.get("active_room", "lobby"),
-            "current_persona": state.get("active_persona", "Receptionist"),
+            "auto_routed": route["auto_routed"],
+            "requires_confirmation": route["requires_confirmation"],
+            "current_room": route["current_room"],
+            "current_persona": route["current_persona"],
         },
         "content": [{"type": "text", "text": f"Nancy recommends {route['room_title']} ({route['persona']}). Confirm if you want to move there."}],
     }
@@ -568,3 +565,4 @@ def handle_memo_get(args: Dict[str, Any]) -> Dict[str, Any]:
             }
         ],
     }
+

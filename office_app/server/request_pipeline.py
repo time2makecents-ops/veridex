@@ -142,6 +142,20 @@ class RequestPipeline:
             "reason": "No strong department match found. Keeping request in My Office.",
         }
 
+    def nancy_route(self, workspace_id: str, request_text: str) -> Dict[str, Any]:
+        ctx = self.current_context(workspace_id)
+        route = self.recommend_room(request_text)
+        return {
+            "room_id": route["room_id"],
+            "room_title": route["room_title"],
+            "persona": route["persona"],
+            "reason": route["reason"],
+            "auto_routed": False,
+            "requires_confirmation": True,
+            "current_room": ctx["active_room"],
+            "current_persona": ctx["active_persona"],
+        }
+
     def _clear_vr_session_state_if_needed(self, workspace_id: str, previous_room: str, new_room: str) -> None:
         previous_room = normalize_external_room(previous_room)
         new_room = normalize_external_room(new_room)
