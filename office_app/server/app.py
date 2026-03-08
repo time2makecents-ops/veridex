@@ -23,12 +23,9 @@ from office_app.server.room_router import (
 )
 from office_app.server.room_policy_registry import load_room_policies
 
-# --------------------------------------------------
-# Paths
-# --------------------------------------------------
-SERVER_DIR = Path(__file__).resolve().parent           # .../office_app/server
-PKG_DIR = SERVER_DIR.parent                            # .../office_app
-ROOT_DIR = PKG_DIR.parent                              # .../Office-App
+SERVER_DIR = Path(__file__).resolve().parent
+PKG_DIR = SERVER_DIR.parent
+ROOT_DIR = PKG_DIR.parent
 
 BACKEND_DIR = PKG_DIR / "backend"
 DATA_DIR = PKG_DIR / "data"
@@ -37,51 +34,6 @@ WORKSPACES_DIR = RUNTIME_DIR / "workspaces"
 LEGACY_MEMOS_DIR = RUNTIME_DIR / "memos"
 
 INCIDENT_LOG_PATH = BACKEND_DIR / "incident_log.csv"
-
-# --------------------------------------------------
-# Defaults / fallbacks
-# --------------------------------------------------
-
-
-DEFAULT_PERSONAS: List[Dict[str, Any]] = [
-    {"name": "Receptionist", "room": "lobby", "style": "concise", "purpose": "Greets users, identifies intent, and routes them to the correct department."},
-    {"name": "Facilitator", "room": "conference_room", "style": "agenda-driven", "purpose": "Runs onboarding, system training, and structured cross-department discussions."},
-    {"name": "Navigator", "room": "control_room", "style": "enforcing", "purpose": "System governance authority. Enforces rules and supervises system behavior."},
-    {"name": "Infrastructure Manager", "room": "infrastructure_room", "style": "systems", "purpose": "Handles server operation, runtime structure, deployment, debugging, and tool activation."},
-    {"name": "Sales Director", "room": "sales_department", "style": "b2b", "purpose": "Client acquisition, deal negotiation, account management, sales strategy, CRM and outreach support."},
-    {"name": "Marketing Director", "room": "marketing_room", "style": "strategic", "purpose": "Market research, campaign planning, advertising strategy, and demand generation."},
-    {"name": "HR Manager", "room": "hr_department", "style": "supportive", "purpose": "Personnel structure, internal policy guidance, employee support, and light wellbeing check-ins."},
-    {"name": "IT Administrator", "room": "it_department", "style": "technical", "purpose": "Technical support, operating systems expertise, networking help, cybersecurity awareness, and programming guidance."},
-    {"name": "Creative Director", "room": "art_department", "style": "creative", "purpose": "Visual design, graphics, branding assets, and multimedia production including video and audio software."},
-    {"name": "Legal Counsel", "room": "law_office", "style": "tactical", "purpose": "Legal risk analysis, contract review, negotiation strategy, and regulatory awareness.", "legacy_persona": "Mr. Nice"},
-    {"name": "Finance Director", "room": "finance_department", "style": "precise", "purpose": "Payroll, accounting, banking guidance, budgeting, financial tracking, and financial software expertise."},
-    {"name": "Nancy", "room": "my_office", "style": "executive-assistant", "purpose": "Executive support for JR including scheduling, reminders, project tracking, document prep, and department coordination."},
-    {"name": "Simulation Guide", "room": "vr_room", "style": "sandbox", "purpose": "Sandbox assistant capable of simulating personas, rules, and scenarios without affecting the real system."},
-    {"name": "Archivist", "room": "records_archive", "style": "organizational", "purpose": "Document organization, historical record storage, database structure guidance, and version tracking."},
-    {"name": "R&D Director", "room": "rnd_room", "style": "engineering", "purpose": "Supports invention, engineering design, chemistry, prototyping, and patent preparation guidance."},
-    {"name": "Security Chief", "room": "security_room", "style": "risk", "purpose": "Cybersecurity, social engineering awareness, physical security systems, threat management, and security drills."},
-    {"name": "Break Room Host", "room": "break_room", "style": "playful", "purpose": "Casual conversation, games, humor, and mental breaks."},
-]
-
-DEFAULT_ROOM_POLICIES: Dict[str, Any] = {
-    "global": {
-        "navigator_always_present": True,
-        "navigator_visibility_default": "invisible",
-    },
-    "vr_room": {
-        "sandbox_mode": True,
-        "persistent_storage": False,
-        "allow_persona_morph": True,
-        "clear_state_on_exit": True,
-        "allow_rule_simulation": True,
-        "allow_session_artifacts": True,
-        "affects_other_rooms": False,
-    },
-    "break_room": {
-        "operational_decisions": False,
-        "policy_changes": False,
-    },
-}
 
 NAVIGATOR_CONTROL = {
     "id": "NAVIGATOR",
@@ -95,16 +47,12 @@ WORKSPACE_TOOLS_NO_ID = {
 }
 
 
-# --------------------------------------------------
-# Utility helpers
-# --------------------------------------------------
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def stable_state_sha(state: Dict[str, Any]) -> str:
     import hashlib
-
     b = json.dumps(state, sort_keys=True).encode("utf-8")
     return hashlib.sha256(b).hexdigest()
 
@@ -120,17 +68,6 @@ def _write_json(path: Path, obj: Any) -> None:
     path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
 
 
-def load_rooms() -> List[Dict[str, Any]]:
-    rooms = _read_json(ROOMS_PATH, DEFAULT_ROOMS)
-    return rooms if isinstance(rooms, list) and rooms else DEFAULT_ROOMS
-
-def normalize_external_room(room_id: str) -> str:
-    return room_id.strip().lower().replace(" ", "_")
-
-
-# --------------------------------------------------
-# Workspace storage
-# --------------------------------------------------
 class WorkspaceStore:
     def __init__(self, workspaces_dir: Path):
         self.workspaces_dir = workspaces_dir
@@ -161,12 +98,7 @@ class WorkspaceStore:
         _write_json(self.state_path(workspace_id), state)
 
     def append_transcript(self, workspace_id: str, role: str, room_id: str, text: str) -> None:
-        entry = {
-            "ts": utc_now(),
-            "role": role,
-            "room": room_id,
-            "text": text,
-        }
+        entry = {"ts": utc_now(), "role": role, "room": room_id, "text": text}
         tp = self.transcript_path(workspace_id)
         tp.parent.mkdir(parents=True, exist_ok=True)
         with tp.open("a", encoding="utf-8") as f:
@@ -190,15 +122,13 @@ class WorkspaceStore:
                 row["last_seen_utc"] = utc_now()
                 self.save_index(idx)
                 return
-        rows.append(
-            {
-                "workspace_id": workspace_id,
-                "label": label,
-                "created_utc": utc_now(),
-                "last_seen_utc": utc_now(),
-                "last_room": "lobby",
-            }
-        )
+        rows.append({
+            "workspace_id": workspace_id,
+            "label": label,
+            "created_utc": utc_now(),
+            "last_seen_utc": utc_now(),
+            "last_room": "lobby",
+        })
         self.save_index(idx)
 
     def touch_workspace(self, workspace_id: str, room_id: Optional[str] = None) -> None:
@@ -218,9 +148,6 @@ class WorkspaceStore:
 store = WorkspaceStore(WORKSPACES_DIR)
 
 
-# --------------------------------------------------
-# Incident log helpers
-# --------------------------------------------------
 def ensure_incident_log_header() -> None:
     if INCIDENT_LOG_PATH.exists() and INCIDENT_LOG_PATH.stat().st_size > 0:
         return
@@ -247,37 +174,20 @@ def append_incident(
     ensure_incident_log_header()
     inc_id = incident_id or f"INC-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
     row = [
-        inc_id,
-        utc_now(),
-        severity,
-        clazz,
-        rule_or_gate,
-        command,
-        input_ref,
-        output_ref,
-        evidence_path,
-        notes,
-        state_sha256,
+        inc_id, utc_now(), severity, clazz, rule_or_gate, command,
+        input_ref, output_ref, evidence_path, notes, state_sha256,
     ]
     with INCIDENT_LOG_PATH.open("a", newline="", encoding="utf-8") as f:
         csv.writer(f).writerow(row)
     return inc_id
 
 
-# --------------------------------------------------
-# Memo helpers
-# --------------------------------------------------
 def memo_store_for(workspace_id: str) -> MemoStore:
-    # Backward compatibility: if a legacy default workspace is requested and legacy memos exist,
-    # keep them discoverable.
     if workspace_id == "default_workspace" and LEGACY_MEMOS_DIR.exists():
         return MemoStore(LEGACY_MEMOS_DIR)
     return MemoStore(store.memos_dir(workspace_id))
 
 
-# --------------------------------------------------
-# Room/state helpers
-# --------------------------------------------------
 def room_policy(room_id: str) -> Dict[str, Any]:
     policies = load_room_policies()
     return policies.get(room_id, {})
@@ -289,6 +199,7 @@ def is_break_room(room_id: str) -> bool:
 
 def is_vr_room(room_id: str) -> bool:
     return normalize_external_room(room_id) == "vr_room"
+
 
 def resolve_workspace_id(tool: str, args: Dict[str, Any]) -> str:
     workspace_id = str(args.get("workspace_id", "")).strip()
@@ -302,14 +213,11 @@ def resolve_workspace_id(tool: str, args: Dict[str, Any]) -> str:
 def clear_vr_session_state_if_needed(workspace_id: str, previous_room: str, new_room: str) -> None:
     previous_room = normalize_external_room(previous_room)
     new_room = normalize_external_room(new_room)
-
     if previous_room != "vr_room" or new_room == "vr_room":
         return
-
     vr_policy = room_policy("vr_room")
     if not vr_policy.get("clear_state_on_exit", False):
         return
-
     ws_state = store.load_state(workspace_id)
     if ws_state.get("vr_session"):
         ws_state["vr_session"] = {}
@@ -321,7 +229,6 @@ def state_snapshot_response(workspace_id: str, state: Dict[str, Any]) -> Dict[st
     active_room = state.get("active_room", "lobby")
     active_persona = state.get("active_persona", default_persona_for_external_room(active_room))
     active_persona_profile = persona_profile_for_name(active_persona)
-
     return {
         "structuredContent": {
             "workspace_id": workspace_id,
@@ -337,63 +244,46 @@ def state_snapshot_response(workspace_id: str, state: Dict[str, Any]) -> Dict[st
     }
 
 
-
-def resolve_workspace_id(tool: str, args: Dict[str, Any]) -> str:
-    workspace_id = str(args.get("workspace_id", "")).strip()
-    if tool in WORKSPACE_TOOLS_NO_ID:
-        return workspace_id
-    if workspace_id:
-        return workspace_id
-    return "default_workspace"
-
-
-def clear_vr_session_state_if_needed(workspace_id: str, previous_room: str, new_room: str) -> None:
-    policies = load_room_policies()
-    vr_policy = policies.get("vr_room", {})
-    if previous_room != "vr_room" or new_room == "vr_room":
-        return
-    if not vr_policy.get("clear_state_on_exit", False):
-        return
-
-    ws_state = store.load_state(workspace_id)
-    sandbox = ws_state.get("vr_session", {})
-    if sandbox:
-        ws_state["vr_session"] = {}
-        store.save_state(workspace_id, ws_state)
-
-
-def state_snapshot_response(workspace_id: str, state: Dict[str, Any]) -> Dict[str, Any]:
-    active_room = state.get("active_room", "lobby")
-    active_persona = state.get("active_persona", default_persona_for_external_room(active_room))
-    active_persona_profile = persona_profile_for_name(active_persona)
-
+def nancy_route_target(request_text: str) -> Dict[str, str]:
+    text = request_text.lower()
+    rules = [
+        (["contract", "legal", "law", "lawsuit", "liability", "agreement", "negotiation"], "law_office"),
+        (["payroll", "accounting", "budget", "bank", "banking", "finance", "expense"], "finance_department"),
+        (["computer", "it", "network", "wifi", "router", "software", "programming", "phone", "technical"], "it_department"),
+        (["marketing", "campaign", "advertising", "audience", "promotion", "brand"], "marketing_room"),
+        (["sales", "prospect", "client", "crm", "deal", "account executive", "outreach"], "sales_department"),
+        (["design", "poster", "graphic", "video", "audio", "art", "creative"], "art_department"),
+        (["hr", "employee", "staff", "burnout", "wellbeing", "policy", "onboarding"], "hr_department"),
+        (["archive", "records", "database", "paperwork", "documents", "filing"], "records_archive"),
+        (["invent", "invention", "prototype", "engineering", "chemistry", "patent", "r&d"], "rnd_room"),
+        (["security", "phishing", "camera", "alarm", "threat", "social engineering"], "security_room"),
+        (["sandbox", "simulate", "simulation", "test rules", "vr"], "vr_room"),
+        (["break", "joke", "game", "fun", "relax"], "break_room"),
+    ]
+    for keywords, room_id in rules:
+        if any(k in text for k in keywords):
+            room = validate_room(room_id)
+            return {
+                "room_id": room["id"],
+                "room_title": room["title"],
+                "persona": str(room.get("default_persona") or "Navigator"),
+                "reason": f"Matched request keywords to {room['title']}.",
+            }
+    room = validate_room("my_office")
     return {
-        "structuredContent": {
-            "workspace_id": workspace_id,
-            "active_room": active_room,
-            "active_persona": active_persona,
-            "active_persona_profile": active_persona_profile,
-            "navigator": NAVIGATOR_CONTROL,
-            "rooms": rooms_payload(),
-            "room_policies": load_room_policies(),
-            "timestamp_utc": utc_now(),
-        },
-        "content": [{"type": "text", "text": f"Active room: {active_room} | Persona: {active_persona}"}],
+        "room_id": room["id"],
+        "room_title": room["title"],
+        "persona": str(room.get("default_persona") or "Nancy"),
+        "reason": "No strong department match found. Keeping request in My Office.",
     }
 
 
-# --------------------------------------------------
-# Pydantic models
-# --------------------------------------------------
 class ToolCall(BaseModel):
     tool: str = Field(..., description="Tool name, e.g. office.bootstrap")
     arguments: Dict[str, Any] = Field(default_factory=dict)
 
 
-# --------------------------------------------------
-# FastAPI app
-# --------------------------------------------------
-app = FastAPI(title="Veridex Office Server", version="1.1.1")
+app = FastAPI(title="Veridex Office Server", version="1.1.2")
 
 
 @app.on_event("startup")
@@ -420,11 +310,12 @@ def tools() -> Dict[str, Any]:
             "office.room_set",
             "office.workspaces_list",
             "office.workspace_new",
+            "office.nancy_route",
             "mailroom.dispatch",
             "office.memos_list",
             "office.memo_get",
         ],
-        "version": "1.1.1",
+        "version": "1.1.2",
     }
 
 
@@ -446,6 +337,8 @@ def call_tool(call: ToolCall) -> Dict[str, Any]:
         return handle_office_state_get(args)
     if tool == "office.room_set":
         return handle_office_room_set(args)
+    if tool == "office.nancy_route":
+        return handle_office_nancy_route(args)
     if tool == "mailroom.dispatch":
         return handle_mailroom_dispatch(args)
     if tool == "office.memos_list":
@@ -456,9 +349,6 @@ def call_tool(call: ToolCall) -> Dict[str, Any]:
     raise HTTPException(status_code=400, detail=f"Unknown tool: {tool}")
 
 
-# --------------------------------------------------
-# Tool handlers
-# --------------------------------------------------
 def handle_workspaces_list(args: Dict[str, Any]) -> Dict[str, Any]:
     idx = store.load_index()
     return {
@@ -471,9 +361,8 @@ def handle_workspace_new(args: Dict[str, Any]) -> Dict[str, Any]:
     workspace_id = f"ws_{uuid.uuid4().hex[:8]}"
     label = str(args.get("label") or f"Workspace {utc_now()}")
     store.register_workspace(workspace_id, label)
-
     state = {
-        "schema_version": "1.1.1",
+        "schema_version": "1.1.2",
         "workspace_id": workspace_id,
         "active_room": "lobby",
         "active_persona": default_persona_for_external_room("lobby"),
@@ -486,7 +375,6 @@ def handle_workspace_new(args: Dict[str, Any]) -> Dict[str, Any]:
     }
     store.save_state(workspace_id, state)
     store.append_transcript(workspace_id, "system", "lobby", f"Workspace created: {label}")
-
     return {
         "structuredContent": {"workspace_id": workspace_id, "label": label},
         "content": [{"type": "text", "text": f"Created workspace {workspace_id}."}],
@@ -496,10 +384,9 @@ def handle_workspace_new(args: Dict[str, Any]) -> Dict[str, Any]:
 def handle_office_bootstrap(args: Dict[str, Any]) -> Dict[str, Any]:
     workspace_id = args["workspace_id"]
     state = store.load_state(workspace_id)
-
     if not state:
         state = {
-            "schema_version": "1.1.1",
+            "schema_version": "1.1.2",
             "workspace_id": workspace_id,
             "active_room": "lobby",
             "active_persona": default_persona_for_external_room("lobby"),
@@ -513,7 +400,6 @@ def handle_office_bootstrap(args: Dict[str, Any]) -> Dict[str, Any]:
         store.save_state(workspace_id, state)
         store.register_workspace(workspace_id, workspace_id)
         store.append_transcript(workspace_id, "system", "lobby", "Initialized workspace in Lobby.")
-
         append_incident(
             severity="LOW",
             clazz="BOOTSTRAP",
@@ -532,7 +418,6 @@ def handle_office_bootstrap(args: Dict[str, Any]) -> Dict[str, Any]:
             state["active_persona"] = default_persona_for_external_room(state["active_room"])
         store.save_state(workspace_id, state)
         store.touch_workspace(workspace_id, state.get("active_room", "lobby"))
-
     state = store.load_state(workspace_id)
     return state_snapshot_response(workspace_id, state)
 
@@ -544,28 +429,24 @@ def handle_office_state_get(args: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Workspace not initialized: {workspace_id}")
     return state_snapshot_response(workspace_id, state)
 
+
 def handle_office_room_set(args: Dict[str, Any]) -> Dict[str, Any]:
     workspace_id = args["workspace_id"]
     room_id = str(args.get("room_id", "")).strip()
     if not room_id:
         raise HTTPException(status_code=400, detail="Missing required field: room_id")
-
     target_external = normalize_external_room(room_id)
     room = validate_room(target_external)
-
     state = store.load_state(workspace_id)
     if not state:
         raise HTTPException(status_code=404, detail=f"Workspace not initialized: {workspace_id}")
-
     previous_room = state.get("active_room", "lobby")
     clear_vr_session_state_if_needed(workspace_id, previous_room, target_external)
-
     state["active_room"] = target_external
     state["active_persona"] = str(room.get("default_persona") or "Navigator")
     store.save_state(workspace_id, state)
     store.touch_workspace(workspace_id, target_external)
     store.append_transcript(workspace_id, "system", target_external, f"Entered {room['title']}")
-
     append_incident(
         severity="LOW",
         clazz="STATE_CHANGE",
@@ -577,7 +458,6 @@ def handle_office_room_set(args: Dict[str, Any]) -> Dict[str, Any]:
         notes=f"active_room: {previous_room} -> {target_external}",
         state_sha256=stable_state_sha(state),
     )
-
     return {
         "structuredContent": {
             "workspace_id": workspace_id,
@@ -590,55 +470,63 @@ def handle_office_room_set(args: Dict[str, Any]) -> Dict[str, Any]:
         },
         "content": [{"type": "text", "text": f"Active room set to {room['title']} | Persona: {state['active_persona']}."}],
     }
-    
+
+
+def handle_office_nancy_route(args: Dict[str, Any]) -> Dict[str, Any]:
+    workspace_id = args["workspace_id"]
+    request_text = str(args.get("request", "")).strip()
+    if not request_text:
+        raise HTTPException(status_code=400, detail="request is required")
+    state = store.load_state(workspace_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Workspace not initialized: {workspace_id}")
+    route = nancy_route_target(request_text)
+    return {
+        "structuredContent": {
+            "workspace_id": workspace_id,
+            "request": request_text,
+            "recommended_room": route["room_id"],
+            "recommended_room_title": route["room_title"],
+            "recommended_persona": route["persona"],
+            "recommended_persona_profile": persona_profile_for_name(route["persona"]),
+            "reason": route["reason"],
+            "auto_routed": False,
+            "requires_confirmation": True,
+            "current_room": state.get("active_room", "lobby"),
+            "current_persona": state.get("active_persona", "Receptionist"),
+        },
+        "content": [{"type": "text", "text": f"Nancy recommends {route['room_title']} ({route['persona']}). Confirm if you want to move there."}],
+    }
+
 
 def handle_mailroom_dispatch(args: Dict[str, Any]) -> Dict[str, Any]:
     workspace_id = args["workspace_id"]
     for field in ("to_room", "body"):
         if field not in args:
             raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
-
     to_room_raw = str(args["to_room"])
     ensure_single_target(to_room_raw)
     if "," in to_room_raw or " and " in to_room_raw.lower() or "&" in to_room_raw:
         raise HTTPException(status_code=400, detail="One memo may target only one room. Send separate memos.")
-
     to_room_external = normalize_external_room(to_room_raw)
     dest_room = validate_room(to_room_external)
-
     if is_break_room(to_room_external):
-        raise HTTPException(
-            status_code=403,
-            detail="Break Room is non-operational. Memo dispatch is not allowed to break_room."
-        )
-
+        raise HTTPException(status_code=403, detail="Break Room is non-operational. Memo dispatch is not allowed to break_room.")
     body = str(args["body"]).strip()
     explicit_persona = str(args.get("explicit_persona", "")).strip() or None
-
     state = store.load_state(workspace_id)
     if not state:
         raise HTTPException(status_code=404, detail=f"Workspace not initialized: {workspace_id}")
-
     from_room_external = state.get("active_room", "lobby")
-
     if is_break_room(from_room_external):
-        raise HTTPException(
-            status_code=403,
-            detail="Break Room is non-operational. Memo dispatch is not allowed from break_room."
-        )
-
+        raise HTTPException(status_code=403, detail="Break Room is non-operational. Memo dispatch is not allowed from break_room.")
     if is_vr_room(from_room_external):
         vr_policy = room_policy("vr_room")
         if not vr_policy.get("affects_other_rooms", False):
-            raise HTTPException(
-                status_code=403,
-                detail="VR Room sandbox is isolated. Dispatch to other rooms is not allowed from vr_room."
-            )
-
+            raise HTTPException(status_code=403, detail="VR Room sandbox is isolated. Dispatch to other rooms is not allowed from vr_room.")
     subject = generate_subject(body)
     memo_id = str(uuid.uuid4())
     to_persona = explicit_persona or str(dest_room.get("default_persona") or "Navigator")
-
     memo = Memo(
         memo_id=memo_id,
         from_room=from_room_external,
@@ -650,10 +538,8 @@ def handle_mailroom_dispatch(args: Dict[str, Any]) -> Dict[str, Any]:
         thread_id=None,
     )
     memo_store_for(workspace_id).append(memo)
-
     header = f"Memo filed to: {to_persona} ({dest_room['title']})\nSubject: {subject}\n"
     store.append_transcript(workspace_id, "system", from_room_external, f"Memo dispatched to {to_room_external}: {subject}")
-
     append_incident(
         severity="LOW",
         clazz="MEMO_DISPATCH",
@@ -670,7 +556,6 @@ def handle_mailroom_dispatch(args: Dict[str, Any]) -> Dict[str, Any]:
         notes="Recorded memo dispatch (single-target).",
         state_sha256=stable_state_sha(state),
     )
-
     return {
         "structuredContent": {
             "workspace_id": workspace_id,
@@ -691,11 +576,9 @@ def handle_memos_list(args: Dict[str, Any]) -> Dict[str, Any]:
     workspace_id = args["workspace_id"]
     limit = int(args.get("limit", 25))
     limit = max(1, min(limit, 200))
-
     mstore = memo_store_for(workspace_id)
     memos_dir = getattr(mstore, "dir", None) or store.memos_dir(workspace_id)
     files = sorted(Path(memos_dir).glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
-
     rows: List[Dict[str, Any]] = []
     for p in files:
         obj = _read_json(p, {})
@@ -709,7 +592,6 @@ def handle_memos_list(args: Dict[str, Any]) -> Dict[str, Any]:
                 "subject": obj.get("subject"),
             }
         )
-
     return {
         "structuredContent": {"workspace_id": workspace_id, "count": len(rows), "memos": rows},
         "content": [{"type": "text", "text": f"Found {len(rows)} memo(s)."}],
@@ -721,13 +603,11 @@ def handle_memo_get(args: Dict[str, Any]) -> Dict[str, Any]:
     memo_id = str(args.get("memo_id", "")).strip()
     if not memo_id:
         raise HTTPException(status_code=400, detail="memo_id is required")
-
     mstore = memo_store_for(workspace_id)
     memos_dir = getattr(mstore, "dir", None) or store.memos_dir(workspace_id)
     path = Path(memos_dir) / f"{memo_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Memo not found: {memo_id}")
-
     obj = _read_json(path, {})
     body = obj.get("body", "")
     return {
