@@ -244,39 +244,6 @@ def state_snapshot_response(workspace_id: str, state: Dict[str, Any]) -> Dict[st
     }
 
 
-def nancy_route_target(request_text: str) -> Dict[str, str]:
-    text = request_text.lower()
-    rules = [
-        (["contract", "legal", "law", "lawsuit", "liability", "agreement", "negotiation"], "law_office"),
-        (["payroll", "accounting", "budget", "bank", "banking", "finance", "expense"], "finance_department"),
-        (["computer", "it", "network", "wifi", "router", "software", "programming", "phone", "technical"], "it_department"),
-        (["marketing", "campaign", "advertising", "audience", "promotion", "brand"], "marketing_room"),
-        (["sales", "prospect", "client", "crm", "deal", "account executive", "outreach"], "sales_department"),
-        (["design", "poster", "graphic", "video", "audio", "art", "creative"], "art_department"),
-        (["hr", "employee", "staff", "burnout", "wellbeing", "policy", "onboarding"], "hr_department"),
-        (["archive", "records", "database", "paperwork", "documents", "filing"], "records_archive"),
-        (["invent", "invention", "prototype", "engineering", "chemistry", "patent", "r&d"], "rnd_room"),
-        (["security", "phishing", "camera", "alarm", "threat", "social engineering"], "security_room"),
-        (["sandbox", "simulate", "simulation", "test rules", "vr"], "vr_room"),
-        (["break", "joke", "game", "fun", "relax"], "break_room"),
-    ]
-    for keywords, room_id in rules:
-        if any(k in text for k in keywords):
-            room = validate_room(room_id)
-            return {
-                "room_id": room["id"],
-                "room_title": room["title"],
-                "persona": str(room.get("default_persona") or "Navigator"),
-                "reason": f"Matched request keywords to {room['title']}.",
-            }
-    room = validate_room("my_office")
-    return {
-        "room_id": room["id"],
-        "room_title": room["title"],
-        "persona": str(room.get("default_persona") or "Nancy"),
-        "reason": "No strong department match found. Keeping request in My Office.",
-    }
-
 
 class ToolCall(BaseModel):
     tool: str = Field(..., description="Tool name, e.g. office.bootstrap")
@@ -480,7 +447,7 @@ def handle_office_nancy_route(args: Dict[str, Any]) -> Dict[str, Any]:
     state = store.load_state(workspace_id)
     if not state:
         raise HTTPException(status_code=404, detail=f"Workspace not initialized: {workspace_id}")
-    route = nancy_route_target(request_text)
+    route = pipeline.recommend_room(request_text)
     return {
         "structuredContent": {
             "workspace_id": workspace_id,
