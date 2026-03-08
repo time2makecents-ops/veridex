@@ -92,6 +92,20 @@ class RequestPipeline:
             "room_title": room["title"],
         }
 
+    def enter_room_response(self, workspace_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "structuredContent": {
+                "workspace_id": workspace_id,
+                "previous_room": result["previous_room"],
+                "active_room": result["active_room"],
+                "active_persona": result["active_persona"],
+                "active_persona_profile": result["active_persona_profile"],
+                "navigator": self.navigator_control,
+                "rooms": rooms_payload(),
+            },
+            "content": [{"type": "text", "text": f"Active room set to {result['room_title']} | Persona: {result['active_persona']}."}],
+        }
+
     def assert_mailroom_allowed(self, from_room: str, to_room: str) -> None:
         if is_break_room(to_room):
             raise HTTPException(

@@ -17,7 +17,6 @@ from office_app.server.models import Memo
 from office_app.server.room_router import (
     default_persona_for_external_room,
     normalize_external_room,
-    rooms_payload,
     validate_room,
 )
 from office_app.server.request_pipeline import RequestPipeline
@@ -70,7 +69,7 @@ def _write_json(path: Path, obj: Any) -> None:
 
 def build_workspace_state(workspace_id: str, active_room: str = "lobby") -> Dict[str, Any]:
     return {
-        "schema_version": "1.1.5",
+        "schema_version": "1.1.6",
         "workspace_id": workspace_id,
         "active_room": active_room,
         "active_persona": default_persona_for_external_room(active_room),
@@ -229,7 +228,7 @@ class ToolCall(BaseModel):
     arguments: Dict[str, Any] = Field(default_factory=dict)
 
 
-app = FastAPI(title="Veridex Office Server", version="1.1.5")
+app = FastAPI(title="Veridex Office Server", version="1.1.6")
 
 
 @app.on_event("startup")
@@ -261,7 +260,7 @@ def tools() -> Dict[str, Any]:
             "office.memos_list",
             "office.memo_get",
         ],
-        "version": "1.1.5",
+        "version": "1.1.6",
     }
 
 
@@ -376,18 +375,7 @@ def handle_office_room_set(args: Dict[str, Any]) -> Dict[str, Any]:
         state_sha256=stable_state_sha(state),
     )
 
-    return {
-        "structuredContent": {
-            "workspace_id": workspace_id,
-            "previous_room": result["previous_room"],
-            "active_room": result["active_room"],
-            "active_persona": result["active_persona"],
-            "active_persona_profile": result["active_persona_profile"],
-            "navigator": NAVIGATOR_CONTROL,
-            "rooms": rooms_payload(),
-        },
-        "content": [{"type": "text", "text": f"Active room set to {result['room_title']} | Persona: {result['active_persona']}."}],
-    }
+    return pipeline.enter_room_response(workspace_id, result)
 
 
 def handle_office_nancy_route(args: Dict[str, Any]) -> Dict[str, Any]:
