@@ -22,7 +22,7 @@ from office_app.server.room_router import (
     validate_room,
 )
 from office_app.server.room_policy_registry import load_room_policies
-
+from office_app.server.request_pipeline import RequestPipeline
 SERVER_DIR = Path(__file__).resolve().parent
 PKG_DIR = SERVER_DIR.parent
 ROOT_DIR = PKG_DIR.parent
@@ -146,7 +146,7 @@ class WorkspaceStore:
 
 
 store = WorkspaceStore(WORKSPACES_DIR)
-
+pipeline = RequestPipeline(store=store, navigator_control=NAVIGATOR_CONTROL, utc_now_fn=utc_now)
 
 def ensure_incident_log_header() -> None:
     if INCIDENT_LOG_PATH.exists() and INCIDENT_LOG_PATH.stat().st_size > 0:
