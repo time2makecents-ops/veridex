@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.1.1",
+  "workspace_id": "ws_14554657",
+  "active_room": "lobby",
+  "active_persona": "Receptionist",
+  "active_mode": "STANDARD",
+  "scope_lock": {
+    "enabled": true,
+    "max_rooms": 1
+  },
+  "engaged": {
+    "CRE": false
+  },
+  "gates": {
+    "SAVE_GATE": true,
+    "PREFLIGHT": true,
+    "VERIFICATION": true
+  },
+  "created_at": "2026-03-08T12:06:33.307559Z",
+  "vr_session": {},
+  "updated_at": "2026-03-08T14:25:06.431198Z"
+}

@@ -1,0 +1,36 @@
+Office-App/
+│
+├── 00_Constitution/
+│   ├── Navigator_Kernel.md
+│   ├── Mail_Room_Routing_v1.0.0.md
+│   ├── Persistence_Rules.md
+│
+├── 01_Architecture/
+│   ├── System_Overview.md
+│   ├── Room_State_Machine.md
+│   ├── Mailroom_Dispatch_Contract.md
+│
+├── 02_MCP_Tools/
+│   ├── office.bootstrap.json
+│   ├── office.state_get.json
+│   ├── office.room_set.json
+│   ├── mailroom.dispatch.json
+│   ├── vault.artifact_create.json
+│   ├── vault.artifact_get.json
+│   ├── vault.artifact_list.json
+│
+├── 03_Database/
+│   ├── schema.sql
+│   ├── migrations/
+│
+├── 04_Test_Cases/
+│   ├── mailroom_simple_case.md
+│   ├── mailroom_substantive_case.md
+│   ├── mailroom_insufficient_detail.md
+│
+├── 05_UI_Concepts/
+│   ├── Lobby.md
+│   ├── Mailroom.md
+│   ├── Vault.md
+│
+└── README.md

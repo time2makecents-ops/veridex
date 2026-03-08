@@ -1,0 +1,3 @@
+{"ts": "2026-03-08T12:55:42.040027Z", "role": "system", "room": "lobby", "text": "Workspace created: Smoke Test"}
+{"ts": "2026-03-08T12:55:42.223911Z", "role": "system", "room": "control_room", "text": "Entered Control Room"}
+{"ts": "2026-03-08T12:55:42.302517Z", "role": "system", "room": "control_room", "text": "Memo dispatched to it_department: Discussion \u2014 Testing mailroom dispatch."}

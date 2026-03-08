@@ -1,0 +1,10 @@
+{
+  "memo_id": "55fdc443-35cb-444e-96e8-7bd2adb1c4c1",
+  "from_room": "control_room",
+  "to_room": "it_department",
+  "to_persona": "IT Administrator",
+  "subject": "Discussion — Testing mailroom dispatch.",
+  "body": "Testing mailroom dispatch.",
+  "created_utc": "2026-03-08T12:55:42.299534Z",
+  "thread_id": null
+}

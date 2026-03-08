@@ -1,0 +1,7 @@
+{"ts": "2026-03-08T12:06:33.310609Z", "role": "system", "room": "lobby", "text": "Workspace created: Smoke Test"}
+{"ts": "2026-03-08T12:06:34.394788Z", "role": "system", "room": "lobby", "text": "Memo dispatched to it_department: Discussion \u2014 Testing mailroom dispatch."}
+{"ts": "2026-03-08T13:50:58.807459Z", "role": "system", "room": "break_room", "text": "Entered Break Room"}
+{"ts": "2026-03-08T13:59:32.880976Z", "role": "system", "room": "lobby", "text": "Entered Lobby"}
+{"ts": "2026-03-08T13:59:54.023402Z", "role": "system", "room": "lobby", "text": "Entered Lobby"}
+{"ts": "2026-03-08T14:00:24.010096Z", "role": "system", "room": "lobby", "text": "Entered Lobby"}
+{"ts": "2026-03-08T14:25:06.451381Z", "role": "system", "room": "lobby", "text": "Entered Lobby"}

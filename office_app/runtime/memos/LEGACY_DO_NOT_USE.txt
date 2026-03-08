@@ -1,0 +1,1 @@
+Legacy memo store retained for compatibility with default_workspace. Workspace memos under runtime\workspaces are authoritative.

@@ -1,0 +1,1 @@
+backend\state.json appears to be a legacy file. Workspace state under runtime\workspaces is authoritative in current app.py.
