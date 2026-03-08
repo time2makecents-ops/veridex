@@ -123,5 +123,14 @@ if ($memoId) {
     Write-Host "`nNo memo_id found to test office.memo_get." -ForegroundColor Yellow
 }
 
+Write-Host "`n== NANCY ROUTE TEST ==" -ForegroundColor Cyan
+$nancy = Invoke-RestMethod `
+    -Uri "$base/call" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body "{`"tool`":`"office.nancy_route`",`"arguments`":{`"workspace_id`":`"$wid`",`"request`":`"I need help reviewing a contract`"}}"
+
+$nancy | ConvertTo-Json -Depth 10
+
 Write-Host ""
 Write-Host "SMOKE TEST COMPLETE" -ForegroundColor Green
