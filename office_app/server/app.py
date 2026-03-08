@@ -69,7 +69,7 @@ def _write_json(path: Path, obj: Any) -> None:
 
 def build_workspace_state(workspace_id: str, active_room: str = "lobby") -> Dict[str, Any]:
     return {
-        "schema_version": "1.1.6",
+        "schema_version": "1.1.7",
         "workspace_id": workspace_id,
         "active_room": active_room,
         "active_persona": default_persona_for_external_room(active_room),
@@ -228,7 +228,7 @@ class ToolCall(BaseModel):
     arguments: Dict[str, Any] = Field(default_factory=dict)
 
 
-app = FastAPI(title="Veridex Office Server", version="1.1.6")
+app = FastAPI(title="Veridex Office Server", version="1.1.7")
 
 
 @app.on_event("startup")
@@ -260,7 +260,7 @@ def tools() -> Dict[str, Any]:
             "office.memos_list",
             "office.memo_get",
         ],
-        "version": "1.1.6",
+        "version": "1.1.7",
     }
 
 
@@ -425,7 +425,6 @@ def handle_mailroom_dispatch(args: Dict[str, Any]) -> Dict[str, Any]:
     )
     memo_store_for(workspace_id).append(memo)
 
-    header = f"Memo filed to: {to_persona} ({dest_room['title']})\nSubject: {subject}\n"
     store.append_transcript(workspace_id, "system", from_room_external, f"Memo dispatched to {to_room_external}: {subject}")
 
     append_incident(
@@ -445,20 +444,15 @@ def handle_mailroom_dispatch(args: Dict[str, Any]) -> Dict[str, Any]:
         state_sha256=stable_state_sha(state),
     )
 
-    return {
-        "structuredContent": {
-            "workspace_id": workspace_id,
-            "memo_id": memo_id,
-            "from_room": from_room_external,
-            "to_room": to_room_external,
-            "to_persona": to_persona,
-            "subject": subject,
-            "is_refusal": False,
-            "closure_appended": False,
-            "response_text": header,
-        },
-        "content": [{"type": "text", "text": header}],
-    }
+    return pipeline.mailroom_response(
+        workspace_id=workspace_id,
+        memo_id=memo_id,
+        from_room=from_room_external,
+        to_room=to_room_external,
+        to_persona=to_persona,
+        subject=subject,
+        dest_room_title=dest_room["title"],
+    )
 
 
 def handle_memos_list(args: Dict[str, Any]) -> Dict[str, Any]:

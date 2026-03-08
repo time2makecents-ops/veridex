@@ -196,6 +196,36 @@ class RequestPipeline:
             "content": [{"type": "text", "text": f"Nancy recommends {route['room_title']} ({route['persona']}). Confirm if you want to move there."}],
         }
 
+    def mailroom_header(self, to_persona: str, dest_room_title: str, subject: str) -> str:
+        return f"Memo filed to: {to_persona} ({dest_room_title})\nSubject: {subject}\n"
+
+    def mailroom_response(
+        self,
+        *,
+        workspace_id: str,
+        memo_id: str,
+        from_room: str,
+        to_room: str,
+        to_persona: str,
+        subject: str,
+        dest_room_title: str,
+    ) -> Dict[str, Any]:
+        header = self.mailroom_header(to_persona, dest_room_title, subject)
+        return {
+            "structuredContent": {
+                "workspace_id": workspace_id,
+                "memo_id": memo_id,
+                "from_room": from_room,
+                "to_room": to_room,
+                "to_persona": to_persona,
+                "subject": subject,
+                "is_refusal": False,
+                "closure_appended": False,
+                "response_text": header,
+            },
+            "content": [{"type": "text", "text": header}],
+        }
+
     def _clear_vr_session_state_if_needed(self, workspace_id: str, previous_room: str, new_room: str) -> None:
         previous_room = normalize_external_room(previous_room)
         new_room = normalize_external_room(new_room)
