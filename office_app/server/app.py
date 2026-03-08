@@ -14,7 +14,6 @@ from office_app.server.guards import ensure_single_target
 from office_app.server.subject import generate_subject
 from office_app.server.memo_store import MemoStore
 from office_app.server.models import Memo
-from office_app.server.persona_registry import persona_profile_for_name
 from office_app.server.room_router import (
     default_persona_for_external_room,
     normalize_external_room,
@@ -67,6 +66,21 @@ def _read_json(path: Path, default: Any) -> Any:
 def _write_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+
+
+def build_workspace_state(workspace_id: str, active_room: str = "lobby") -> Dict[str, Any]:
+    return {
+        "schema_version": "1.1.5",
+        "workspace_id": workspace_id,
+        "active_room": active_room,
+        "active_persona": default_persona_for_external_room(active_room),
+        "active_mode": "STANDARD",
+        "scope_lock": {"enabled": True, "max_rooms": 1},
+        "engaged": {"CRE": False},
+        "gates": {"SAVE_GATE": True, "PREFLIGHT": True, "VERIFICATION": True},
+        "created_at": utc_now(),
+        "vr_session": {},
+    }
 
 
 class WorkspaceStore:
@@ -215,7 +229,7 @@ class ToolCall(BaseModel):
     arguments: Dict[str, Any] = Field(default_factory=dict)
 
 
-app = FastAPI(title="Veridex Office Server", version="1.1.4")
+app = FastAPI(title="Veridex Office Server", version="1.1.5")
 
 
 @app.on_event("startup")
@@ -247,7 +261,7 @@ def tools() -> Dict[str, Any]:
             "office.memos_list",
             "office.memo_get",
         ],
-        "version": "1.1.4",
+        "version": "1.1.5",
     }
 
 
@@ -294,18 +308,7 @@ def handle_workspace_new(args: Dict[str, Any]) -> Dict[str, Any]:
     label = str(args.get("label") or f"Workspace {utc_now()}")
     store.register_workspace(workspace_id, label)
 
-    state = {
-        "schema_version": "1.1.4",
-        "workspace_id": workspace_id,
-        "active_room": "lobby",
-        "active_persona": default_persona_for_external_room("lobby"),
-        "active_mode": "STANDARD",
-        "scope_lock": {"enabled": True, "max_rooms": 1},
-        "engaged": {"CRE": False},
-        "gates": {"SAVE_GATE": True, "PREFLIGHT": True, "VERIFICATION": True},
-        "created_at": utc_now(),
-        "vr_session": {},
-    }
+    state = build_workspace_state(workspace_id)
     store.save_state(workspace_id, state)
     store.append_transcript(workspace_id, "system", "lobby", f"Workspace created: {label}")
 
@@ -320,18 +323,7 @@ def handle_office_bootstrap(args: Dict[str, Any]) -> Dict[str, Any]:
     state = store.load_state(workspace_id)
 
     if not state:
-        state = {
-            "schema_version": "1.1.4",
-            "workspace_id": workspace_id,
-            "active_room": "lobby",
-            "active_persona": default_persona_for_external_room("lobby"),
-            "active_mode": "STANDARD",
-            "scope_lock": {"enabled": True, "max_rooms": 1},
-            "engaged": {"CRE": False},
-            "gates": {"SAVE_GATE": True, "PREFLIGHT": True, "VERIFICATION": True},
-            "created_at": utc_now(),
-            "vr_session": {},
-        }
+        state = build_workspace_state(workspace_id)
         store.save_state(workspace_id, state)
         store.register_workspace(workspace_id, workspace_id)
         store.append_transcript(workspace_id, "system", "lobby", "Initialized workspace in Lobby.")
@@ -355,20 +347,12 @@ def handle_office_bootstrap(args: Dict[str, Any]) -> Dict[str, Any]:
         store.save_state(workspace_id, state)
         store.touch_workspace(workspace_id, state.get("active_room", "lobby"))
 
-    snap = pipeline.snapshot(workspace_id)
-    return {
-        "structuredContent": snap,
-        "content": [{"type": "text", "text": f"Active room: {snap['active_room']} | Persona: {snap['active_persona']}"}],
-    }
+    return pipeline.snapshot_response(workspace_id)
 
 
 def handle_office_state_get(args: Dict[str, Any]) -> Dict[str, Any]:
     workspace_id = args["workspace_id"]
-    snap = pipeline.snapshot(workspace_id)
-    return {
-        "structuredContent": snap,
-        "content": [{"type": "text", "text": f"Active room: {snap['active_room']} | Persona: {snap['active_persona']}"}],
-    }
+    return pipeline.snapshot_response(workspace_id)
 
 
 def handle_office_room_set(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -411,25 +395,7 @@ def handle_office_nancy_route(args: Dict[str, Any]) -> Dict[str, Any]:
     request_text = str(args.get("request", "")).strip()
     if not request_text:
         raise HTTPException(status_code=400, detail="request is required")
-
-    route = pipeline.nancy_route(workspace_id, request_text)
-
-    return {
-        "structuredContent": {
-            "workspace_id": workspace_id,
-            "request": request_text,
-            "recommended_room": route["room_id"],
-            "recommended_room_title": route["room_title"],
-            "recommended_persona": route["persona"],
-            "recommended_persona_profile": persona_profile_for_name(route["persona"]),
-            "reason": route["reason"],
-            "auto_routed": route["auto_routed"],
-            "requires_confirmation": route["requires_confirmation"],
-            "current_room": route["current_room"],
-            "current_persona": route["current_persona"],
-        },
-        "content": [{"type": "text", "text": f"Nancy recommends {route['room_title']} ({route['persona']}). Confirm if you want to move there."}],
-    }
+    return pipeline.nancy_route_response(workspace_id, request_text)
 
 
 def handle_mailroom_dispatch(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -565,4 +531,3 @@ def handle_memo_get(args: Dict[str, Any]) -> Dict[str, Any]:
             }
         ],
     }
-

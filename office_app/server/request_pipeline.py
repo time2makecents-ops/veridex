@@ -62,6 +62,13 @@ class RequestPipeline:
             "timestamp_utc": self.utc_now(),
         }
 
+    def snapshot_response(self, workspace_id: str) -> Dict[str, Any]:
+        snap = self.snapshot(workspace_id)
+        return {
+            "structuredContent": snap,
+            "content": [{"type": "text", "text": f"Active room: {snap['active_room']} | Persona: {snap['active_persona']}"}],
+        }
+
     def enter_room(self, workspace_id: str, room_id: str) -> Dict[str, Any]:
         state = self.load_workspace(workspace_id)
         previous_room = state.get("active_room", "lobby")
@@ -154,6 +161,25 @@ class RequestPipeline:
             "requires_confirmation": True,
             "current_room": ctx["active_room"],
             "current_persona": ctx["active_persona"],
+        }
+
+    def nancy_route_response(self, workspace_id: str, request_text: str) -> Dict[str, Any]:
+        route = self.nancy_route(workspace_id, request_text)
+        return {
+            "structuredContent": {
+                "workspace_id": workspace_id,
+                "request": request_text,
+                "recommended_room": route["room_id"],
+                "recommended_room_title": route["room_title"],
+                "recommended_persona": route["persona"],
+                "recommended_persona_profile": persona_profile_for_name(route["persona"]),
+                "reason": route["reason"],
+                "auto_routed": route["auto_routed"],
+                "requires_confirmation": route["requires_confirmation"],
+                "current_room": route["current_room"],
+                "current_persona": route["current_persona"],
+            },
+            "content": [{"type": "text", "text": f"Nancy recommends {route['room_title']} ({route['persona']}). Confirm if you want to move there."}],
         }
 
     def _clear_vr_session_state_if_needed(self, workspace_id: str, previous_room: str, new_room: str) -> None:
