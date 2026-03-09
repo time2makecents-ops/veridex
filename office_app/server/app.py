@@ -69,7 +69,7 @@ def _write_json(path: Path, obj: Any) -> None:
 
 def build_workspace_state(workspace_id: str, active_room: str = "lobby") -> Dict[str, Any]:
     return {
-        "schema_version": "1.1.7",
+        "schema_version": "1.1.8",
         "workspace_id": workspace_id,
         "active_room": active_room,
         "active_persona": default_persona_for_external_room(active_room),
@@ -228,7 +228,7 @@ class ToolCall(BaseModel):
     arguments: Dict[str, Any] = Field(default_factory=dict)
 
 
-app = FastAPI(title="Veridex Office Server", version="1.1.7")
+app = FastAPI(title="Veridex Office Server", version="1.1.8")
 
 
 @app.on_event("startup")
@@ -260,7 +260,7 @@ def tools() -> Dict[str, Any]:
             "office.memos_list",
             "office.memo_get",
         ],
-        "version": "1.1.7",
+        "version": "1.1.8",
     }
 
 
@@ -498,18 +498,4 @@ def handle_memo_get(args: Dict[str, Any]) -> Dict[str, Any]:
 
     obj = _read_json(path, {})
     body = obj.get("body", "")
-    return {
-        "structuredContent": obj,
-        "content": [
-            {
-                "type": "text",
-                "text": (
-                    f"Memo {obj.get('memo_id')}\n"
-                    f"From: {obj.get('from_room')}\n"
-                    f"To: {obj.get('to_room')} ({obj.get('to_persona')})\n"
-                    f"Subject: {obj.get('subject')}\n\n"
-                    f"{body}"
-                ),
-            }
-        ],
-    }
+    return pipeline.memo_get_response(obj, body)

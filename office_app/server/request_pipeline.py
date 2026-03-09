@@ -226,6 +226,21 @@ class RequestPipeline:
             "content": [{"type": "text", "text": header}],
         }
 
+    def memo_get_text(self, obj: Dict[str, Any], body: str) -> str:
+        return (
+            f"Memo {obj.get('memo_id')}\n"
+            f"From: {obj.get('from_room')}\n"
+            f"To: {obj.get('to_room')} ({obj.get('to_persona')})\n"
+            f"Subject: {obj.get('subject')}\n\n"
+            f"{body}"
+        )
+
+    def memo_get_response(self, obj: Dict[str, Any], body: str) -> Dict[str, Any]:
+        return {
+            "structuredContent": obj,
+            "content": [{"type": "text", "text": self.memo_get_text(obj, body)}],
+        }
+
     def _clear_vr_session_state_if_needed(self, workspace_id: str, previous_room: str, new_room: str) -> None:
         previous_room = normalize_external_room(previous_room)
         new_room = normalize_external_room(new_room)
