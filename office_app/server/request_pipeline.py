@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from fastapi import HTTPException
 
@@ -224,6 +224,12 @@ class RequestPipeline:
                 "response_text": header,
             },
             "content": [{"type": "text", "text": header}],
+        }
+
+    def memos_list_response(self, workspace_id: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+        return {
+            "structuredContent": {"workspace_id": workspace_id, "count": len(rows), "memos": rows},
+            "content": [{"type": "text", "text": f"Found {len(rows)} memo(s)."}],
         }
 
     def memo_get_text(self, obj: Dict[str, Any], body: str) -> str:

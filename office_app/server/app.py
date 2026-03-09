@@ -69,7 +69,7 @@ def _write_json(path: Path, obj: Any) -> None:
 
 def build_workspace_state(workspace_id: str, active_room: str = "lobby") -> Dict[str, Any]:
     return {
-        "schema_version": "1.1.8",
+        "schema_version": "1.1.9",
         "workspace_id": workspace_id,
         "active_room": active_room,
         "active_persona": default_persona_for_external_room(active_room),
@@ -228,7 +228,7 @@ class ToolCall(BaseModel):
     arguments: Dict[str, Any] = Field(default_factory=dict)
 
 
-app = FastAPI(title="Veridex Office Server", version="1.1.8")
+app = FastAPI(title="Veridex Office Server", version="1.1.9")
 
 
 @app.on_event("startup")
@@ -260,7 +260,7 @@ def tools() -> Dict[str, Any]:
             "office.memos_list",
             "office.memo_get",
         ],
-        "version": "1.1.8",
+        "version": "1.1.9",
     }
 
 
@@ -478,10 +478,7 @@ def handle_memos_list(args: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
 
-    return {
-        "structuredContent": {"workspace_id": workspace_id, "count": len(rows), "memos": rows},
-        "content": [{"type": "text", "text": f"Found {len(rows)} memo(s)."}],
-    }
+    return pipeline.memos_list_response(workspace_id, rows)
 
 
 def handle_memo_get(args: Dict[str, Any]) -> Dict[str, Any]:
