@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
@@ -27,10 +27,25 @@ def is_vr_room(room_id: str) -> bool:
 
 
 class RequestPipeline:
-    def __init__(self, store, navigator_control, utc_now_fn):
+    def __init__(
+        self,
+        store,
+        navigator_control,
+        utc_now_fn,
+        tool_names: Optional[List[str]] = None,
+        app_version: Optional[str] = None,
+    ):
         self.store = store
         self.navigator_control = navigator_control
         self.utc_now = utc_now_fn
+        self.tool_names = tool_names or []
+        self.app_version = app_version or "0.0.0"
+
+    def health_response(self) -> Dict[str, Any]:
+        return {"ok": True, "ts": self.utc_now()}
+
+    def tools_response(self) -> Dict[str, Any]:
+        return {"tools": self.tool_names, "version": self.app_version}
 
     def load_workspace(self, workspace_id: str) -> Dict[str, Any]:
         state = self.store.load_state(workspace_id)
