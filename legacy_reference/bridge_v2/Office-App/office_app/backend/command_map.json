@@ -1,0 +1,168 @@
+{
+  "generated_from": "/mnt/data/master_governance_registry_v1_0_0.csv",
+  "generated_at": "2026-02-17T15:23:52.357574Z",
+  "items": [
+    {
+      "object_id": "Canon Governance",
+      "canonical_id": "CANON-GOVERNANCE",
+      "version": "v1.1.0",
+      "status": "Active",
+      "tier": "Tier 1",
+      "scope": "Global",
+      "kind_guess": "CANON"
+    },
+    {
+      "object_id": "GATE-CONFLICT",
+      "canonical_id": "GATE-CONFLICT",
+      "version": "v1.0.0",
+      "status": "Active",
+      "tier": "Tier 1",
+      "scope": "Global",
+      "kind_guess": "GATE"
+    },
+    {
+      "object_id": "GATE-LEDGER",
+      "canonical_id": "GATE-LEDGER",
+      "version": "v1.0.0",
+      "status": "Active",
+      "tier": "Tier 1",
+      "scope": "Global",
+      "kind_guess": "GATE"
+    },
+    {
+      "object_id": "GATE-PREFLIGHT",
+      "canonical_id": "GATE-PREFLIGHT",
+      "version": "v1.1.0",
+      "status": "Active",
+      "tier": "Tier 1",
+      "scope": "Global",
+      "kind_guess": "GATE"
+    },
+    {
+      "object_id": "GATE-VERIFY",
+      "canonical_id": "GATE-VERIFY",
+      "version": "v1.0.0",
+      "status": "Active",
+      "tier": "Tier 1",
+      "scope": "Global",
+      "kind_guess": "GATE"
+    },
+    {
+      "object_id": "Navigator Kernel",
+      "canonical_id": "NAVIGATOR-KERNEL",
+      "version": "v1.3.0",
+      "status": "Active",
+      "tier": "Tier 1",
+      "scope": "Global",
+      "kind_guess": "KERNEL"
+    },
+    {
+      "object_id": "SAVE-APP-COMMIT-VERIFICATION-GATE",
+      "canonical_id": "SAVE-APP-COMMIT-VERIFICATION-GATE",
+      "version": "v1.0.0",
+      "status": "Active",
+      "tier": "Tier 1",
+      "scope": "Global",
+      "kind_guess": "GATE"
+    },
+    {
+      "object_id": "SAVE-SCOPE-DISAMBIGUATION-GATE",
+      "canonical_id": "SAVE-SCOPE-DISAMBIGUATION-GATE",
+      "version": "v1.0.0",
+      "status": "Active",
+      "tier": "Tier 1",
+      "scope": "Global",
+      "kind_guess": "GATE"
+    },
+    {
+      "object_id": "Command Registry",
+      "canonical_id": "COMMAND-REGISTRY",
+      "version": "v1.3.0",
+      "status": "Active",
+      "tier": "Tier 2",
+      "scope": "Global",
+      "kind_guess": "OBJECT"
+    },
+    {
+      "object_id": "INCIDENT-LEDGER",
+      "canonical_id": "INCIDENT-LEDGER",
+      "version": "v1.0.0",
+      "status": "Active",
+      "tier": "Tier 2",
+      "scope": "Global",
+      "kind_guess": "OBJECT"
+    },
+    {
+      "object_id": "INCIDENT-LOGGING-RULE",
+      "canonical_id": "INCIDENT-LOGGING-RULE",
+      "version": "v2.0.0",
+      "status": "Active",
+      "tier": "Tier 2",
+      "scope": "Global",
+      "kind_guess": "OBJECT"
+    },
+    {
+      "object_id": "NANCY-UTILITY",
+      "canonical_id": "NANCY-UTILITY",
+      "version": "v1.0.0",
+      "status": "Active",
+      "tier": "Tier 2",
+      "scope": "Global",
+      "kind_guess": "OBJECT"
+    },
+    {
+      "object_id": "RUN COMPLIANCE CHECK",
+      "canonical_id": "RUN-COMPLIANCE-CHECK",
+      "version": "v1.0.0",
+      "status": "Active",
+      "tier": "Tier 2",
+      "scope": "Global",
+      "kind_guess": "COMMAND"
+    },
+    {
+      "object_id": "RUN REGRESSION AUDIT",
+      "canonical_id": "RUN-REGRESSION-AUDIT",
+      "version": "v2.0.0",
+      "status": "Active",
+      "tier": "Tier 2",
+      "scope": "Global",
+      "kind_guess": "COMMAND"
+    },
+    {
+      "object_id": "SAVE-COMPLETION-PROTOCOL",
+      "canonical_id": "SAVE-COMPLETION-PROTOCOL",
+      "version": "v1.0.0",
+      "status": "Active",
+      "tier": "Tier 2",
+      "scope": "Global",
+      "kind_guess": "OBJECT"
+    },
+    {
+      "object_id": "VOICE-END-TRIGGER",
+      "canonical_id": "VOICE-END-TRIGGER",
+      "version": "v1.0.0",
+      "status": "Active",
+      "tier": "Tier 2",
+      "scope": "Global",
+      "kind_guess": "OBJECT"
+    },
+    {
+      "object_id": "Version Alignment Amendment",
+      "canonical_id": "VERSION-ALIGNMENT-AMENDMENT",
+      "version": "v1.0.1",
+      "status": "Active",
+      "tier": "Tier 2",
+      "scope": "Global",
+      "kind_guess": "AMENDMENT"
+    },
+    {
+      "object_id": "Versioning Charter",
+      "canonical_id": "VERSIONING-CHARTER",
+      "version": "v1.0.0",
+      "status": "Active",
+      "tier": "Tier 2",
+      "scope": "Global",
+      "kind_guess": "CHARTER"
+    }
+  ]
+}

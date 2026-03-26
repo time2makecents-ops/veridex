@@ -1,0 +1,65 @@
+{
+  "name": "mailroom.dispatch",
+  "title": "Dispatch internal memo",
+  "description": "Dispatches a single-target internal memo to one room/persona and returns a required response. Internal only. Does not change active room. Subject is auto-generated server-side.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "to_room": {
+        "type": "string",
+        "description": "Destination room identifier (single target)."
+      },
+      "body": {
+        "type": "string",
+        "description": "Memo content/instruction. Must be sufficiently specific for a complete response."
+      },
+      "explicit_persona": {
+        "type": "string",
+        "description": "Optional explicit persona invocation within the destination room. If omitted, destination room uses its default persona."
+      }
+    },
+    "required": ["to_room", "body"],
+    "additionalProperties": false
+  },
+  "annotations": {
+    "readOnlyHint": false,
+    "openWorldHint": false,
+    "destructiveHint": false
+  },
+  "_meta": {
+    "version": "1.0.0",
+    "constraints": [
+      "from_room is auto-detected from server-side active_room; user cannot override",
+      "subject is auto-generated server-side; user cannot provide subject",
+      "single target only; multiple targets must be rejected by server",
+      "dispatch must not change active_room",
+      "response must not ask questions or request uploads/clarification interactively",
+      "if insufficient detail, return hard refusal with missing elements; no analysis",
+      "conditional closure appended only for substantive/advisory responses"
+    ],
+    "expectedResponseShape": {
+      "structuredContent": {
+        "type": "object",
+        "properties": {
+          "memo_id": { "type": "string" },
+          "from_room": { "type": "string" },
+          "to_room": { "type": "string" },
+          "to_persona": { "type": "string" },
+          "subject": { "type": "string" },
+          "is_refusal": { "type": "boolean" },
+          "closure_appended": { "type": "boolean" },
+          "response_text": { "type": "string" }
+        },
+        "required": [
+          "memo_id",
+          "from_room",
+          "to_room",
+          "subject",
+          "is_refusal",
+          "closure_appended",
+          "response_text"
+        ]
+      }
+    }
+  }
+}

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import csv
 import json
@@ -11,13 +11,11 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from office_app.server.archive_service import ArchiveService
-from office_app.server.command_router import CommandRouter
-from office_app.server.errors import error_missing_required_field
+from office_app.server.errors import error_missing_required_field, error_unknown_tool
 from office_app.server.guards import ensure_single_target
 from office_app.server.memo_service import MemoService
 from office_app.server.nancy_service import NancyService
 from office_app.server.request_pipeline import RequestPipeline
-from office_app.server.tools_registry import register_tools
 from office_app.server.workspace_kernel import WorkspaceKernel, WorkspaceStore
 
 SERVER_DIR = Path(__file__).resolve().parent
@@ -43,6 +41,24 @@ WORKSPACE_TOOLS_NO_ID = {
     "office.workspace_new",
 }
 
+TOOL_NAMES = [
+    "office.bootstrap",
+    "office.state_get",
+    "office.room_set",
+    "office.workspaces_list",
+    "office.workspace_new",
+    "office.nancy_route",
+    "mailroom.dispatch",
+    "office.memos_list",
+    "office.memo_get",
+    "office.archive_store_text",
+    "office.archive_list",
+    "office.archive_get",
+    "office.nancy_artifacts_list",
+    "office.nancy_artifact_open",
+    "office.nancy_workspace_briefing",
+]
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -65,12 +81,11 @@ nancy_service = NancyService(
     store=store,
     utc_now_fn=utc_now,
 )
-router = CommandRouter()
 pipeline = RequestPipeline(
     kernel=kernel,
     navigator_control=NAVIGATOR_CONTROL,
     utc_now_fn=utc_now,
-    tool_names=[],
+    tool_names=TOOL_NAMES,
     app_version="1.3.0",
 )
 
@@ -162,10 +177,42 @@ def call_tool(call: ToolCall) -> Dict[str, Any]:
     workspace_id = resolve_workspace_id(tool, args)
     if workspace_id:
         args["workspace_id"] = workspace_id
-    return router.dispatch(tool, args)
+
+    if tool == "office.workspaces_list":
+        return handle_workspaces_list()
+    if tool == "office.workspace_new":
+        return handle_workspace_new(args)
+    if tool == "office.bootstrap":
+        return handle_office_bootstrap(args)
+    if tool == "office.state_get":
+        return handle_office_state_get(args)
+    if tool == "office.room_set":
+        return handle_office_room_set(args)
+    if tool == "office.nancy_route":
+        return handle_office_nancy_route(args)
+    if tool == "mailroom.dispatch":
+        return handle_mailroom_dispatch(args)
+    if tool == "office.memos_list":
+        return handle_memos_list(args)
+    if tool == "office.memo_get":
+        return handle_memo_get(args)
+    if tool == "office.archive_store_text":
+        return handle_archive_store_text(args)
+    if tool == "office.archive_list":
+        return handle_archive_list(args)
+    if tool == "office.archive_get":
+        return handle_archive_get(args)
+    if tool == "office.nancy_artifacts_list":
+        return handle_nancy_artifacts_list(args)
+    if tool == "office.nancy_artifact_open":
+        return handle_nancy_artifact_open(args)
+    if tool == "office.nancy_workspace_briefing":
+        return handle_nancy_workspace_briefing(args)
+
+    raise error_unknown_tool(tool)
 
 
-def handle_workspaces_list(_: Dict[str, Any]) -> Dict[str, Any]:
+def handle_workspaces_list() -> Dict[str, Any]:
     idx = kernel.list_workspaces()
     return pipeline.workspaces_list_response(idx)
 
@@ -268,7 +315,7 @@ def handle_mailroom_dispatch(args: Dict[str, Any]) -> Dict[str, Any]:
             "workspace_id": workspace_id,
             "from_room": from_room_external,
             "to_room": memo_result["to_room"],
-            "memo_id": memo_result["memo_id"],
+            "memo_id": memo_result["memo_id"]
         }),
         output_ref="(tool_response)",
         evidence_path=str(store.memos_dir(workspace_id)),
@@ -313,10 +360,8 @@ def handle_archive_store_text(args: Dict[str, Any]) -> Dict[str, Any]:
 
     content = str(args.get("content", ""))
     artifact_type = str(args.get("artifact_type", "document")).strip() or "document"
-
-    state = kernel.get_state(workspace_id)
-    source_room = str(args.get("source_room") or state.get("active_room", "lobby"))
-    source_persona = str(args.get("source_persona") or state.get("active_persona", "Receptionist"))
+    source_room = str(args.get("source_room") or kernel.get_state(workspace_id).get("active_room", "lobby"))
+    source_persona = str(args.get("source_persona") or kernel.get_state(workspace_id).get("active_persona", "Receptionist"))
 
     record = archive_service.store_text_artifact(
         workspace_id=workspace_id,
@@ -327,6 +372,7 @@ def handle_archive_store_text(args: Dict[str, Any]) -> Dict[str, Any]:
         source_persona=source_persona,
     )
 
+    state = kernel.get_state(workspace_id)
     append_incident(
         severity="LOW",
         clazz="ARCHIVE_STORE",
@@ -340,12 +386,7 @@ def handle_archive_store_text(args: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     try:
-        store.append_transcript(
-            workspace_id,
-            "system",
-            state.get("active_room", "records_archive"),
-            f"Artifact stored: {record['display_name']} ({record['artifact_id']})",
-        )
+        store.append_transcript(workspace_id, "system", state.get("active_room", "records_archive"), f"Artifact stored: {record['display_name']} ({record['artifact_id']})")
     except Exception:
         pass
 
@@ -394,27 +435,3 @@ def handle_nancy_artifact_open(args: Dict[str, Any]) -> Dict[str, Any]:
 def handle_nancy_workspace_briefing(args: Dict[str, Any]) -> Dict[str, Any]:
     workspace_id = args["workspace_id"]
     return nancy_service.workspace_briefing_response(workspace_id)
-
-
-register_tools(
-    router,
-    {
-        "office.workspaces_list": handle_workspaces_list,
-        "office.workspace_new": handle_workspace_new,
-        "office.bootstrap": handle_office_bootstrap,
-        "office.state_get": handle_office_state_get,
-        "office.room_set": handle_office_room_set,
-        "office.nancy_route": handle_office_nancy_route,
-        "mailroom.dispatch": handle_mailroom_dispatch,
-        "office.memos_list": handle_memos_list,
-        "office.memo_get": handle_memo_get,
-        "office.archive_store_text": handle_archive_store_text,
-        "office.archive_list": handle_archive_list,
-        "office.archive_get": handle_archive_get,
-        "office.nancy_artifacts_list": handle_nancy_artifacts_list,
-        "office.nancy_artifact_open": handle_nancy_artifact_open,
-        "office.nancy_workspace_briefing": handle_nancy_workspace_briefing,
-    },
-)
-
-pipeline.tool_names = router.tool_names()

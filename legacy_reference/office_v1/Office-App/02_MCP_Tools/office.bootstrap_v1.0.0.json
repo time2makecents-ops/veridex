@@ -1,0 +1,54 @@
+{
+  "name": "office.bootstrap",
+  "title": "Initialize Office",
+  "description": "Creates or loads the single-user Office workspace, ensures default rooms and active room exist, and returns a full state snapshot. Idempotent.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "client_instance_hint": {
+        "type": "string",
+        "description": "Optional opaque client hint for diagnostics. Not a stable identity."
+      }
+    },
+    "additionalProperties": false
+  },
+  "annotations": {
+    "readOnlyHint": false,
+    "openWorldHint": false,
+    "destructiveHint": false
+  },
+  "_meta": {
+    "version": "1.0.0",
+    "enforcement": [
+      "ensure workspace exists (e.g., 'default_workspace')",
+      "ensure rooms registry seeded (insert-or-ignore core rooms)",
+      "ensure office_state exists; if missing set active_room='lobby'",
+      "append audit_events with event_type='bootstrap_initialized' only on first creation; otherwise 'bootstrap_loaded' optional",
+      "return same response shape as office.state_get"
+    ],
+    "expectedResponseShape": {
+      "structuredContent": {
+        "type": "object",
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "active_room": { "type": "string" },
+          "rooms": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "title": { "type": "string" },
+                "default_persona": { "type": "string" },
+                "is_active": { "type": "boolean" }
+              },
+              "required": ["id", "title", "default_persona", "is_active"]
+            }
+          },
+          "timestamp_utc": { "type": "string" }
+        },
+        "required": ["workspace_id", "active_room", "rooms", "timestamp_utc"]
+      }
+    }
+  }
+}

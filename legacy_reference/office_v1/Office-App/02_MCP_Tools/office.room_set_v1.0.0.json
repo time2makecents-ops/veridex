@@ -1,0 +1,55 @@
+{
+  "name": "office.room_set",
+  "title": "Set active room",
+  "description": "Sets the current active room. Server-authoritative state change. Must validate room exists and is active. Logs a room_set audit event.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "room_id": {
+        "type": "string",
+        "description": "Target room id (e.g., 'lobby', 'payroll', 'law_office', 'stock_room', 'facilities')."
+      }
+    },
+    "required": ["room_id"],
+    "additionalProperties": false
+  },
+  "annotations": {
+    "readOnlyHint": false,
+    "openWorldHint": false,
+    "destructiveHint": false
+  },
+  "_meta": {
+    "version": "1.0.0",
+    "enforcement": [
+      "room_id must exist in rooms registry and be is_active=1",
+      "no implicit room inference; changes occur only via this tool",
+      "on success: update office_state.active_room",
+      "append audit_events with event_type='room_set', previous_room, new_room",
+      "on failure: do not change state; append audit_events with event_type='invalid_room' (or 'rule_block') and details_json"
+    ],
+    "expectedResponseShape": {
+      "structuredContent": {
+        "type": "object",
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "previous_room": { "type": "string" },
+          "active_room": { "type": "string" },
+          "rooms": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "title": { "type": "string" },
+                "default_persona": { "type": "string" },
+                "is_active": { "type": "boolean" }
+              },
+              "required": ["id", "title", "default_persona", "is_active"]
+            }
+          }
+        },
+        "required": ["workspace_id", "previous_room", "active_room"]
+      }
+    }
+  }
+}

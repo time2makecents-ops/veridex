@@ -55,6 +55,111 @@
       "created_utc": "2026-03-08T12:55:42.034352Z",
       "last_seen_utc": "2026-03-08T12:55:42.221807Z",
       "last_room": "control_room"
+    },
+    {
+      "workspace_id": "ws_795b168c",
+      "label": "Smoke Test",
+      "created_utc": "2026-03-08T17:29:03.295034Z",
+      "last_seen_utc": "2026-03-08T17:29:03.466282Z",
+      "last_room": "control_room"
+    },
+    {
+      "workspace_id": "ws_12e6edc5",
+      "label": "Smoke Test",
+      "created_utc": "2026-03-08T18:45:20.046084Z",
+      "last_seen_utc": "2026-03-08T18:45:20.207903Z",
+      "last_room": "control_room"
+    },
+    {
+      "workspace_id": "ws_91865bbe",
+      "label": "Smoke Test",
+      "created_utc": "2026-03-08T19:16:47.049270Z",
+      "last_seen_utc": "2026-03-08T19:16:47.254314Z",
+      "last_room": "control_room"
+    },
+    {
+      "workspace_id": "ws_14d9ae43",
+      "label": "Smoke Test",
+      "created_utc": "2026-03-08T20:14:19.635126Z",
+      "last_seen_utc": "2026-03-08T20:14:19.810302Z",
+      "last_room": "control_room"
+    },
+    {
+      "workspace_id": "ws_b5055c78",
+      "label": "Smoke Test",
+      "created_utc": "2026-03-08T21:00:10.188461Z",
+      "last_seen_utc": "2026-03-08T21:00:10.377884Z",
+      "last_room": "control_room"
+    },
+    {
+      "workspace_id": "ws_f2165405",
+      "label": "Smoke Test",
+      "created_utc": "2026-03-08T22:05:58.163514Z",
+      "last_seen_utc": "2026-03-08T22:05:58.336719Z",
+      "last_room": "control_room"
+    },
+    {
+      "workspace_id": "ws_71a3805c",
+      "label": "Smoke Test",
+      "created_utc": "2026-03-08T22:33:32.701184Z",
+      "last_seen_utc": "2026-03-08T22:33:32.889121Z",
+      "last_room": "control_room"
+    },
+    {
+      "workspace_id": "ws_3280db7c",
+      "label": "Smoke Test",
+      "created_utc": "2026-03-08T23:20:33.109698Z",
+      "last_seen_utc": "2026-03-08T23:20:33.278699Z",
+      "last_room": "control_room"
+    },
+    {
+      "workspace_id": "ws_5443e679",
+      "label": "Smoke Test",
+      "created_utc": "2026-03-08T23:42:15.254034Z",
+      "last_seen_utc": "2026-03-08T23:42:15.425409Z",
+      "last_room": "control_room"
+    },
+    {
+      "workspace_id": "ws_14a96db7",
+      "label": "Smoke Test",
+      "created_utc": "2026-03-08T23:58:49.191544Z",
+      "last_seen_utc": "2026-03-08T23:58:49.371332Z",
+      "last_room": "control_room"
+    },
+    {
+      "workspace_id": "ws_39dcd652",
+      "label": "Smoke Test",
+      "created_utc": "2026-03-09T00:36:54.388525Z",
+      "last_seen_utc": "2026-03-09T00:36:54.579978Z",
+      "last_room": "control_room"
+    },
+    {
+      "workspace_id": "ws_a64552aa",
+      "label": "Smoke Test",
+      "created_utc": "2026-03-09T01:06:02.467721Z",
+      "last_seen_utc": "2026-03-09T01:06:02.641873Z",
+      "last_room": "control_room"
+    },
+    {
+      "workspace_id": "ws_f4813639",
+      "label": "Smoke Test",
+      "created_utc": "2026-03-09T01:58:28.586895Z",
+      "last_seen_utc": "2026-03-09T01:58:28.787259Z",
+      "last_room": "control_room"
+    },
+    {
+      "workspace_id": "ws_90dec3ae",
+      "label": "V13 Test Workspace",
+      "created_utc": "2026-03-11T12:56:38.129303Z",
+      "last_seen_utc": "2026-03-11T12:56:38.296711Z",
+      "last_room": "my_office"
+    },
+    {
+      "workspace_id": "ws_4e7aa7fc",
+      "label": "V13 Test Workspace",
+      "created_utc": "2026-03-11T19:30:21.620631Z",
+      "last_seen_utc": "2026-03-11T19:30:21.850815Z",
+      "last_room": "my_office"
     }
   ]
 }

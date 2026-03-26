@@ -1,0 +1,44 @@
+[
+  {"id":"lobby","title":"Lobby","default_persona":"Receptionist","is_active":true},
+
+  {"id":"conference_room","title":"Conference Room","default_persona":"Facilitator","is_active":true},
+
+  {"id":"control_room","title":"Control Room","default_persona":"Navigator","is_active":true,"navigator_present":true},
+
+  {"id":"infrastructure_room","title":"Infrastructure Room","default_persona":"Infrastructure Manager","is_active":true},
+
+  {"id":"sales_department","title":"Sales Department","default_persona":"Sales Director","is_active":true},
+
+  {"id":"marketing_room","title":"Marketing & Advertising","default_persona":"Marketing Director","is_active":true},
+
+  {"id":"hr_department","title":"HR Department","default_persona":"HR Manager","is_active":true},
+
+  {"id":"it_department","title":"IT Department","default_persona":"IT Administrator","is_active":true},
+
+  {"id":"art_department","title":"Art Department","default_persona":"Creative Director","is_active":true},
+
+  {"id":"law_office","title":"Law Office","default_persona":"Legal Counsel","is_active":true},
+
+  {"id":"finance_department","title":"Finance Department","default_persona":"Finance Director","is_active":true},
+
+  {"id":"my_office","title":"My Office","default_persona":"Nancy","is_active":true},
+
+  {
+    "id":"vr_room",
+    "title":"VR Room",
+    "default_persona":"Simulation Guide",
+    "is_active":true,
+    "is_sandbox":true,
+    "persistent_storage":false,
+    "allow_persona_morph":true,
+    "clear_on_exit":true
+  },
+
+  {"id":"records_archive","title":"Records Archive","default_persona":"Archivist","is_active":true},
+
+  {"id":"rnd_room","title":"Research & Development (R&D)","default_persona":"R&D Director","is_active":true},
+
+  {"id":"security_room","title":"Security Room","default_persona":"Security Chief","is_active":true},
+
+  {"id":"break_room","title":"Break Room","default_persona":"Break Room Host","is_active":true}
+]

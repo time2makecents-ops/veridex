@@ -1,0 +1,47 @@
+{
+  "name": "office.state_get",
+  "title": "Get Office state",
+  "description": "Returns the authoritative Office state, including active room and available rooms. Read-only.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "annotations": {
+    "readOnlyHint": true,
+    "openWorldHint": false,
+    "destructiveHint": false
+  },
+  "_meta": {
+    "version": "1.0.0",
+    "enforcement": [
+      "server must return active_room from office_state",
+      "server should return rooms registry (id/title/default_persona/is_active)",
+      "no state mutation; log optional audit event 'state_get' only if needed"
+    ],
+    "expectedResponseShape": {
+      "structuredContent": {
+        "type": "object",
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "active_room": { "type": "string" },
+          "rooms": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "title": { "type": "string" },
+                "default_persona": { "type": "string" },
+                "is_active": { "type": "boolean" }
+              },
+              "required": ["id", "title", "default_persona", "is_active"]
+            }
+          },
+          "timestamp_utc": { "type": "string", "description": "ISO-8601 timestamp." }
+        },
+        "required": ["workspace_id", "active_room", "rooms", "timestamp_utc"]
+      }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0.0",
+  "updated_at": "2026-03-04T02:07:34.405185Z",
+  "active_room": "CONFERENCE_ROOM",
+  "active_persona": "NAVIGATOR",
+  "active_mode": "STANDARD",
+  "scope_lock": {
+    "enabled": true,
+    "max_rooms": 1
+  },
+  "engaged": {
+    "CRE": false
+  },
+  "gates": {
+    "SAVE_GATE": true,
+    "PREFLIGHT": true,
+    "VERIFICATION": true
+  },
+  "registry": {
+    "path": "/mnt/data/master_governance_registry_v1_0_0.csv",
+    "sha256": "1f47c88dd2a28b52c1f9a484bc1baa498b8c6c709a3e534472649932e6ead222"
+  }
+}

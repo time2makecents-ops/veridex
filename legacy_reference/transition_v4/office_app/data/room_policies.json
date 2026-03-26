@@ -1,0 +1,21 @@
+{
+  "global": {
+    "navigator_always_present": true,
+    "navigator_visibility_default": "invisible"
+  },
+
+  "vr_room": {
+    "sandbox_mode": true,
+    "persistent_storage": false,
+    "allow_persona_morph": true,
+    "clear_state_on_exit": true,
+    "allow_rule_simulation": true,
+    "allow_session_artifacts": true,
+    "affects_other_rooms": false
+  },
+
+  "break_room": {
+    "operational_decisions": false,
+    "policy_changes": false
+  }
+}

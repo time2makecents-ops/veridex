@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+from typing import Any, Dict, List
+
+
+class NancyService:
+    def __init__(self, *, kernel, archive_service, store, utc_now_fn):
+        self.kernel = kernel
+        self.archive_service = archive_service
+        self.store = store
+        self.utc_now = utc_now_fn
+
+    def _artifact_rows(self, workspace_id: str) -> List[Dict[str, Any]]:
+        rows = self.archive_service.list_artifacts(workspace_id)
+        return sorted(rows, key=lambda r: r.get("created_at", ""), reverse=True)
+
+    def artifacts_list_response(self, workspace_id: str) -> Dict[str, Any]:
+        state = self.kernel.get_state(workspace_id)
+        rows = self._artifact_rows(workspace_id)
+
+        return {
+            "structuredContent": {
+                "workspace_id": workspace_id,
+                "nancy_mode": "overlay" if state.get("active_room") != "my_office" else "active_room_persona",
+                "count": len(rows),
+                "artifacts": rows,
+            },
+            "content": [{"type": "text", "text": f"Nancy found {len(rows)} artifact(s) in this workspace."}],
+        }
+
+    def artifact_open_response(self, workspace_id: str, artifact_id: str) -> Dict[str, Any]:
+        state = self.kernel.get_state(workspace_id)
+        obj = self.archive_service.get_artifact(workspace_id, artifact_id)
+
+        return {
+            "structuredContent": {
+                "workspace_id": workspace_id,
+                "nancy_mode": "overlay" if state.get("active_room") != "my_office" else "active_room_persona",
+                "artifact": obj,
+            },
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        f"Nancy opened {obj['display_name']} ({obj['artifact_id']}).\n\n"
+                        f"{obj.get('content_preview', '')}"
+                    ),
+                }
+            ],
+        }
+
+    def workspace_briefing_response(self, workspace_id: str) -> Dict[str, Any]:
+        state = self.kernel.get_state(workspace_id)
+        rows = self._artifact_rows(workspace_id)
+        idx = self.kernel.list_workspaces()
+
+        label = workspace_id
+        for row in idx.get("workspaces", []):
+            if row.get("workspace_id") == workspace_id:
+                label = row.get("label") or workspace_id
+                break
+
+        briefing = {
+            "workspace_id": workspace_id,
+            "workspace_label": label,
+            "active_room": state.get("active_room", "lobby"),
+            "active_persona": state.get("active_persona", "Receptionist"),
+            "nancy_mode": "overlay" if state.get("active_room") != "my_office" else "active_room_persona",
+            "artifact_count": len(rows),
+            "latest_artifact": rows[0] if rows else None,
+            "timestamp_utc": self.utc_now(),
+        }
+
+        latest_text = "No artifacts stored yet."
+        if briefing["latest_artifact"]:
+            latest = briefing["latest_artifact"]
+            latest_text = f"Latest artifact: {latest['display_name']} ({latest['artifact_id']})"
+
+        text = (
+            f"Nancy briefing for {label}\n"
+            f"Active room: {briefing['active_room']}\n"
+            f"Active persona: {briefing['active_persona']}\n"
+            f"Artifacts: {briefing['artifact_count']}\n"
+            f"{latest_text}"
+        )
+
+        return {
+            "structuredContent": briefing,
+            "content": [{"type": "text", "text": text}],
+        }

@@ -1,143 +1,116 @@
-Office App
-Version: 1.0.0
-Status: Development (V1 Core)
+# Veridex
 
-------------------------------------------------------------
-OVERVIEW
+**Version:** 1.3 (In Progress)  
+**Status:** Core Architecture Implemented  
 
-Office App is a structured, room-based execution system designed to:
+---
 
-- Prevent conversational drift
-- Prevent uncontrolled room switching
-- Enforce institutional boundaries
-- Provide deterministic internal memo routing
-- Log all state mutations
+# Overview
 
-This is not a chatbot extension.
-It is a governed execution environment.
+Veridex is a **structured AI operating environment** built around a workspace-based architecture.
 
-------------------------------------------------------------
-CORE PRINCIPLES
+Rather than interacting with a traditional chatbot, users operate inside a **virtual office environment** composed of:
 
-1. Exactly one active_room at any time.
-2. No implicit room switching.
-3. Mailroom dispatch does not change active_room.
-4. Memos are single-target only.
-5. Destination rooms must respond immediately.
-6. No back-and-forth inside Mailroom dispatch.
-7. No persistence shortcut via memos.
-8. All state changes are logged.
+- Rooms  
+- Personas  
+- Artifacts  
+- Commands  
+- Workspace state  
 
-------------------------------------------------------------
-PROJECT STRUCTURE
+Veridex provides a **governed execution environment** designed to prevent conversational drift, enforce architectural discipline, and support complex workflows.
 
-Office-App/
-│
-├── 01_Architecture/
-│   ├── Mailroom_Dispatch_Contract_v1.0.0.md
-│   └── Room_State_Model_v1.0.0.md
-│
-├── 02_MCP_Tools/
-│   ├── office.bootstrap_v1.0.0.json
-│   ├── office.state_get_v1.0.0.json
-│   ├── office.room_set_v1.0.0.json
-│   └── mailroom.dispatch_v1.0.0.json
-│
-├── 03_Database/
-│   ├── schema_v1.0.0.sql
-│   └── seed_v1.0.0.sql
-│
-├── 04_Test_Cases/
-│   └── mailroom_behavior_tests_v1.0.0.md
-│
-└── README.md
+Veridex behaves more like an **operating system for workspaces** than a conversational assistant.
 
-------------------------------------------------------------
-DATABASE INITIALIZATION (SQLite Example)
+---
 
-1. Create database:
+# Core Concepts
 
-sqlite3 office.db < 03_Database/schema_v1.0.0.sql
+## Workspace
 
-2. Seed:
+A workspace is the primary container for system state.
 
-sqlite3 office.db < 03_Database/seed_v1.0.0.sql
+Workspace state may include:
 
-------------------------------------------------------------
-AVAILABLE TOOLS (V1)
+- active room  
+- active persona  
+- transcript pointer  
+- task queue  
+- artifact references  
+- overlays (Navigator / Nancy)
 
-office.bootstrap
-- Ensures workspace + room registry + default active room.
-- Returns full state snapshot.
+Workspace state is owned by the **workspace kernel**.
 
-office.state_get
-- Returns active_room + room registry.
-- Read-only.
+---
 
-office.room_set
-- Explicitly sets active_room.
-- Logs state change.
+## Rooms
 
-mailroom.dispatch
-- Dispatches a memo to exactly one room.
-- Auto-generates subject.
-- Returns required persona response.
-- Does not change active_room.
+Rooms are stateless execution environments.
 
-------------------------------------------------------------
-MAILROOM BEHAVIOR SUMMARY
+Examples:
 
-- Header always emitted.
-- Subject auto-generated.
-- Single target only.
-- Hard refusal on insufficient detail.
-- Conditional closure appended only for substantive analysis.
-- No questions initiated.
-- No uploads requested.
-- No canon mutation.
-- No room switching.
+- Lobby  
+- My Office  
+- Marketing  
+- Archive  
+- Engineering  
 
-------------------------------------------------------------
-AUDIT MODEL
+Rooms:
 
-All state-changing operations append to audit_events.
+- read workspace state  
+- execute domain logic  
+- return responses  
+- do not store persistent state  
 
-Event types include:
-- bootstrap_initialized
-- bootstrap_loaded
-- room_set
-- memo_dispatch
-- memo_refused
-- invalid_room
-- rule_block
+---
 
-Audit log is append-only.
+## Personas
 
-------------------------------------------------------------
-NEXT PHASE (IMPLEMENTATION)
+Rooms may operate through personas.
 
-Recommended next step:
+Examples:
 
-Build minimal FastAPI server exposing:
-- office.bootstrap
-- office.state_get
-- office.room_set
-- mailroom.dispatch
+- Receptionist  
+- Nancy (Executive Assistant)  
+- Archivist  
+- Engineer  
 
-Then connect via Apps SDK MCP server.
+Only **one room persona** may be active at a time.
 
-------------------------------------------------------------
-LONG-TERM DIRECTION
+---
 
-V1 Goal:
-Stable single-user institutional system with drift resistance.
+## Navigator
 
-Future versions may introduce:
-- Multi-user workspace isolation
-- Cooldown enforcement for rapid room switching
-- Artifact Vault system
-- Governance enforcement layer
-- UI layer (Room Banner + Audit Viewer)
+Navigator is the governance layer.
 
-------------------------------------------------------------
-END
+Responsibilities:
+
+- enforce system rules  
+- prevent invalid operations  
+- maintain scope boundaries  
+- detect conflicts  
+
+Navigator oversees the system but does not execute operational tasks.
+
+---
+
+## Nancy
+
+Nancy is the administrative assistant layer.
+
+Responsibilities:
+
+- artifact retrieval  
+- task coordination  
+- workspace briefing  
+- operational assistance  
+
+Nancy functions as:
+
+- Room persona inside My Office  
+- Overlay assistant outside My Office
+
+---
+
+# Architecture
+
+Veridex follows a layered architecture:
