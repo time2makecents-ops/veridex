@@ -45,7 +45,9 @@ logs/
 # Runtime data (Veridex workspace state)
 # =========================
 runtime/
+runtime/workspaces/*
 office_app/runtime/
+storage/
 
 # =========================
 # Local databases
@@ -79,6 +81,7 @@ uploads/
 # =========================
 # Backup / temporary files
 # =========================
+*.bak*
 *.bak
 *.bak_*
 *.bak_step*
