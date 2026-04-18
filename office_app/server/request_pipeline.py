@@ -1,15 +1,40 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
 from office_app.server.persona_registry import persona_profile_for_name
-from office_app.server.room_router import rooms_payload, validate_room
 from office_app.server.room_policy_registry import load_room_policies
+from office_app.server.room_router import rooms_payload, validate_room
 
 
 class RequestPipeline:
+    ARTIFACT_CREATE_TRIGGERS = (
+        "save this",
+        "save artifact",
+        "save note",
+        "store this",
+        "store artifact",
+        "store note",
+        "create artifact",
+    )
+    ARTIFACT_LIST_TRIGGERS = (
+        "show artifacts",
+        "list artifacts",
+        "show artifact list",
+        "show saved artifacts",
+        "list saved artifacts",
+    )
+    ARTIFACT_OPEN_TRIGGERS = (
+        "open artifact",
+        "open the artifact",
+        "view artifact",
+        "read artifact",
+    )
+    ARTIFACT_ID_RE = re.compile(r"\bart_[A-Za-z0-9]+\b", re.IGNORECASE)
+
     def __init__(
         self,
         kernel,
@@ -85,13 +110,13 @@ class RequestPipeline:
         if to_room == "break_room":
             raise HTTPException(
                 status_code=403,
-                detail="Break Room is non-operational. Memo dispatch is not allowed to break_room."
+                detail="Break Room is non-operational. Memo dispatch is not allowed to break_room.",
             )
 
         if from_room == "break_room":
             raise HTTPException(
                 status_code=403,
-                detail="Break Room is non-operational. Memo dispatch is not allowed from break_room."
+                detail="Break Room is non-operational. Memo dispatch is not allowed from break_room.",
             )
 
         if from_room == "vr_room":
@@ -99,7 +124,7 @@ class RequestPipeline:
             if not vr_policy.get("affects_other_rooms", False):
                 raise HTTPException(
                     status_code=403,
-                    detail="VR Room sandbox is isolated. Dispatch to other rooms is not allowed from vr_room."
+                    detail="VR Room sandbox is isolated. Dispatch to other rooms is not allowed from vr_room.",
                 )
 
     def recommend_room(self, request_text: str) -> Dict[str, str]:
@@ -169,6 +194,69 @@ class RequestPipeline:
                 "current_persona": route["current_persona"],
             },
             "content": [{"type": "text", "text": f"Nancy recommends {route['room_title']} ({route['persona']}). Confirm if you want to move there."}],
+        }
+
+    def route_artifact_request(self, request_text: str) -> Optional[Dict[str, Any]]:
+        text = request_text.lower().strip()
+        if not text:
+            return None
+
+        if any(trigger in text for trigger in self.ARTIFACT_CREATE_TRIGGERS):
+            return {
+                "tool": "office.artifact_create",
+                "arguments": {
+                    "type": "note",
+                    "title": "Saved note",
+                    "content": request_text,
+                    "created_by": "user",
+                    "metadata": {
+                        "source": "natural_language_request",
+                        "intent": "save",
+                        "request_text": request_text,
+                    },
+                },
+                "reason": "Matched a save/store keyword.",
+            }
+
+        if any(trigger in text for trigger in self.ARTIFACT_LIST_TRIGGERS):
+            return {
+                "tool": "office.artifact_list",
+                "arguments": {},
+                "reason": "Matched a list/show keyword.",
+            }
+
+        if any(trigger in text for trigger in self.ARTIFACT_OPEN_TRIGGERS):
+            match = self.ARTIFACT_ID_RE.search(request_text)
+            if match:
+                return {
+                    "tool": "office.artifact_get",
+                    "arguments": {"artifact_id": match.group(0)},
+                    "reason": "Matched an open/read keyword and found an artifact id.",
+                }
+
+        return None
+
+    def route_user_request(self, workspace_id: str, request_text: str) -> Dict[str, Any]:
+        artifact_route = self.route_artifact_request(request_text)
+        if artifact_route is not None:
+            return {
+                "route_kind": "artifact",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **artifact_route,
+            }
+
+        route = self.nancy_route(workspace_id, request_text)
+        return {
+            "route_kind": "nancy",
+            "workspace_id": workspace_id,
+            "request": request_text,
+            "tool": "office.nancy_route",
+            "arguments": {"workspace_id": workspace_id, "request": request_text},
+            "reason": route["reason"],
+            "room_id": route["room_id"],
+            "room_title": route["room_title"],
+            "persona": route["persona"],
         }
 
     def mailroom_header(self, to_persona: str, dest_room_title: str, subject: str) -> str:

@@ -160,6 +160,13 @@
       "created_utc": "2026-03-11T19:30:21.620631Z",
       "last_seen_utc": "2026-03-11T19:30:21.850815Z",
       "last_room": "my_office"
+    },
+    {
+      "workspace_id": "default",
+      "label": "default",
+      "created_utc": "2026-04-18T02:00:53.963019Z",
+      "last_seen_utc": "2026-04-18T02:00:53.963055Z",
+      "last_room": "lobby"
     }
   ]
 }

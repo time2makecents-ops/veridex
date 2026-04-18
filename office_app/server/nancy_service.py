@@ -12,7 +12,7 @@ class NancyService:
 
     def _artifact_rows(self, workspace_id: str) -> List[Dict[str, Any]]:
         rows = self.archive_service.list_artifacts(workspace_id)
-        return sorted(rows, key=lambda r: r.get("created_at", ""), reverse=True)
+        return sorted(rows, key=lambda r: r.get("updated_at") or r.get("created_at", ""), reverse=True)
 
     def artifacts_list_response(self, workspace_id: str) -> Dict[str, Any]:
         state = self.kernel.get_state(workspace_id)
@@ -42,7 +42,7 @@ class NancyService:
                 {
                     "type": "text",
                     "text": (
-                        f"Nancy opened {obj['display_name']} ({obj['artifact_id']}).\n\n"
+                        f"Nancy opened {obj.get('display_name') or obj.get('title')} ({obj['artifact_id']}).\n\n"
                         f"{obj.get('content_preview', '')}"
                     ),
                 }
@@ -74,7 +74,7 @@ class NancyService:
         latest_text = "No artifacts stored yet."
         if briefing["latest_artifact"]:
             latest = briefing["latest_artifact"]
-            latest_text = f"Latest artifact: {latest['display_name']} ({latest['artifact_id']})"
+            latest_text = f"Latest artifact: {latest.get('display_name') or latest.get('title')} ({latest['artifact_id']})"
 
         text = (
             f"Nancy briefing for {label}\n"
