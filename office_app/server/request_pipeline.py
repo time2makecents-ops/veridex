@@ -23,6 +23,10 @@ class RequestPipeline:
     ARTIFACT_LIST_TRIGGERS = (
         "show artifacts",
         "list artifacts",
+        "what have we saved so far",
+        "what's saved so far",
+        "what is saved so far",
+        "what did we save",
         "show artifact list",
         "show saved artifacts",
         "list saved artifacts",
@@ -33,6 +37,23 @@ class RequestPipeline:
         "view artifact",
         "read artifact",
     )
+    ARTIFACT_GLOBAL_TRIGGERS = (
+        "archive room",
+        "archive artifacts",
+        "global artifacts",
+        "global search",
+        "global retrieval",
+        "all-project search",
+        "all project search",
+        "all projects",
+        "all workspaces",
+        "across workspaces",
+        "workspace-wide",
+        "cross workspace",
+        "cross-workspace",
+        "archive/global",
+    )
+    ARTIFACT_ARCHIVE_ROOM = "records_archive"
     ARTIFACT_ID_RE = re.compile(r"\bart_[A-Za-z0-9]+\b", re.IGNORECASE)
 
     def __init__(
@@ -196,10 +217,25 @@ class RequestPipeline:
             "content": [{"type": "text", "text": f"Nancy recommends {route['room_title']} ({route['persona']}). Confirm if you want to move there."}],
         }
 
-    def route_artifact_request(self, request_text: str) -> Optional[Dict[str, Any]]:
+    def artifact_retrieval_scope(self, workspace_id: str, request_text: str) -> str:
+        ctx = self.current_context(workspace_id)
+        active_room = str(ctx.get("active_room") or "").strip().lower()
+        text = request_text.lower().strip()
+
+        if active_room == self.ARTIFACT_ARCHIVE_ROOM:
+            return "archive_global"
+
+        if any(trigger in text for trigger in self.ARTIFACT_GLOBAL_TRIGGERS):
+            return "archive_global"
+
+        return "workspace"
+
+    def route_artifact_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         text = request_text.lower().strip()
         if not text:
             return None
+
+        retrieval_scope = self.artifact_retrieval_scope(workspace_id, request_text)
 
         if any(trigger in text for trigger in self.ARTIFACT_CREATE_TRIGGERS):
             return {
@@ -219,25 +255,34 @@ class RequestPipeline:
             }
 
         if any(trigger in text for trigger in self.ARTIFACT_LIST_TRIGGERS):
+            list_args: Dict[str, Any] = {
+                "retrieval_scope": retrieval_scope,
+            }
+            if retrieval_scope != "workspace":
+                list_args["include_archived"] = True
             return {
                 "tool": "office.artifact_list",
-                "arguments": {},
+                "arguments": list_args,
                 "reason": "Matched a list/show keyword.",
             }
 
         if any(trigger in text for trigger in self.ARTIFACT_OPEN_TRIGGERS):
             match = self.ARTIFACT_ID_RE.search(request_text)
             if match:
+                get_args: Dict[str, Any] = {
+                    "artifact_id": match.group(0),
+                    "retrieval_scope": retrieval_scope,
+                }
                 return {
                     "tool": "office.artifact_get",
-                    "arguments": {"artifact_id": match.group(0)},
+                    "arguments": get_args,
                     "reason": "Matched an open/read keyword and found an artifact id.",
                 }
 
         return None
 
     def route_user_request(self, workspace_id: str, request_text: str) -> Dict[str, Any]:
-        artifact_route = self.route_artifact_request(request_text)
+        artifact_route = self.route_artifact_request(workspace_id, request_text)
         if artifact_route is not None:
             return {
                 "route_kind": "artifact",

@@ -10,31 +10,58 @@ class NancyService:
         self.store = store
         self.utc_now = utc_now_fn
 
-    def _artifact_rows(self, workspace_id: str) -> List[Dict[str, Any]]:
-        rows = self.archive_service.list_artifacts(workspace_id)
+    def _workspace_ids(self, workspace_id: str) -> List[str]:
+        idx = self.kernel.list_workspaces()
+        workspace_ids: List[str] = []
+        for row in idx.get("workspaces", []):
+            candidate = str(row.get("workspace_id") or "").strip()
+            if candidate and candidate not in workspace_ids:
+                workspace_ids.append(candidate)
+        if workspace_id and workspace_id not in workspace_ids:
+            workspace_ids.insert(0, workspace_id)
+        return workspace_ids
+
+    def _artifact_rows(self, workspace_id: str, retrieval_scope: str = "workspace") -> List[Dict[str, Any]]:
+        if retrieval_scope == "archive_global":
+            rows = self.archive_service.list_artifacts_across_workspaces(self._workspace_ids(workspace_id), include_archived=True)
+        else:
+            rows = self.archive_service.list_artifacts(workspace_id)
         return sorted(rows, key=lambda r: r.get("updated_at") or r.get("created_at", ""), reverse=True)
 
-    def artifacts_list_response(self, workspace_id: str) -> Dict[str, Any]:
+    def artifacts_list_response(self, workspace_id: str, retrieval_scope: str = "workspace") -> Dict[str, Any]:
         state = self.kernel.get_state(workspace_id)
-        rows = self._artifact_rows(workspace_id)
+        rows = self._artifact_rows(workspace_id, retrieval_scope=retrieval_scope)
 
         return {
             "structuredContent": {
                 "workspace_id": workspace_id,
+                "retrieval_scope": retrieval_scope,
                 "nancy_mode": "overlay" if state.get("active_room") != "my_office" else "active_room_persona",
                 "count": len(rows),
                 "artifacts": rows,
             },
-            "content": [{"type": "text", "text": f"Nancy found {len(rows)} artifact(s) in this workspace."}],
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        f"Nancy found {len(rows)} artifact(s) "
+                        f"({'all workspaces' if retrieval_scope == 'archive_global' else 'this workspace'})."
+                    ),
+                }
+            ],
         }
 
-    def artifact_open_response(self, workspace_id: str, artifact_id: str) -> Dict[str, Any]:
+    def artifact_open_response(self, workspace_id: str, artifact_id: str, retrieval_scope: str = "workspace") -> Dict[str, Any]:
         state = self.kernel.get_state(workspace_id)
-        obj = self.archive_service.get_artifact(workspace_id, artifact_id)
+        if retrieval_scope == "archive_global":
+            obj = self.archive_service.get_artifact_across_workspaces(self._workspace_ids(workspace_id), artifact_id)
+        else:
+            obj = self.archive_service.get_artifact(workspace_id, artifact_id)
 
         return {
             "structuredContent": {
                 "workspace_id": workspace_id,
+                "retrieval_scope": retrieval_scope,
                 "nancy_mode": "overlay" if state.get("active_room") != "my_office" else "active_room_persona",
                 "artifact": obj,
             },

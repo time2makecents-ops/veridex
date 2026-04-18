@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from fastapi import HTTPException
 
@@ -120,6 +120,31 @@ class ArtifactService:
     def list_artifacts(self, workspace_id: str, *, include_archived: bool = False) -> List[Dict[str, Any]]:
         rows = self.store.list_records(workspace_id, include_archived=include_archived)
         return [self._decorate(row) for row in rows]
+
+    def list_artifacts_across_workspaces(
+        self,
+        workspace_ids: Iterable[str],
+        *,
+        include_archived: bool = False,
+    ) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for workspace_id in workspace_ids:
+            for row in self.store.list_records(workspace_id, include_archived=include_archived):
+                key = f"{row['workspace_id']}::{row['artifact_id']}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(self._decorate(row))
+        rows.sort(key=lambda row: (row.get("updated_at") or row.get("created_at") or "", row.get("artifact_id") or ""), reverse=True)
+        return rows
+
+    def get_artifact_across_workspaces(self, workspace_ids: Iterable[str], artifact_id: str) -> Dict[str, Any]:
+        for workspace_id in workspace_ids:
+            record = self.store.fetch_record(workspace_id, artifact_id)
+            if record is not None:
+                return self._decorate(record)
+        raise HTTPException(status_code=404, detail=f"Artifact not found: {artifact_id}")
 
     def update_artifact(
         self,

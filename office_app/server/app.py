@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from office_app.server.archive_service import ArchiveService
@@ -17,6 +17,7 @@ from office_app.server.guards import ensure_single_target
 from office_app.server.memo_service import MemoService
 from office_app.server.nancy_service import NancyService
 from office_app.server.request_pipeline import RequestPipeline
+from office_app.server.user_service import UserService
 from office_app.server.tools_registry import register_tools
 from office_app.server.workspace_kernel import WorkspaceKernel, WorkspaceStore
 
@@ -43,6 +44,20 @@ WORKSPACE_TOOLS_NO_ID = {
     "office.workspace_new",
 }
 
+ARTIFACT_TOOLS_DEFAULT_TO_ACTIVE = {
+    "office.artifact_create",
+    "office.artifact_get",
+    "office.artifact_list",
+    "office.artifact_update",
+    "office.artifact_append",
+    "office.artifact_archive",
+    "office.archive_store_text",
+    "office.archive_list",
+    "office.archive_get",
+    "office.nancy_artifacts_list",
+    "office.nancy_artifact_open",
+}
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -59,6 +74,7 @@ store = WorkspaceStore(WORKSPACES_DIR, utc_now_fn=utc_now)
 kernel = WorkspaceKernel(store=store, utc_now_fn=utc_now)
 memo_service = MemoService(store=store, legacy_memos_dir=LEGACY_MEMOS_DIR, utc_now_fn=utc_now)
 archive_service = ArchiveService(workspaces_dir=WORKSPACES_DIR, utc_now_fn=utc_now)
+user_service = UserService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
 nancy_service = NancyService(
     kernel=kernel,
     archive_service=archive_service,
@@ -120,10 +136,19 @@ def append_incident(
 
 def resolve_workspace_id(tool: str, args: Dict[str, Any]) -> str:
     workspace_id = str(args.get("workspace_id", "")).strip()
+    session_id = str(args.get("session_id", "")).strip()
+    if session_id:
+        session = user_service.get_session(session_id)
+        resolved = str(session.get("active_workspace_id") or "").strip()
+        if resolved:
+            return resolved
+        raise HTTPException(status_code=409, detail="Session is missing an active workspace.")
     if tool in WORKSPACE_TOOLS_NO_ID:
         return workspace_id
     if workspace_id:
         return workspace_id
+    if tool in ARTIFACT_TOOLS_DEFAULT_TO_ACTIVE:
+        return "default"
     return "default_workspace"
 
 
@@ -135,6 +160,17 @@ class ToolCall(BaseModel):
 class NaturalLanguageRequest(BaseModel):
     text: str = Field(..., description="Plain text request to route")
     workspace_id: Optional[str] = Field(default=None, description="Optional workspace id")
+    session_id: Optional[str] = Field(default=None, description="Optional session id")
+
+
+class LobbyOnboardRequest(BaseModel):
+    name: str = Field(..., description="User name")
+    pin_code: str = Field(..., description="4-digit PIN code")
+    display_name: Optional[str] = Field(default=None, description="Optional display name")
+
+
+class LobbyEnterRequest(BaseModel):
+    pin_code: str = Field(..., description="4-digit PIN code")
 
 
 app = FastAPI(title="Veridex Office Server", version="1.3.0")
@@ -177,9 +213,38 @@ def ensure_artifact_workspace(workspace_id: str) -> None:
         kernel.bootstrap_workspace(workspace_id)
 
 
+def attach_request_context(response: Dict[str, Any], *, workspace_id: str, session_id: str) -> Dict[str, Any]:
+    enriched = dict(response)
+    structured = enriched.get("structuredContent")
+    if isinstance(structured, dict):
+        structured = dict(structured)
+        structured["workspace_id"] = workspace_id
+        structured["session_id"] = session_id
+        enriched["structuredContent"] = structured
+    else:
+        enriched["structuredContent"] = {
+            "workspace_id": workspace_id,
+            "session_id": session_id,
+        }
+    enriched["workspace_id"] = workspace_id
+    enriched["session_id"] = session_id
+    return enriched
+
+
 @app.post("/request")
-def handle_natural_language_request(payload: NaturalLanguageRequest) -> Dict[str, Any]:
-    workspace_id = str(payload.workspace_id or "default").strip() or "default"
+def handle_natural_language_request(
+    payload: NaturalLanguageRequest,
+    x_session_id: Optional[str] = Header(default=None, alias="X-Session-Id"),
+) -> Dict[str, Any]:
+    session_id = str(x_session_id or payload.session_id or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Session ID required")
+    session = user_service.sessions.fetch_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    workspace_id = str(session.get("active_workspace_id") or "").strip()
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Invalid session")
     request_text = str(payload.text or "").strip()
     ensure_artifact_workspace(workspace_id)
     routed = pipeline.route_user_request(workspace_id, request_text)
@@ -187,6 +252,8 @@ def handle_natural_language_request(payload: NaturalLanguageRequest) -> Dict[str
     if routed["route_kind"] == "artifact":
         args = dict(routed["arguments"])
         args["workspace_id"] = workspace_id
+        if session_id:
+            args["session_id"] = session_id
         result = router.dispatch(routed["tool"], args)
         if isinstance(result, dict):
             structured = result.get("structuredContent")
@@ -196,9 +263,54 @@ def handle_natural_language_request(payload: NaturalLanguageRequest) -> Dict[str
                     "tool": routed["tool"],
                     "reason": routed["reason"],
                 }
-        return result
+            return attach_request_context(result, workspace_id=workspace_id, session_id=session_id)
 
-    return pipeline.nancy_route_response(workspace_id, request_text)
+    return attach_request_context(
+        pipeline.nancy_route_response(workspace_id, request_text),
+        workspace_id=workspace_id,
+        session_id=session_id,
+    )
+
+
+@app.post("/lobby/onboard")
+def lobby_onboard(payload: LobbyOnboardRequest) -> Dict[str, Any]:
+    result = user_service.onboard_user(
+        name=payload.name,
+        pin_code=payload.pin_code,
+        display_name=payload.display_name,
+    )
+    return {
+        "structuredContent": result,
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    f"Onboarding complete for {result['user']['display_name']}.\n"
+                    f"Workspace ready: {result['workspace_id']}.\n"
+                    f"Session ready: {result['session_id']}."
+                ),
+            }
+        ],
+    }
+
+
+@app.post("/lobby/enter")
+def lobby_enter(payload: LobbyEnterRequest) -> Dict[str, Any]:
+    result = user_service.enter_lobby(pin_code=payload.pin_code)
+    user = result["user"]
+    return {
+        "structuredContent": result,
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    f"Welcome back, {user['display_name']}.\n"
+                    f"Restored workspace: {result['workspace_id']}.\n"
+                    f"Session: {result['session_id']}."
+                ),
+            }
+        ],
+    }
 
 
 def handle_workspaces_list(_: Dict[str, Any]) -> Dict[str, Any]:
@@ -353,6 +465,31 @@ def _parse_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
+def _normalize_artifact_scope(args: Dict[str, Any], workspace_id: str) -> str:
+    scope = str(args.get("retrieval_scope") or args.get("scope") or "workspace").strip().lower()
+    scope = scope.replace("-", "_")
+    if scope in {"global", "archive", "archive_global", "all", "all_project", "all_projects"}:
+        return "archive_global"
+
+    state = kernel.get_state(workspace_id)
+    active_room = str(state.get("active_room") or "").strip().lower()
+    if active_room == "records_archive":
+        return "archive_global"
+    return "workspace"
+
+
+def _artifact_workspace_ids(workspace_id: str) -> list[str]:
+    idx = kernel.list_workspaces()
+    workspace_ids: list[str] = []
+    for row in idx.get("workspaces", []):
+        candidate = str(row.get("workspace_id") or "").strip()
+        if candidate and candidate not in workspace_ids:
+            workspace_ids.append(candidate)
+    if workspace_id and workspace_id not in workspace_ids:
+        workspace_ids.insert(0, workspace_id)
+    return workspace_ids
+
+
 def _require_artifact_workspace(workspace_id: str) -> Dict[str, Any]:
     return kernel.get_state(workspace_id)
 
@@ -398,11 +535,26 @@ def handle_artifact_get(args: Dict[str, Any]) -> Dict[str, Any]:
     if not artifact_id:
         raise error_missing_required_field("artifact_id")
 
-    obj = archive_service.get_artifact(workspace_id, artifact_id)
+    retrieval_scope = _normalize_artifact_scope(args, workspace_id)
+    if retrieval_scope == "archive_global":
+        obj = archive_service.get_artifact_across_workspaces(_artifact_workspace_ids(workspace_id), artifact_id)
+    else:
+        obj = archive_service.get_artifact(workspace_id, artifact_id)
     preview = obj.get("content_preview", "")
     return {
-        "structuredContent": obj,
-        "content": [{"type": "text", "text": f"Artifact {obj['artifact_id']} - {obj.get('display_name') or obj.get('title')}\n\n{preview}"}],
+        "structuredContent": {
+            **obj,
+            "retrieval_scope": retrieval_scope,
+        },
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    f"Artifact {obj['artifact_id']} - {obj.get('display_name') or obj.get('title')}\n"
+                    f"Workspace: {obj.get('workspace_id')}\n\n{preview}"
+                ),
+            }
+        ],
     }
 
 
@@ -410,15 +562,31 @@ def handle_artifact_list(args: Dict[str, Any]) -> Dict[str, Any]:
     workspace_id = args["workspace_id"]
     _require_artifact_workspace(workspace_id)
     include_archived = _parse_bool(args.get("include_archived"), False)
-    rows = archive_service.list_artifacts(workspace_id, include_archived=include_archived)
+    retrieval_scope = _normalize_artifact_scope(args, workspace_id)
+    if retrieval_scope == "archive_global":
+        rows = archive_service.list_artifacts_across_workspaces(
+            _artifact_workspace_ids(workspace_id),
+            include_archived=True,
+        )
+    else:
+        rows = archive_service.list_artifacts(workspace_id, include_archived=include_archived)
     return {
         "structuredContent": {
             "workspace_id": workspace_id,
             "count": len(rows),
+            "retrieval_scope": retrieval_scope,
             "include_archived": include_archived,
             "artifacts": rows,
         },
-        "content": [{"type": "text", "text": f"Found {len(rows)} artifact(s)."}],
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    f"Found {len(rows)} artifact(s) "
+                    f"({'all workspaces' if retrieval_scope == 'archive_global' else 'this workspace'})."
+                ),
+            }
+        ],
     }
 
 
@@ -545,10 +713,27 @@ def handle_archive_store_text(args: Dict[str, Any]) -> Dict[str, Any]:
 def handle_archive_list(args: Dict[str, Any]) -> Dict[str, Any]:
     workspace_id = args["workspace_id"]
     _require_artifact_workspace(workspace_id)
-    rows = archive_service.list_artifacts(workspace_id, include_archived=True)
+    retrieval_scope = _normalize_artifact_scope(args, workspace_id)
+    if retrieval_scope == "archive_global":
+        rows = archive_service.list_artifacts_across_workspaces(_artifact_workspace_ids(workspace_id), include_archived=True)
+    else:
+        rows = archive_service.list_artifacts(workspace_id, include_archived=True)
     return {
-        "structuredContent": {"workspace_id": workspace_id, "count": len(rows), "artifacts": rows},
-        "content": [{"type": "text", "text": f"Found {len(rows)} artifact(s)."}],
+        "structuredContent": {
+            "workspace_id": workspace_id,
+            "count": len(rows),
+            "retrieval_scope": retrieval_scope,
+            "artifacts": rows,
+        },
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    f"Found {len(rows)} artifact(s) "
+                    f"({'all workspaces' if retrieval_scope == 'archive_global' else 'this workspace'})."
+                ),
+            }
+        ],
     }
 
 
@@ -559,17 +744,33 @@ def handle_archive_get(args: Dict[str, Any]) -> Dict[str, Any]:
     if not artifact_id:
         raise error_missing_required_field("artifact_id")
 
-    obj = archive_service.get_artifact(workspace_id, artifact_id)
+    retrieval_scope = _normalize_artifact_scope(args, workspace_id)
+    if retrieval_scope == "archive_global":
+        obj = archive_service.get_artifact_across_workspaces(_artifact_workspace_ids(workspace_id), artifact_id)
+    else:
+        obj = archive_service.get_artifact(workspace_id, artifact_id)
     preview = obj.get("content_preview", "")
     return {
-        "structuredContent": obj,
-        "content": [{"type": "text", "text": f"Artifact {obj['artifact_id']} - {obj['display_name']}\n\n{preview}"}],
+        "structuredContent": {
+            **obj,
+            "retrieval_scope": retrieval_scope,
+        },
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    f"Artifact {obj['artifact_id']} - {obj['display_name']}\n"
+                    f"Workspace: {obj.get('workspace_id')}\n\n{preview}"
+                ),
+            }
+        ],
     }
 
 
 def handle_nancy_artifacts_list(args: Dict[str, Any]) -> Dict[str, Any]:
     workspace_id = args["workspace_id"]
-    return nancy_service.artifacts_list_response(workspace_id)
+    retrieval_scope = _normalize_artifact_scope(args, workspace_id)
+    return nancy_service.artifacts_list_response(workspace_id, retrieval_scope=retrieval_scope)
 
 
 def handle_nancy_artifact_open(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -577,7 +778,8 @@ def handle_nancy_artifact_open(args: Dict[str, Any]) -> Dict[str, Any]:
     artifact_id = str(args.get("artifact_id", "")).strip()
     if not artifact_id:
         raise error_missing_required_field("artifact_id")
-    return nancy_service.artifact_open_response(workspace_id, artifact_id)
+    retrieval_scope = _normalize_artifact_scope(args, workspace_id)
+    return nancy_service.artifact_open_response(workspace_id, artifact_id, retrieval_scope=retrieval_scope)
 
 
 def handle_nancy_workspace_briefing(args: Dict[str, Any]) -> Dict[str, Any]:
