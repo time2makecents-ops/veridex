@@ -148,8 +148,17 @@ class RequestPipeline:
                     detail="VR Room sandbox is isolated. Dispatch to other rooms is not allowed from vr_room.",
                 )
 
-    def recommend_room(self, request_text: str) -> Dict[str, str]:
+    def recommend_room(self, request_text: str) -> Dict[str, Any]:
         text = request_text.lower()
+
+        def has_keyword(keyword: str) -> bool:
+            term = keyword.strip().lower()
+            if not term:
+                return False
+            if " " in term or "-" in term:
+                return term in text
+            pattern = rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])"
+            return re.search(pattern, text) is not None
 
         rules = [
             (["contract", "legal", "law", "lawsuit", "liability", "agreement", "negotiation"], "law_office"),
@@ -167,9 +176,10 @@ class RequestPipeline:
         ]
 
         for keywords, room_id in rules:
-            if any(k in text for k in keywords):
+            if any(has_keyword(k) for k in keywords):
                 room = validate_room(room_id)
                 return {
+                    "matched": True,
                     "room_id": room["id"],
                     "room_title": room["title"],
                     "persona": str(room.get("default_persona") or "Navigator"),
@@ -178,6 +188,7 @@ class RequestPipeline:
 
         room = validate_room("my_office")
         return {
+            "matched": False,
             "room_id": room["id"],
             "room_title": room["title"],
             "persona": str(room.get("default_persona") or "Nancy"),
@@ -291,17 +302,52 @@ class RequestPipeline:
                 **artifact_route,
             }
 
-        route = self.nancy_route(workspace_id, request_text)
+        route = self.recommend_room(request_text)
+        if route.get("matched"):
+            return {
+                "route_kind": "nancy",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                "tool": "office.nancy_route",
+                "arguments": {"workspace_id": workspace_id, "request": request_text},
+                "reason": route["reason"],
+                "room_id": route["room_id"],
+                "room_title": route["room_title"],
+                "persona": route["persona"],
+            }
+
+        ctx = self.current_context(workspace_id)
+        active_room = str(ctx["active_room"])
+        active_persona = str(ctx["active_persona"])
+        system_prompt = (
+            f"You are Veridex. The active workspace is {workspace_id}. "
+            f"The active room is {active_room}. The active persona is {active_persona}. "
+            "Respond clearly, concisely, and in a way that fits the current office context."
+        )
         return {
-            "route_kind": "nancy",
+            "route_kind": "model",
             "workspace_id": workspace_id,
             "request": request_text,
-            "tool": "office.nancy_route",
-            "arguments": {"workspace_id": workspace_id, "request": request_text},
-            "reason": route["reason"],
-            "room_id": route["room_id"],
-            "room_title": route["room_title"],
-            "persona": route["persona"],
+            "tool": "office.ai_generate",
+            "arguments": {
+                "workspace_id": workspace_id,
+                "task_type": "conversation",
+                "system_prompt": system_prompt,
+                "user_prompt": request_text,
+                "context": {
+                    "workspace_id": workspace_id,
+                    "active_room": active_room,
+                    "active_persona": active_persona,
+                },
+                "settings": {
+                    "temperature": 0.4,
+                    "max_output_tokens": 512,
+                    "provider_by_task_type": {
+                        "conversation": "gemini",
+                    },
+                },
+            },
+            "reason": "No strong department match found. Using the model route.",
         }
 
     def mailroom_header(self, to_persona: str, dest_room_title: str, subject: str) -> str:

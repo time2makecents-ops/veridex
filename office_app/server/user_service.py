@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 from datetime import datetime, timezone
 import re
 import uuid
@@ -31,6 +33,8 @@ class UserService:
         self.kernel = kernel
         self.runtime_dir = Path(runtime_dir)
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self.users_dir = self.runtime_dir / "users"
+        self.users_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.runtime_dir / "veridex.db"
         self.utc_now = utc_now_fn
         self.store = UserStore(self.db_path)
@@ -41,6 +45,12 @@ class UserService:
         return str(value or "").strip()
 
     @staticmethod
+    def _safe_folder_name(value: str) -> str:
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
+        slug = slug.strip("._-")
+        return slug or "user"
+
+    @staticmethod
     def _normalize_pin(pin_code: Any) -> str:
         pin = str(pin_code or "").strip()
         if not PIN_RE.fullmatch(pin):
@@ -48,10 +58,78 @@ class UserService:
         return pin
 
     @staticmethod
+    def _photo_extension(mime_type: str) -> str:
+        mime = mime_type.lower().strip()
+        if mime in {"image/jpeg", "image/jpg"}:
+            return "jpg"
+        if mime == "image/png":
+            return "png"
+        if mime == "image/webp":
+            return "webp"
+        return "bin"
+
+    @staticmethod
+    def _decode_photo_data(photo_data: Optional[str]) -> tuple[Optional[str], Optional[bytes]]:
+        if not photo_data:
+            return None, None
+
+        raw = str(photo_data).strip()
+        if not raw:
+            return None, None
+
+        if raw.startswith("data:") and "," in raw:
+            header, payload = raw.split(",", 1)
+            mime_type = header[5:].split(";", 1)[0] or "application/octet-stream"
+            return mime_type, base64.b64decode(payload)
+
+        return "image/jpeg", base64.b64decode(raw)
+
+    @staticmethod
     def _decorate_user(record: Dict[str, Any]) -> Dict[str, Any]:
         decorated = dict(record)
         decorated["lobby_ready"] = bool(decorated.get("onboarding_complete"))
         return decorated
+
+    def _user_folder_path(self, record: Dict[str, Any]) -> Path:
+        label = record.get("display_name") or record.get("name") or "user"
+        folder_name = f"{self._safe_folder_name(str(label))}-{record['user_id']}"
+        return self.users_dir / folder_name
+
+    def _sync_user_folder(self, record: Dict[str, Any]) -> None:
+        folder = self._user_folder_path(record)
+        folder.mkdir(parents=True, exist_ok=True)
+
+        photo_file_name = None
+        face_photo_data = record.get("face_photo_data")
+        if face_photo_data:
+            mime_type, photo_bytes = self._decode_photo_data(face_photo_data)
+            if mime_type and photo_bytes is not None:
+                photo_ext = self._photo_extension(mime_type)
+                for old_file in folder.glob("face_photo.*"):
+                    try:
+                        old_file.unlink()
+                    except OSError:
+                        pass
+                photo_file = folder / f"face_photo.{photo_ext}"
+                photo_file.write_bytes(photo_bytes)
+                photo_file_name = photo_file.name
+
+        profile = {
+            "user_id": record.get("user_id"),
+            "name": record.get("name"),
+            "display_name": record.get("display_name"),
+            "onboarding_complete": bool(record.get("onboarding_complete")),
+            "default_workspace_id": record.get("default_workspace_id"),
+            "last_active_workspace_id": record.get("last_active_workspace_id"),
+            "created_at": record.get("created_at"),
+            "updated_at": record.get("updated_at"),
+            "has_face_photo": bool(photo_file_name),
+            "face_photo_file": photo_file_name,
+        }
+        (folder / "profile.json").write_text(
+            json.dumps(profile, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
 
     def _ensure_workspace(self, workspace_id: str, label: str) -> Dict[str, Any]:
         try:
@@ -83,7 +161,14 @@ class UserService:
             },
         )
 
-    def onboard_user(self, *, name: str, pin_code: str, display_name: Optional[str] = None) -> Dict[str, Any]:
+    def onboard_user(
+        self,
+        *,
+        name: str,
+        pin_code: str,
+        display_name: Optional[str] = None,
+        face_photo_data: Optional[str] = None,
+    ) -> Dict[str, Any]:
         name_text = self._normalize_text(name)
         if not name_text:
             raise error_missing_required_field("name")
@@ -104,6 +189,7 @@ class UserService:
                 "name": name_text,
                 "display_name": display_text,
                 "pin_code": pin,
+                "face_photo_data": face_photo_data,
                 "onboarding_complete": True,
                 "default_workspace_id": workspace_id,
                 "last_active_workspace_id": workspace_id,
@@ -111,6 +197,7 @@ class UserService:
                 "updated_at": now,
             }
         )
+        self._sync_user_folder(record)
         session = self._create_or_return_session(user_id, workspace_id)
 
         state = self.kernel.get_state(workspace_id)
@@ -141,6 +228,7 @@ class UserService:
                 "updated_at": self.utc_now(),
             },
         )
+        self._sync_user_folder(updated)
         session = self._create_or_return_session(record["user_id"], workspace_id)
 
         return {

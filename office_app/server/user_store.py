@@ -11,6 +11,7 @@ USER_COLUMNS = (
     "name",
     "display_name",
     "pin_code",
+    "face_photo_data",
     "onboarding_complete",
     "default_workspace_id",
     "last_active_workspace_id",
@@ -49,6 +50,7 @@ class UserStore:
                     name TEXT NOT NULL,
                     display_name TEXT NOT NULL,
                     pin_code TEXT NOT NULL UNIQUE,
+                    face_photo_data TEXT,
                     onboarding_complete INTEGER NOT NULL DEFAULT 0,
                     default_workspace_id TEXT NOT NULL,
                     last_active_workspace_id TEXT NOT NULL,
@@ -58,6 +60,9 @@ class UserStore:
                 )
                 """
             )
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+            if "face_photo_data" not in columns:
+                conn.execute("ALTER TABLE users ADD COLUMN face_photo_data TEXT")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_users_last_active_workspace "
                 "ON users(last_active_workspace_id)"

@@ -2,6 +2,7 @@
 
 import csv
 import json
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ from office_app.server.archive_service import ArchiveService
 from office_app.server.command_router import CommandRouter
 from office_app.server.errors import error_missing_required_field
 from office_app.server.guards import ensure_single_target
+from office_app.server.model_router import ModelRouter, ModelRoutingError
 from office_app.server.memo_service import MemoService
 from office_app.server.nancy_service import NancyService
 from office_app.server.request_pipeline import RequestPipeline
@@ -75,6 +77,7 @@ kernel = WorkspaceKernel(store=store, utc_now_fn=utc_now)
 memo_service = MemoService(store=store, legacy_memos_dir=LEGACY_MEMOS_DIR, utc_now_fn=utc_now)
 archive_service = ArchiveService(workspaces_dir=WORKSPACES_DIR, utc_now_fn=utc_now)
 user_service = UserService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
+model_router = ModelRouter.from_env()
 nancy_service = NancyService(
     kernel=kernel,
     archive_service=archive_service,
@@ -167,6 +170,7 @@ class LobbyOnboardRequest(BaseModel):
     name: str = Field(..., description="User name")
     pin_code: str = Field(..., description="4-digit PIN code")
     display_name: Optional[str] = Field(default=None, description="Optional display name")
+    face_photo_data: Optional[str] = Field(default=None, description="Optional face photo data URL")
 
 
 class LobbyEnterRequest(BaseModel):
@@ -236,13 +240,11 @@ def handle_natural_language_request(
     payload: NaturalLanguageRequest,
     x_session_id: Optional[str] = Header(default=None, alias="X-Session-Id"),
 ) -> Dict[str, Any]:
-    session_id = str(x_session_id or payload.session_id or "").strip()
+    header_session_id = x_session_id if isinstance(x_session_id, str) else None
+    session_id = str(header_session_id or payload.session_id or "").strip()
     if not session_id:
         raise HTTPException(status_code=400, detail="Session ID required")
-    session = user_service.sessions.fetch_session(session_id)
-    if session is None:
-        raise HTTPException(status_code=401, detail="Invalid session")
-    workspace_id = str(session.get("active_workspace_id") or "").strip()
+    workspace_id = str(user_service.resolve_workspace_for_session(session_id) or "").strip()
     if not workspace_id:
         raise HTTPException(status_code=401, detail="Invalid session")
     request_text = str(payload.text or "").strip()
@@ -265,6 +267,21 @@ def handle_natural_language_request(
                 }
             return attach_request_context(result, workspace_id=workspace_id, session_id=session_id)
 
+    if routed["route_kind"] == "model":
+        args = dict(routed["arguments"])
+        args["workspace_id"] = workspace_id
+        args["session_id"] = session_id
+        result = router.dispatch(routed["tool"], args)
+        if isinstance(result, dict):
+            structured = result.get("structuredContent")
+            if isinstance(structured, dict):
+                structured["routing"] = {
+                    "route_kind": "model",
+                    "tool": routed["tool"],
+                    "reason": routed["reason"],
+                }
+        return attach_request_context(result, workspace_id=workspace_id, session_id=session_id)
+
     return attach_request_context(
         pipeline.nancy_route_response(workspace_id, request_text),
         workspace_id=workspace_id,
@@ -278,6 +295,7 @@ def lobby_onboard(payload: LobbyOnboardRequest) -> Dict[str, Any]:
         name=payload.name,
         pin_code=payload.pin_code,
         display_name=payload.display_name,
+        face_photo_data=payload.face_photo_data,
     )
     return {
         "structuredContent": result,
@@ -311,6 +329,15 @@ def lobby_enter(payload: LobbyEnterRequest) -> Dict[str, Any]:
             }
         ],
     }
+
+
+@app.post("/dev/reset-test-data")
+def reset_test_data() -> Dict[str, Any]:
+    with sqlite3.connect(user_service.db_path) as conn:
+        conn.execute("DELETE FROM sessions")
+        conn.execute("DELETE FROM users")
+        conn.commit()
+    return {"ok": True}
 
 
 def handle_workspaces_list(_: Dict[str, Any]) -> Dict[str, Any]:
@@ -380,6 +407,76 @@ def handle_office_nancy_route(args: Dict[str, Any]) -> Dict[str, Any]:
     if not request_text:
         raise error_missing_required_field("request")
     return pipeline.nancy_route_response(workspace_id, request_text)
+
+
+def handle_ai_generate(args: Dict[str, Any]) -> Dict[str, Any]:
+    workspace_id = str(args.get("workspace_id", "")).strip()
+    if not workspace_id:
+        raise error_missing_required_field("workspace_id")
+
+    try:
+        state = kernel.get_state(workspace_id)
+    except HTTPException:
+        kernel.bootstrap_workspace(workspace_id)
+        state = kernel.get_state(workspace_id)
+
+    user_prompt = str(args.get("user_prompt") or args.get("request") or args.get("text") or "").strip()
+    if not user_prompt:
+        raise error_missing_required_field("user_prompt")
+
+    system_prompt = str(args.get("system_prompt") or "").strip()
+    if not system_prompt:
+        system_prompt = (
+            f"You are Veridex. The active workspace is {workspace_id}. "
+            f"The active room is {state.get('active_room', 'lobby')}. "
+            f"The active persona is {state.get('active_persona', 'Receptionist')}. "
+            "Respond clearly, concisely, and stay within Veridex governance."
+        )
+
+    context = args.get("context")
+    if not isinstance(context, dict):
+        context = {
+            "workspace_id": workspace_id,
+            "active_room": state.get("active_room", "lobby"),
+            "active_persona": state.get("active_persona", "Receptionist"),
+        }
+
+    settings = args.get("settings")
+    if not isinstance(settings, dict):
+        settings = {}
+
+    task_type = str(args.get("task_type") or "conversation").strip() or "conversation"
+
+    try:
+        result = model_router.generate_response(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            context=context,
+            settings=settings,
+            task_type=task_type,
+        )
+    except ModelRoutingError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": str(exc),
+                "attempts": exc.attempts,
+            },
+        ) from exc
+
+    structured = {
+        "workspace_id": workspace_id,
+        "provider": result.provider,
+        "model": result.model,
+        "task_type": result.task_type,
+        "fallback_used": result.fallback_used,
+        "attempts": result.attempts,
+        "response_text": result.text,
+    }
+    return {
+        "structuredContent": structured,
+        "content": [{"type": "text", "text": result.text}],
+    }
 
 
 def handle_mailroom_dispatch(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -796,6 +893,7 @@ register_tools(
         "office.state_get": handle_office_state_get,
         "office.room_set": handle_office_room_set,
         "office.nancy_route": handle_office_nancy_route,
+        "office.ai_generate": handle_ai_generate,
         "mailroom.dispatch": handle_mailroom_dispatch,
         "office.artifact_create": handle_artifact_create,
         "office.artifact_get": handle_artifact_get,

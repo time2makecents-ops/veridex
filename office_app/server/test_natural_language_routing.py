@@ -77,11 +77,13 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["arguments"]["artifact_id"], "art_123abc")
         self.assertEqual(routed["arguments"]["retrieval_scope"], "workspace")
 
-    def test_unknown_text_falls_back_to_nancy(self) -> None:
+    def test_unknown_text_falls_back_to_model_route(self) -> None:
         routed = self.pipeline.route_user_request("default", "review the quarterly plan")
-        self.assertEqual(routed["route_kind"], "nancy")
-        self.assertEqual(routed["tool"], "office.nancy_route")
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["tool"], "office.ai_generate")
         self.assertEqual(routed["arguments"]["workspace_id"], "default")
+        self.assertEqual(routed["arguments"]["task_type"], "conversation")
+        self.assertIn("system_prompt", routed["arguments"])
 
 
 if __name__ == "__main__":

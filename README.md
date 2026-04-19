@@ -5,6 +5,10 @@
 
 ---
 
+Planning: see [TODO.md](TODO.md) for active work items and the Apps SDK / app-in-ChatGPT path.
+
+---
+
 # Overview
 
 Veridex is a **structured AI operating environment** built around a workspace-based architecture.

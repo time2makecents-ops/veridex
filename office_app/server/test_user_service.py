@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 import unittest
@@ -42,6 +43,49 @@ class UserServiceTests(unittest.TestCase):
             fetched = service.get_user_by_pin("2468")
             self.assertEqual(fetched["user_id"], user["user_id"])
             self.assertEqual(service.resolve_workspace_for_session(result["session_id"]), result["workspace_id"])
+
+            users_root = runtime_dir / "users"
+            user_folders = [path for path in users_root.iterdir() if path.is_dir()]
+            self.assertEqual(len(user_folders), 1)
+            profile_path = user_folders[0] / "profile.json"
+            self.assertTrue(profile_path.exists())
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            self.assertEqual(profile["user_id"], user["user_id"])
+            self.assertFalse(profile["has_face_photo"])
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_onboard_writes_face_photo_file(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_photo"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            service = UserService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+
+            face_photo_data = (
+                "data:image/png;base64,"
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZP8AAAAASUVORK5CYII="
+            )
+            result = service.onboard_user(
+                name="Casey",
+                display_name="Casey Jones",
+                pin_code="1358",
+                face_photo_data=face_photo_data,
+            )
+
+            users_root = runtime_dir / "users"
+            user_folders = [path for path in users_root.iterdir() if path.is_dir()]
+            self.assertEqual(len(user_folders), 1)
+            user_folder = user_folders[0]
+            profile = json.loads((user_folder / "profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["user_id"], result["user"]["user_id"])
+            self.assertTrue(profile["has_face_photo"])
+            self.assertEqual(profile["face_photo_file"], "face_photo.png")
+            self.assertTrue((user_folder / "face_photo.png").exists())
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 
