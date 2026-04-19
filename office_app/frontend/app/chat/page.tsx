@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -117,50 +118,36 @@ export default function ChatPage() {
   }
 
   return (
-    <main className="screen lobby-page">
-      <section className="terminal-shell stack">
-        <div className="terminal-header">
-          <div className="terminal-lens" />
-          <div className="status" style={{ justifyContent: "flex-end" }}>
-            <span className="pill">Session {sessionLabel}</span>
-            <span className="pill">Workspace {workspaceId || "syncing"}</span>
-            <span className="pill">Room {activeRoom}</span>
-            <span className="pill">Persona {activePersona}</span>
+    <main
+      className="screen lobby-page"
+      data-session={sessionLabel}
+      data-workspace={workspaceId}
+      data-room={activeRoom}
+      data-persona={activePersona}
+    >
+      <section className="lobby-terminal lobby-terminal-fixed">
+        <div className="lobby-terminal-image-wrap lobby-terminal-frame-wrap">
+          <Image
+            src="/terminal_frame.jpg"
+            alt="Lobby terminal frame"
+            fill
+            priority
+            sizes="100vw"
+            className="lobby-terminal-image lobby-terminal-frame-image"
+          />
+          <div className="lobby-terminal-screen lobby-terminal-main-screen">
+            <section ref={logRef} className="chat lobby-terminal-chat lobby-terminal-main-chat">
+              {messages.map((message) => (
+                <div key={message.id} className="stack" style={{ gap: 4 }}>
+                  <div className="muted lobby-terminal-speaker">{message.role === "user" ? "You" : "Receptionist"}</div>
+                  <div className="lobby-terminal-bubble lobby-terminal-main-bubble">{message.text}</div>
+                </div>
+              ))}
+              {loading ? <div className="muted lobby-terminal-speaker">Processing...</div> : null}
+            </section>
           </div>
-        </div>
 
-        <div className="terminal-screen stack">
-          <div className="terminal-label">VERIDEX LOBBY TERMINAL</div>
-          <div className="terminal-title" style={{ color: "inherit", fontSize: "1.35rem", margin: 0 }}>
-            Reception Desk
-          </div>
-          <div className="muted" style={{ marginBottom: 8 }}>
-            You are speaking with the receptionist. Type below to continue.
-          </div>
-
-          <section ref={logRef} className="chat" style={{ maxHeight: "42dvh", minHeight: "42dvh" }}>
-          {messages.map((message) => (
-            <div key={message.id} className="stack" style={{ gap: 4 }}>
-              <div className="muted" style={{ fontSize: "0.8rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                {message.role === "user" ? "You" : "Receptionist"}
-              </div>
-              <div
-                className="card"
-                style={{
-                  padding: 14,
-                  background: message.role === "user" ? "rgba(141, 253, 167, 0.12)" : "rgba(255, 255, 255, 0.03)",
-                  color: "inherit",
-                  borderColor: "rgba(141, 253, 167, 0.12)",
-                }}
-              >
-                {message.text}
-              </div>
-            </div>
-          ))}
-          {loading ? <div className="muted">Processing...</div> : null}
-          </section>
-
-          <form className="composer" onSubmit={handleSubmit}>
+          <form className="lobby-terminal-input" onSubmit={handleSubmit}>
             <textarea
               ref={draftRef}
               value={draft}
@@ -172,9 +159,9 @@ export default function ChatPage() {
               Send
             </button>
           </form>
-
-          {error ? <div className="error">{error}</div> : null}
         </div>
+
+        {error ? <div className="error lobby-terminal-error">{error}</div> : null}
       </section>
     </main>
   );
