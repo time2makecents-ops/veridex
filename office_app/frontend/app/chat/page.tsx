@@ -3,20 +3,55 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { callTool, request, requestText } from "@/lib/api";
+import { callTool, fileDownloadUrl, listFiles, readFileText, request, requestText, uploadFile, type FileRecord } from "@/lib/api";
 import { clearStoredSessionId, getSessionShortLabel, getStoredSessionId } from "@/lib/session";
-
-type Message = {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-};
+import { ROOM_GROUPS, ROOMS, type RoomInfo } from "@/lib/rooms";
 
 type LobbyState = {
   workspace_id: string;
   active_room: string;
   active_persona: string;
 };
+
+type Message = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  speaker?: string;
+};
+
+type FileScope = "room" | "session" | "public" | "private";
+
+const FILE_KIND_OPTIONS = [
+  { value: "audio", label: "Audio" },
+  { value: "video", label: "Video" },
+  { value: "document", label: "Document" },
+  { value: "code", label: "Code" },
+  { value: "other", label: "Other" },
+];
+
+const FILE_SCOPE_OPTIONS: Array<{ value: FileScope; label: string; description: string }> = [
+  { value: "room", label: "Room", description: "Saved to the current room for everyone in that room." },
+  { value: "session", label: "Session", description: "Only accessible in this session." },
+  { value: "public", label: "Public", description: "Accessible anywhere in Veridex." },
+  { value: "private", label: "Private", description: "Stored separately. Access via Nancy memo." },
+];
+
+const PRIVATE_BUCKET_OPTIONS = [
+  { value: "by_type", label: "By type" },
+  { value: "by_date", label: "By date" },
+  { value: "by_project", label: "By project" },
+  { value: "by_memo", label: "By memo" },
+];
+
+function roomById(roomId: string): RoomInfo | undefined {
+  return ROOMS.find((room) => room.id === roomId);
+}
+
+function roomTransitionText(roomId: string, persona: string): string {
+  const title = roomById(roomId)?.title || roomId;
+  return `Now in ${title}. Persona: ${persona}.`;
+}
 
 export default function ChatPage() {
   const router = useRouter();
@@ -28,11 +63,37 @@ export default function ChatPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [switchingRoom, setSwitchingRoom] = useState<string>("");
+  const [roomMenuOpen, setRoomMenuOpen] = useState(false);
+  const [saveMenuOpen, setSaveMenuOpen] = useState(false);
+  const [loadMenuOpen, setLoadMenuOpen] = useState(false);
+  const [attachmentOpen, setAttachmentOpen] = useState(false);
+  const [attachmentMode, setAttachmentMode] = useState<"upload" | "download">("download");
+  const [recentRooms, setRecentRooms] = useState<string[]>([]);
+  const [fileKind, setFileKind] = useState("document");
+  const [fileScope, setFileScope] = useState<FileScope>("room");
+  const [privateBucket, setPrivateBucket] = useState("by_type");
+  const [workspaceFiles, setWorkspaceFiles] = useState<FileRecord[]>([]);
+  const [privateFiles, setPrivateFiles] = useState<FileRecord[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [readerOpen, setReaderOpen] = useState(false);
+  const [readerTitle, setReaderTitle] = useState("");
+  const [readerText, setReaderText] = useState("");
+  const [readerLoading, setReaderLoading] = useState(false);
+  const [selectedUploadName, setSelectedUploadName] = useState("");
+  const [selectedUploadDataUrl, setSelectedUploadDataUrl] = useState("");
+  const [selectedUploadMime, setSelectedUploadMime] = useState("");
+  const [selectedUploadDescription, setSelectedUploadDescription] = useState("");
+  const [selectedUploadReady, setSelectedUploadReady] = useState(false);
+  const [uploadNote, setUploadNote] = useState("");
+  const [roomStatus, setRoomStatus] = useState("Waiting for room state.");
+  const [backendBanner, setBackendBanner] = useState("");
   const [messages, setMessages] = useState<Message[]>([
-    { id: "welcome", role: "assistant", text: "Receptionist ready. How may I help you today?" },
+    { id: "welcome", role: "assistant", speaker: "Receptionist", text: "Receptionist ready. How may I help you today?" },
   ]);
   const logRef = useRef<HTMLDivElement>(null);
   const draftRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const announcedRoomRef = useRef(false);
 
   useEffect(() => {
     const stored = getStoredSessionId();
@@ -60,17 +121,26 @@ export default function ChatPage() {
         if (cancelled || !structured) {
           return;
         }
-        setWorkspaceId(String(structured.workspace_id || ""));
-        setActiveRoom(String(structured.active_room || "lobby"));
-        setActivePersona(String(structured.active_persona || "Receptionist"));
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Unable to load lobby state.";
-        setError(message);
-        if (message.toLowerCase().includes("session")) {
-          clearStoredSessionId();
-          router.replace("/");
+        const nextWorkspace = String(structured.workspace_id || "");
+        const nextRoom = String(structured.active_room || "lobby");
+        const nextPersona = String(structured.active_persona || "Receptionist");
+        setWorkspaceId(nextWorkspace);
+        setActiveRoom(nextRoom);
+        setActivePersona(nextPersona);
+        setRecentRooms((current) => pushRecentRoom(current, nextRoom));
+        if (!announcedRoomRef.current) {
+          announcedRoomRef.current = true;
+          appendRoomTransition(nextRoom, nextPersona);
         }
-      }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Unable to load lobby state.";
+          setError(message);
+          setBackendBanner(backendDisconnectedMessage(message));
+          if (message.toLowerCase().includes("session")) {
+            clearStoredSessionId();
+            router.replace("/");
+          }
+        }
     };
 
     void loadState();
@@ -80,6 +150,89 @@ export default function ChatPage() {
   }, [router, sessionId]);
 
   const sessionLabel = useMemo(() => getSessionShortLabel(sessionId), [sessionId]);
+  const currentRoom = useMemo(() => roomById(activeRoom), [activeRoom]);
+  const currentTitle = currentRoom?.title || activeRoom;
+
+  function pushRecentRoom(existing: string[], roomId: string): string[] {
+    const next = [roomId, ...existing.filter((item) => item !== roomId)];
+    return next.slice(0, 3);
+  }
+
+  function appendRoomTransition(roomId: string, persona: string) {
+    const text = roomTransitionText(roomId, persona);
+    setRoomStatus(text);
+    setMessages((current) => [
+      ...current,
+      {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        speaker: "System",
+        text,
+      },
+    ]);
+  }
+
+  function backendDisconnectedMessage(message: string): string {
+    const text = message.toLowerCase();
+    if (
+      text.includes("500") ||
+      text.includes("failed to fetch") ||
+      text.includes("unable to connect") ||
+      text.includes("networkerror") ||
+      text.includes("request timed out")
+    ) {
+      return "Veridex backend disconnected. Check the server on port 8078.";
+    }
+    return "";
+  }
+
+  function fileSortLabel(file: FileRecord): string {
+    const date = file.created_at ? new Date(file.created_at).toLocaleDateString() : "no date";
+    const session = String(file.scope_ref || file.workspace_id || "workspace");
+    const kind = file.kind || "file";
+    return `${date} - ${session} - ${kind}`;
+  }
+
+  async function openReader(file: FileRecord) {
+    setLoadMenuOpen(false);
+    setReaderOpen(true);
+    setReaderLoading(true);
+    setReaderTitle(file.original_name || "Document");
+    setReaderText("");
+    setError("");
+    try {
+      const text = await readFileText(file);
+      setReaderText(text);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to read file.";
+      setReaderText(message);
+      setError(message);
+      setBackendBanner(backendDisconnectedMessage(message));
+    } finally {
+      setReaderLoading(false);
+    }
+  }
+
+  async function refreshFiles() {
+    if (!sessionId) {
+      return;
+    }
+    setFilesLoading(true);
+    try {
+      const [workspaceResponse, privateResponse] = await Promise.all([
+        listFiles(),
+        listFiles("private", fileScope === "private" ? privateBucket : undefined),
+      ]);
+      setWorkspaceFiles(workspaceResponse.files || []);
+      setPrivateFiles(privateResponse.files || []);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to load files.";
+      setError(message);
+      setBackendBanner(backendDisconnectedMessage(message));
+    } finally {
+      setFilesLoading(false);
+    }
+  }
 
   async function sendText(text: string) {
     const value = text.trim();
@@ -88,19 +241,29 @@ export default function ChatPage() {
     }
     setDraft("");
     setError("");
+    setBackendBanner("");
     setLoading(true);
     setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text: value }]);
     try {
       const response = await request(value);
       const assistantText = requestText(response);
-      setWorkspaceId(String(response.workspace_id || response.structuredContent?.workspace_id || workspaceId));
-      setSessionId(String(response.session_id || response.structuredContent?.session_id || sessionId));
-      setActiveRoom(String((response.structuredContent as { active_room?: string } | undefined)?.active_room || activeRoom));
-      setActivePersona(String((response.structuredContent as { active_persona?: string } | undefined)?.active_persona || activePersona));
-      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: assistantText }]);
+      const nextWorkspaceId = String(response.workspace_id || response.structuredContent?.workspace_id || workspaceId);
+      const nextSessionId = String(response.session_id || response.structuredContent?.session_id || sessionId);
+      const nextRoom = String((response.structuredContent as { active_room?: string } | undefined)?.active_room || activeRoom);
+      const nextPersona = String((response.structuredContent as { active_persona?: string } | undefined)?.active_persona || activePersona);
+      setWorkspaceId(nextWorkspaceId);
+      setSessionId(nextSessionId);
+      setActiveRoom(nextRoom);
+      setActivePersona(nextPersona);
+      setRecentRooms((current) => pushRecentRoom(current, nextRoom));
+      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", speaker: nextPersona, text: assistantText }]);
+      if (nextRoom !== activeRoom || nextPersona !== activePersona) {
+        appendRoomTransition(nextRoom, nextPersona);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Request failed.";
       setError(message);
+      setBackendBanner(backendDisconnectedMessage(message));
       setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message }]);
       if (message.toLowerCase().includes("session")) {
         clearStoredSessionId();
@@ -108,6 +271,9 @@ export default function ChatPage() {
       }
     } finally {
       setLoading(false);
+      window.requestAnimationFrame(() => {
+        draftRef.current?.focus();
+      });
     }
   }
 
@@ -115,6 +281,116 @@ export default function ChatPage() {
     event.preventDefault();
     await sendText(draft);
   }
+
+  function handleDraftKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+    event.preventDefault();
+    void sendText(draft);
+  }
+
+  async function handleRoomSelect(roomId: string) {
+    if (!roomId || roomId === activeRoom || switchingRoom) {
+      return;
+    }
+    setSwitchingRoom(roomId);
+    setError("");
+    setBackendBanner("");
+    setRoomMenuOpen(false);
+    try {
+      const response = await callTool("office.room_set", { room_id: roomId });
+      const structured = response.structuredContent as { active_room?: string; active_persona?: string } | undefined;
+      const nextRoom = String(structured?.active_room || roomId);
+      const nextPersona = String(structured?.active_persona || roomById(nextRoom)?.persona || "Receptionist");
+      setActiveRoom(nextRoom);
+      setActivePersona(nextPersona);
+      setRecentRooms((current) => pushRecentRoom(current, nextRoom));
+      appendRoomTransition(nextRoom, nextPersona);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to change room.";
+      setError(message);
+      setBackendBanner(backendDisconnectedMessage(message));
+    } finally {
+      setSwitchingRoom("");
+    }
+  }
+
+  async function handleUploadSelected(file: File) {
+    setError("");
+    const dataUrl = await readFileAsDataUrl(file);
+    const scopeRef =
+      fileScope === "room"
+        ? activeRoom
+        : fileScope === "session"
+          ? sessionId
+          : fileScope === "private"
+            ? privateBucket
+            : "public";
+    try {
+      await uploadFile({
+        name: file.name,
+        data_url: dataUrl,
+        mime_type: file.type || undefined,
+        kind: fileKind,
+        scope: fileScope,
+        scope_ref: scopeRef,
+        description: selectedUploadDescription || undefined,
+      });
+      setUploadNote(`${file.name} saved to ${fileScope}.`);
+      setSelectedUploadName("");
+      setSelectedUploadDataUrl("");
+      setSelectedUploadMime("");
+      setSelectedUploadReady(false);
+      setAttachmentMode("download");
+      await refreshFiles();
+      setSaveMenuOpen(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Upload failed.";
+      setError(message);
+      setBackendBanner(backendDisconnectedMessage(message));
+    }
+  }
+
+  async function onPickFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    setSelectedUploadName(file.name);
+    setSelectedUploadMime(file.type || "");
+    const dataUrl = await readFileAsDataUrl(file);
+    setSelectedUploadDataUrl(dataUrl);
+    setSelectedUploadReady(true);
+  }
+
+  async function submitSelectedUpload() {
+    if (!selectedUploadReady || !selectedUploadDataUrl || !selectedUploadName) {
+      setError("Choose a file first.");
+      return;
+    }
+    const blob = await fetch(selectedUploadDataUrl).then((response) => response.blob());
+    const file = new File([blob], selectedUploadName, { type: selectedUploadMime });
+    await handleUploadSelected(file);
+  }
+
+  function openPicker() {
+    fileInputRef.current?.click();
+  }
+
+  useEffect(() => {
+    if (attachmentOpen) {
+      void refreshFiles();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachmentOpen]);
+
+  useEffect(() => {
+    if (loadMenuOpen) {
+      void refreshFiles();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadMenuOpen]);
 
   return (
     <main
@@ -126,41 +402,341 @@ export default function ChatPage() {
     >
       <section className="card lobby-page-header">
         <div className="stack">
-          <div className="terminal-label">Veridex Lobby</div>
-          <h1 className="title">Receptionist Desk</h1>
-          <div className="status">
-            <span className="pill">Session {sessionLabel}</span>
-            <span className="pill">Room {activeRoom}</span>
-            <span className="pill">Persona {activePersona}</span>
+          <div className="lobby-title-row">
+            <div className="stack" style={{ gap: 4 }}>
+              <div className="terminal-label">Veridex Lobby</div>
+              <h1 className="title">{currentTitle}</h1>
+            </div>
+            <div className="session-inline">Session {sessionLabel}</div>
           </div>
+
+          <div className="toolbar-row">
+            <button
+              type="button"
+              className="ghost toolbar-button"
+              onClick={() => {
+                setRoomMenuOpen((current) => !current);
+                setSaveMenuOpen(false);
+                setLoadMenuOpen(false);
+                setAttachmentOpen(false);
+              }}
+            >
+              Directory
+            </button>
+            {recentRooms.map((roomId) => {
+              const room = roomById(roomId);
+              return (
+                <button
+                  key={roomId}
+                  type="button"
+                  className={`ghost toolbar-button ${roomId === activeRoom ? "toolbar-button-active" : ""}`}
+                  onClick={() => void handleRoomSelect(roomId)}
+                >
+                  {room?.title || roomId}
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              className="ghost toolbar-button"
+              onClick={() => {
+                setSaveMenuOpen((current) => !current);
+                setRoomMenuOpen(false);
+                setLoadMenuOpen(false);
+                setAttachmentOpen(false);
+              }}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              className="ghost toolbar-button"
+              onClick={() => {
+                setLoadMenuOpen((current) => !current);
+                setRoomMenuOpen(false);
+                setSaveMenuOpen(false);
+                setAttachmentOpen(false);
+              }}
+            >
+              Load
+            </button>
+          </div>
+
+          {roomMenuOpen ? (
+            <div className="dropdown-panel">
+              {ROOM_GROUPS.map((group) => (
+                <div key={group} className="dropdown-group">
+                  <div className="dropdown-group-title">{group}</div>
+                  <div className="dropdown-grid">
+                    {ROOMS.filter((room) => room.group === group).map((room) => (
+                      <button
+                        key={room.id}
+                        type="button"
+                        className={`ghost room-option ${room.id === activeRoom ? "toolbar-button-active" : ""}`}
+                        onClick={() => void handleRoomSelect(room.id)}
+                      >
+                        <span>{room.title}</span>
+                        <span className="room-option-persona">{room.persona}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {saveMenuOpen ? (
+            <div className="dropdown-panel">
+              <div className="dropdown-group">
+                <div className="dropdown-group-title">File Type</div>
+                <div className="toolbar-row">
+                  {FILE_KIND_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`ghost toolbar-button ${fileKind === option.value ? "toolbar-button-active" : ""}`}
+                      onClick={() => setFileKind(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="dropdown-group">
+                <div className="dropdown-group-title">Save To</div>
+                <div className="dropdown-grid">
+                  {FILE_SCOPE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`ghost room-option ${fileScope === option.value ? "toolbar-button-active" : ""}`}
+                      onClick={() => setFileScope(option.value)}
+                    >
+                      <span>{option.label}</span>
+                      <span className="room-option-persona">{option.description}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="dropdown-group">
+                <div className="dropdown-group-title">Private organization</div>
+                <div className="toolbar-row">
+                  {PRIVATE_BUCKET_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`ghost toolbar-button ${privateBucket === option.value ? "toolbar-button-active" : ""}`}
+                      onClick={() => setPrivateBucket(option.value)}
+                      disabled={fileScope !== "private"}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="muted">
+                  Private files are saved in a separate database. Access them through Nancy memo requests.
+                </div>
+              </div>
+              <div className="dropdown-group">
+                <div className="toolbar-row">
+                  <button type="button" className="secondary" onClick={openPicker}>
+                    Choose file
+                  </button>
+                  <button type="button" className="primary" onClick={() => void submitSelectedUpload()} disabled={!selectedUploadReady}>
+                    Upload
+                  </button>
+                </div>
+                {selectedUploadName ? <div className="muted">Selected: {selectedUploadName}</div> : null}
+                {uploadNote ? <div className="muted">{uploadNote}</div> : null}
+              </div>
+            </div>
+          ) : null}
+
+          {loadMenuOpen ? (
+            <div className="dropdown-panel">
+              <div className="dropdown-group">
+                <div className="dropdown-group-title">Load document</div>
+                <div className="muted">Choose a document to open in the reader window.</div>
+              </div>
+              <div className="dropdown-group">
+                <div className="dropdown-group-title">Workspace / Session Files</div>
+                <div className="load-list">
+                  {workspaceFiles.length ? (
+                    workspaceFiles.map((file) => (
+                      <button key={file.file_id} type="button" className="load-item" onClick={() => void openReader(file)}>
+                        <span className="load-item-title">{file.original_name}</span>
+                        <span className="load-item-meta">{fileSortLabel(file)}</span>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="muted">No workspace files yet.</div>
+                  )}
+                </div>
+              </div>
+              <div className="dropdown-group">
+                <div className="dropdown-group-title">Private Files</div>
+                <div className="load-list">
+                  {privateFiles.length ? (
+                    privateFiles.map((file) => (
+                      <button key={file.file_id} type="button" className="load-item" onClick={() => void openReader(file)}>
+                        <span className="load-item-title">{file.original_name}</span>
+                        <span className="load-item-meta">{fileSortLabel(file)}</span>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="muted">No private files yet.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       </section>
 
       <section className="card lobby-chat-card">
         <div className="terminal-panel-title">Chat Window</div>
+        <div className="room-status-bar">{roomStatus}</div>
+        {backendBanner ? <div className="backend-banner">{backendBanner}</div> : null}
         <section ref={logRef} className="chat lobby-chat-window">
           {messages.map((message) => (
             <div key={message.id} className={`bubble ${message.role}`}>
-              <div className="chat-role">{message.role === "user" ? "You" : "Receptionist"}</div>
+              <div className="chat-role">{message.role === "user" ? "You" : message.speaker || activePersona}</div>
               <div className="chat-text">{message.text}</div>
-            </div>
-          ))}
+              </div>
+            ))}
           {loading ? <div className="muted">Processing...</div> : null}
         </section>
         {error ? <div className="error">{error}</div> : null}
-        <form className="composer lobby-composer" onSubmit={handleSubmit}>
-          <textarea
-            ref={draftRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="Speak to the receptionist..."
-            rows={3}
-          />
-          <button className="primary" type="submit" disabled={loading || !draft.trim()}>
-            Send
+
+        <div className="composer-actions">
+          <button
+            type="button"
+            className="ghost composer-plus"
+            onClick={() => {
+              setAttachmentOpen((current) => !current);
+              setAttachmentMode("download");
+              setSaveMenuOpen(false);
+              setRoomMenuOpen(false);
+              setLoadMenuOpen(false);
+            }}
+            aria-label="Open file actions"
+          >
+            +
           </button>
-        </form>
+          <form className="composer lobby-composer" onSubmit={handleSubmit}>
+            <textarea
+              ref={draftRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={handleDraftKeyDown}
+              placeholder="Speak to the receptionist..."
+              rows={3}
+            />
+            <button className="primary" type="submit" disabled={loading || !draft.trim()}>
+              Send
+            </button>
+          </form>
+        </div>
+
+        {attachmentOpen ? (
+          <div className="dropdown-panel attachment-panel">
+            <div className="toolbar-row">
+              <button
+                type="button"
+                className={`ghost toolbar-button ${attachmentMode === "download" ? "toolbar-button-active" : ""}`}
+                onClick={() => {
+                  setAttachmentMode("download");
+                  void refreshFiles();
+                }}
+              >
+                Download
+              </button>
+              <button
+                type="button"
+                className={`ghost toolbar-button ${attachmentMode === "upload" ? "toolbar-button-active" : ""}`}
+                onClick={() => setAttachmentMode("upload")}
+              >
+                Upload
+              </button>
+            </div>
+
+            {attachmentMode === "upload" ? (
+              <div className="stack">
+                <input ref={fileInputRef} type="file" className="hidden-file-input" onChange={onPickFile} />
+                <div className="toolbar-row">
+                  <button type="button" className="secondary" onClick={openPicker}>
+                    Choose file
+                  </button>
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={() => void submitSelectedUpload()}
+                    disabled={!selectedUploadReady}
+                  >
+                    Upload now
+                  </button>
+                </div>
+                {selectedUploadName ? <div className="muted">Selected: {selectedUploadName}</div> : null}
+              </div>
+            ) : (
+              <div className="stack">
+                <div className="dropdown-group-title">Room / Workspace Files</div>
+                {filesLoading ? <div className="muted">Loading files...</div> : null}
+                <div className="download-list">
+                  {workspaceFiles.length ? (
+                    workspaceFiles.map((file) => (
+                      <a key={file.file_id} className="download-item" href={fileDownloadUrl(file)} target="_blank" rel="noreferrer">
+                        <span>{file.original_name}</span>
+                        <span className="room-option-persona">{file.scope || "workspace"} · {file.kind || "file"}</span>
+                      </a>
+                    ))
+                  ) : (
+                    <div className="muted">No workspace files yet.</div>
+                  )}
+                </div>
+
+                <div className="dropdown-group-title">Private Files</div>
+                <div className="download-list">
+                  {privateFiles.length ? (
+                    privateFiles.map((file) => (
+                      <a key={file.file_id} className="download-item" href={fileDownloadUrl(file)} target="_blank" rel="noreferrer">
+                        <span>{file.original_name}</span>
+                        <span className="room-option-persona">private · {file.kind || "file"}</span>
+                      </a>
+                    ))
+                  ) : (
+                    <div className="muted">No private files yet.</div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        ) : null}
       </section>
+
+      {readerOpen ? (
+        <section className="card document-reader-shell">
+          <div className="terminal-panel-title">Document Reader</div>
+          <div className="toolbar-row">
+            <div className="reader-title">{readerTitle}</div>
+            <button type="button" className="ghost toolbar-button" onClick={() => setReaderOpen(false)}>
+              Close
+            </button>
+          </div>
+          <div className="reader-window">
+            {readerLoading ? <div className="muted">Loading document...</div> : <pre>{readerText || "Select a document."}</pre>}
+          </div>
+        </section>
+      ) : null}
     </main>
   );
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("Unable to read file."));
+    reader.readAsDataURL(file);
+  });
 }

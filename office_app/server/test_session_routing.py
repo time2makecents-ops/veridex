@@ -76,6 +76,7 @@ class SessionRoutingTests(unittest.TestCase):
             app_module.nancy_service = temp_nancy
             app_module.router = temp_router
             app_module.pipeline = temp_pipeline
+            app_module.refresh_handler_bindings()
 
             app_module.register_tools(
                 temp_router,

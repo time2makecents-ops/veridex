@@ -264,3 +264,13 @@ class UserService:
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found.")
         return session
+
+    def get_user_for_session(self, session_id: str) -> Dict[str, Any]:
+        session = self.get_session(session_id)
+        user_id = str(session.get("user_id") or "").strip()
+        if not user_id:
+            raise HTTPException(status_code=404, detail="User not found.")
+        record = self.store.fetch_user(user_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="User not found.")
+        return self._decorate_user(record)

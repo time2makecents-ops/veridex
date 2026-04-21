@@ -55,6 +55,14 @@ class RequestPipeline:
     )
     ARTIFACT_ARCHIVE_ROOM = "records_archive"
     ARTIFACT_ID_RE = re.compile(r"\bart_[A-Za-z0-9]+\b", re.IGNORECASE)
+    ROOM_NAVIGATION_PREFIXES = (
+        "go to ",
+        "take me to ",
+        "move to ",
+        "switch to ",
+        "enter ",
+        "open ",
+    )
 
     def __init__(
         self,
@@ -62,19 +70,30 @@ class RequestPipeline:
         navigator_control,
         utc_now_fn,
         tool_names: Optional[List[str]] = None,
+        tool_catalog: Optional[List[Dict[str, Any]]] = None,
         app_version: Optional[str] = None,
     ):
         self.kernel = kernel
         self.navigator_control = navigator_control
         self.utc_now = utc_now_fn
         self.tool_names = tool_names or []
+        self.tool_catalog = tool_catalog or []
         self.app_version = app_version or "0.0.0"
 
     def health_response(self) -> Dict[str, Any]:
         return {"ok": True, "ts": self.utc_now()}
 
     def tools_response(self) -> Dict[str, Any]:
-        return {"tools": self.tool_names, "version": self.app_version}
+        return {
+            "tools": self.tool_names,
+            "capabilities": self.tool_catalog,
+            "commands": [
+                {"name": "Start Veridex", "description": "Launch the self-healing backend loop now."},
+                {"name": "Install Autostart", "description": "Create a startup shortcut so Veridex launches at login."},
+                {"name": "Remove Autostart", "description": "Delete the startup shortcut for Veridex."},
+            ],
+            "version": self.app_version,
+        }
 
     def workspaces_list_response(self, idx: Dict[str, Any]) -> Dict[str, Any]:
         return {
@@ -203,8 +222,8 @@ class RequestPipeline:
             "room_title": route["room_title"],
             "persona": route["persona"],
             "reason": route["reason"],
-            "auto_routed": False,
-            "requires_confirmation": True,
+            "auto_routed": True,
+            "requires_confirmation": False,
             "current_room": ctx["active_room"],
             "current_persona": ctx["active_persona"],
         }
@@ -225,7 +244,7 @@ class RequestPipeline:
                 "current_room": route["current_room"],
                 "current_persona": route["current_persona"],
             },
-            "content": [{"type": "text", "text": f"Nancy recommends {route['room_title']} ({route['persona']}). Confirm if you want to move there."}],
+            "content": [{"type": "text", "text": f"Nancy moved you to {route['room_title']} ({route['persona']})."}],
         }
 
     def artifact_retrieval_scope(self, workspace_id: str, request_text: str) -> str:
@@ -250,6 +269,7 @@ class RequestPipeline:
 
         if any(trigger in text for trigger in self.ARTIFACT_CREATE_TRIGGERS):
             return {
+                "capability": "artifact.create",
                 "tool": "office.artifact_create",
                 "arguments": {
                     "type": "note",
@@ -272,6 +292,7 @@ class RequestPipeline:
             if retrieval_scope != "workspace":
                 list_args["include_archived"] = True
             return {
+                "capability": "artifact.list",
                 "tool": "office.artifact_list",
                 "arguments": list_args,
                 "reason": "Matched a list/show keyword.",
@@ -285,6 +306,7 @@ class RequestPipeline:
                     "retrieval_scope": retrieval_scope,
                 }
                 return {
+                    "capability": "artifact.get",
                     "tool": "office.artifact_get",
                     "arguments": get_args,
                     "reason": "Matched an open/read keyword and found an artifact id.",
@@ -303,11 +325,12 @@ class RequestPipeline:
             }
 
         route = self.recommend_room(request_text)
-        if route.get("matched"):
+        if route.get("matched") and self.is_explicit_room_navigation(request_text):
             return {
                 "route_kind": "nancy",
                 "workspace_id": workspace_id,
                 "request": request_text,
+                "capability": "room.navigate",
                 "tool": "office.nancy_route",
                 "arguments": {"workspace_id": workspace_id, "request": request_text},
                 "reason": route["reason"],
@@ -328,6 +351,7 @@ class RequestPipeline:
             "route_kind": "model",
             "workspace_id": workspace_id,
             "request": request_text,
+            "capability": "ai.respond",
             "tool": "office.ai_generate",
             "arguments": {
                 "workspace_id": workspace_id,
@@ -349,6 +373,12 @@ class RequestPipeline:
             },
             "reason": "No strong department match found. Using the model route.",
         }
+
+    def is_explicit_room_navigation(self, request_text: str) -> bool:
+        text = request_text.strip().lower()
+        if not text:
+            return False
+        return any(text.startswith(prefix) for prefix in self.ROOM_NAVIGATION_PREFIXES)
 
     def mailroom_header(self, to_persona: str, dest_room_title: str, subject: str) -> str:
         return f"Memo filed to: {to_persona} ({dest_room_title})\\nSubject: {subject}\\n"

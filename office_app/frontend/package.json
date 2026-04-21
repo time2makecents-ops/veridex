@@ -4,9 +4,10 @@
   "version": "0.1.0",
   "scripts": {
     "dev": "next dev",
-    "dev:https": "next dev --experimental-https -H 0.0.0.0 -p 3078",
+    "dev:https": "node server.cjs",
     "build": "next build",
     "start": "next start",
+    "start:https": "node server.cjs",
     "lint": "next lint"
   },
   "dependencies": {

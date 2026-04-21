@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import csv
+import base64
 import json
 import sqlite3
 import uuid
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from office_app.server.archive_service import ArchiveService
@@ -16,11 +18,21 @@ from office_app.server.command_router import CommandRouter
 from office_app.server.errors import error_missing_required_field
 from office_app.server.guards import ensure_single_target
 from office_app.server.model_router import ModelRouter, ModelRoutingError
+from office_app.server.receptionist_context_service import ReceptionistContextService
 from office_app.server.memo_service import MemoService
 from office_app.server.nancy_service import NancyService
 from office_app.server.request_pipeline import RequestPipeline
+from office_app.server.handlers.ai_handlers import build_ai_handlers
+from office_app.server.handlers.artifact_handlers import build_artifact_handlers
+from office_app.server.handlers.dependencies import HandlerDeps
+from office_app.server.handlers.file_handlers import build_file_handlers
+from office_app.server.handlers.memo_handlers import build_memo_handlers
+from office_app.server.handlers.workspace_handlers import build_workspace_handlers
+from office_app.server.tool_context import ToolContext
+from office_app.server.tool_definitions import VERIDEX_TOOL_DEFINITIONS, ToolDefinition
 from office_app.server.user_service import UserService
 from office_app.server.tools_registry import register_tools
+from office_app.server.workspace_file_service import PrivateFileService, WorkspaceFileService
 from office_app.server.workspace_kernel import WorkspaceKernel, WorkspaceStore
 
 SERVER_DIR = Path(__file__).resolve().parent
@@ -46,20 +58,6 @@ WORKSPACE_TOOLS_NO_ID = {
     "office.workspace_new",
 }
 
-ARTIFACT_TOOLS_DEFAULT_TO_ACTIVE = {
-    "office.artifact_create",
-    "office.artifact_get",
-    "office.artifact_list",
-    "office.artifact_update",
-    "office.artifact_append",
-    "office.artifact_archive",
-    "office.archive_store_text",
-    "office.archive_list",
-    "office.archive_get",
-    "office.nancy_artifacts_list",
-    "office.nancy_artifact_open",
-}
-
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -77,6 +75,9 @@ kernel = WorkspaceKernel(store=store, utc_now_fn=utc_now)
 memo_service = MemoService(store=store, legacy_memos_dir=LEGACY_MEMOS_DIR, utc_now_fn=utc_now)
 archive_service = ArchiveService(workspaces_dir=WORKSPACES_DIR, utc_now_fn=utc_now)
 user_service = UserService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
+receptionist_context_service = ReceptionistContextService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
+workspace_file_service = WorkspaceFileService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
+private_file_service = PrivateFileService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
 model_router = ModelRouter.from_env()
 nancy_service = NancyService(
     kernel=kernel,
@@ -84,7 +85,43 @@ nancy_service = NancyService(
     store=store,
     utc_now_fn=utc_now,
 )
-router = CommandRouter()
+
+
+def build_tool_context(tool_name: str, args: Dict[str, Any], definition: ToolDefinition) -> ToolContext:
+    workspace_id = str(args.get("workspace_id") or "").strip()
+    session_id = str(args.get("session_id") or "").strip() or None
+    user_id: Optional[str] = None
+    if session_id:
+        try:
+            user = user_service.get_user_for_session(session_id)
+            user_id = str(user.get("user_id") or "").strip() or None
+        except HTTPException:
+            user_id = None
+
+    active_room: Optional[str] = None
+    active_persona: Optional[str] = None
+    if workspace_id:
+        try:
+            state = kernel.get_state(workspace_id)
+            active_room = str(state.get("active_room") or "").strip() or None
+            active_persona = str(state.get("active_persona") or "").strip() or None
+        except HTTPException:
+            active_room = None
+            active_persona = None
+
+    return ToolContext(
+        tool_name=tool_name,
+        capability=definition.capability,
+        workspace_id=workspace_id,
+        session_id=session_id,
+        user_id=user_id,
+        active_room=active_room,
+        active_persona=active_persona,
+        arguments=dict(args),
+    )
+
+
+router = CommandRouter(context_provider=build_tool_context)
 pipeline = RequestPipeline(
     kernel=kernel,
     navigator_control=NAVIGATOR_CONTROL,
@@ -150,9 +187,10 @@ def resolve_workspace_id(tool: str, args: Dict[str, Any]) -> str:
         return workspace_id
     if workspace_id:
         return workspace_id
-    if tool in ARTIFACT_TOOLS_DEFAULT_TO_ACTIVE:
-        return "default"
-    return "default_workspace"
+    definition = VERIDEX_TOOL_DEFINITIONS.get(tool)
+    if definition is not None and definition.requires_workspace:
+        raise HTTPException(status_code=400, detail="Workspace ID required")
+    return workspace_id
 
 
 class ToolCall(BaseModel):
@@ -175,6 +213,40 @@ class LobbyOnboardRequest(BaseModel):
 
 class LobbyEnterRequest(BaseModel):
     pin_code: str = Field(..., description="4-digit PIN code")
+
+
+class FileUploadRequest(BaseModel):
+    name: str = Field(..., description="Original file name")
+    content_text: Optional[str] = Field(default=None, description="Text content to upload")
+    content_base64: Optional[str] = Field(default=None, description="Base64-encoded file content")
+    data_url: Optional[str] = Field(default=None, description="Data URL content")
+    mime_type: Optional[str] = Field(default=None, description="Optional mime type")
+    kind: str = Field(default="generic", description="File kind")
+    scope: str = Field(default="workspace", description="File scope: room, session, public, private")
+    scope_ref: Optional[str] = Field(default=None, description="Scope reference, such as room id or session id")
+    description: Optional[str] = Field(default=None, description="Optional description")
+    workspace_id: Optional[str] = Field(default=None, description="Optional workspace id")
+    session_id: Optional[str] = Field(default=None, description="Optional session id")
+    uploaded_by_user_id: Optional[str] = Field(default=None, description="Optional uploader user id")
+
+
+class FileLookupRequest(BaseModel):
+    workspace_id: Optional[str] = Field(default=None, description="Optional workspace id")
+    session_id: Optional[str] = Field(default=None, description="Optional session id")
+    file_id: Optional[str] = Field(default=None, description="Optional file id")
+
+
+class ReceptionistContextUpdateRequest(BaseModel):
+    workspace_id: Optional[str] = Field(default=None, description="Optional workspace id")
+    session_id: Optional[str] = Field(default=None, description="Optional session id")
+    room_directory: Optional[list[dict[str, Any]]] = None
+    persona_directory: Optional[list[dict[str, Any]]] = None
+    receptionist_script: Optional[dict[str, Any]] = None
+    policy_summary: Optional[dict[str, Any]] = None
+    known_user_profile: Optional[dict[str, Any]] = None
+    session_summary_text: Optional[str] = None
+    recent_turns: Optional[list[dict[str, Any]]] = None
+    current_prompt_state: Optional[dict[str, Any]] = None
 
 
 app = FastAPI(title="Veridex Office Server", version="1.3.0")
@@ -217,6 +289,40 @@ def ensure_artifact_workspace(workspace_id: str) -> None:
         kernel.bootstrap_workspace(workspace_id)
 
 
+def _workspace_label(workspace_id: str) -> str:
+    idx = kernel.list_workspaces()
+    for row in idx.get("workspaces", []):
+        if row.get("workspace_id") == workspace_id:
+            return str(row.get("label") or workspace_id)
+    return workspace_id
+
+
+def _request_text_from_response(response: Dict[str, Any]) -> str:
+    structured = response.get("structuredContent")
+    if isinstance(structured, dict):
+        for key in ("response_text", "text", "message"):
+            value = structured.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    content = response.get("content")
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    return text
+    return ""
+
+
+def _session_user_profile(session_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not session_id:
+        return None
+    try:
+        return user_service.get_user_for_session(session_id)
+    except HTTPException:
+        return None
+
+
 def attach_request_context(response: Dict[str, Any], *, workspace_id: str, session_id: str) -> Dict[str, Any]:
     enriched = dict(response)
     structured = enriched.get("structuredContent")
@@ -235,6 +341,19 @@ def attach_request_context(response: Dict[str, Any], *, workspace_id: str, sessi
     return enriched
 
 
+def _resolve_http_workspace_id(workspace_id: Optional[str], session_id: Optional[str]) -> str:
+    workspace = str(workspace_id or "").strip()
+    session = str(session_id or "").strip()
+    if session:
+        resolved = user_service.resolve_workspace_for_session(session)
+        if not resolved:
+            raise HTTPException(status_code=401, detail="Invalid session")
+        return resolved
+    if workspace:
+        return workspace
+    raise HTTPException(status_code=400, detail="Workspace ID required")
+
+
 @app.post("/request")
 def handle_natural_language_request(
     payload: NaturalLanguageRequest,
@@ -249,41 +368,122 @@ def handle_natural_language_request(
         raise HTTPException(status_code=401, detail="Invalid session")
     request_text = str(payload.text or "").strip()
     ensure_artifact_workspace(workspace_id)
+    user_profile = _session_user_profile(session_id)
     routed = pipeline.route_user_request(workspace_id, request_text)
+
+    should_record = routed["route_kind"] in {"model", "nancy"}
+    if should_record:
+        receptionist_context_service.record_turn(
+            workspace_id=workspace_id,
+            role="user",
+            text=request_text,
+            room_id=kernel.get_state(workspace_id).get("active_room", "lobby"),
+            persona_name=kernel.get_state(workspace_id).get("active_persona", "Receptionist"),
+            user_id=str((user_profile or {}).get("user_id") or "").strip() or None,
+            session_id=session_id,
+        )
 
     if routed["route_kind"] == "artifact":
         args = dict(routed["arguments"])
         args["workspace_id"] = workspace_id
         if session_id:
             args["session_id"] = session_id
-        result = router.dispatch(routed["tool"], args)
+        result = router.dispatch_capability(
+            routed["capability"],
+            args,
+            preferred_tool=routed.get("tool"),
+        )
         if isinstance(result, dict):
             structured = result.get("structuredContent")
             if isinstance(structured, dict):
                 structured["routing"] = {
                     "route_kind": "artifact",
+                    "capability": routed["capability"],
                     "tool": routed["tool"],
                     "reason": routed["reason"],
                 }
             return attach_request_context(result, workspace_id=workspace_id, session_id=session_id)
 
+    if routed["route_kind"] == "nancy":
+        target_room = str(routed.get("room_id") or "").strip()
+        if not target_room:
+            raise HTTPException(status_code=400, detail="Room navigation target missing.")
+        result = router.dispatch_capability(
+            routed["capability"],
+            {
+                "workspace_id": workspace_id,
+                "room_id": target_room,
+                "session_id": session_id,
+            },
+            preferred_tool="office.room_set",
+        )
+        structured_result = result.get("structuredContent") if isinstance(result, dict) else None
+        receptionist_context_service.record_turn(
+            workspace_id=workspace_id,
+            role="assistant",
+            text=_request_text_from_response(result),
+            room_id=str((structured_result or {}).get("active_room") or target_room),
+            persona_name=str((structured_result or {}).get("active_persona") or ""),
+            user_id=str((user_profile or {}).get("user_id") or "").strip() or None,
+            session_id=session_id,
+        )
+        response = result
+        if isinstance(response, dict):
+            structured = response.get("structuredContent")
+            if isinstance(structured, dict):
+                structured["routing"] = {
+                    "route_kind": "nancy",
+                    "capability": routed["capability"],
+                    "tool": routed["tool"],
+                    "reason": routed["reason"],
+                    "auto_routed": True,
+                }
+        return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
+
     if routed["route_kind"] == "model":
         args = dict(routed["arguments"])
         args["workspace_id"] = workspace_id
         args["session_id"] = session_id
-        result = router.dispatch(routed["tool"], args)
+        if user_profile:
+            args["user_profile"] = user_profile
+        result = router.dispatch_capability(
+            routed["capability"],
+            args,
+            preferred_tool=routed.get("tool"),
+        )
         if isinstance(result, dict):
             structured = result.get("structuredContent")
             if isinstance(structured, dict):
                 structured["routing"] = {
                     "route_kind": "model",
+                    "capability": routed["capability"],
                     "tool": routed["tool"],
                     "reason": routed["reason"],
                 }
-        return attach_request_context(result, workspace_id=workspace_id, session_id=session_id)
+        enriched = attach_request_context(result, workspace_id=workspace_id, session_id=session_id)
+        receptionist_context_service.record_turn(
+            workspace_id=workspace_id,
+            role="assistant",
+            text=_request_text_from_response(enriched),
+            room_id=kernel.get_state(workspace_id).get("active_room", "lobby"),
+            persona_name=kernel.get_state(workspace_id).get("active_persona", "Receptionist"),
+            user_id=str((user_profile or {}).get("user_id") or "").strip() or None,
+            session_id=session_id,
+        )
+        return enriched
 
+    response = pipeline.nancy_route_response(workspace_id, request_text)
+    receptionist_context_service.record_turn(
+        workspace_id=workspace_id,
+        role="assistant",
+        text=_request_text_from_response(response),
+        room_id=kernel.get_state(workspace_id).get("active_room", "lobby"),
+        persona_name=kernel.get_state(workspace_id).get("active_persona", "Receptionist"),
+        user_id=str((user_profile or {}).get("user_id") or "").strip() or None,
+        session_id=session_id,
+    )
     return attach_request_context(
-        pipeline.nancy_route_response(workspace_id, request_text),
+        response,
         workspace_id=workspace_id,
         session_id=session_id,
     )
@@ -331,12 +531,168 @@ def lobby_enter(payload: LobbyEnterRequest) -> Dict[str, Any]:
     }
 
 
+@app.get("/receptionist/context")
+def receptionist_context(
+    workspace_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    resolved_workspace_id = _resolve_http_workspace_id(workspace_id, session_id)
+    context = receptionist_context_service.get_context(resolved_workspace_id)
+    return {
+        "structuredContent": context,
+        "content": [{"type": "text", "text": f"Loaded receptionist context for {resolved_workspace_id}."}],
+    }
+
+
+@app.post("/receptionist/context")
+def receptionist_context_update(payload: ReceptionistContextUpdateRequest) -> Dict[str, Any]:
+    resolved_workspace_id = _resolve_http_workspace_id(payload.workspace_id, payload.session_id)
+    updates = {
+        "room_directory": payload.room_directory,
+        "persona_directory": payload.persona_directory,
+        "receptionist_script": payload.receptionist_script,
+        "policy_summary": payload.policy_summary,
+        "known_user_profile": payload.known_user_profile,
+        "session_summary_text": payload.session_summary_text,
+        "recent_turns": payload.recent_turns,
+        "current_prompt_state": payload.current_prompt_state,
+    }
+    context = receptionist_context_service.update_context(resolved_workspace_id, updates)
+    return {
+        "structuredContent": context,
+        "content": [{"type": "text", "text": f"Updated receptionist context for {resolved_workspace_id}."}],
+    }
+
+
+@app.get("/files")
+def list_files(
+    workspace_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    scope: Optional[str] = None,
+    scope_ref: Optional[str] = None,
+) -> Dict[str, Any]:
+    resolved_workspace_id = _resolve_http_workspace_id(workspace_id, session_id)
+    selected_scope = str(scope or "workspace").strip().lower() or "workspace"
+    service = private_file_service if selected_scope == "private" else workspace_file_service
+    rows = service.list_files(resolved_workspace_id, scope=selected_scope if selected_scope != "workspace" else None, scope_ref=scope_ref)
+    return {
+        "structuredContent": {
+            "workspace_id": resolved_workspace_id,
+            "count": len(rows),
+            "files": rows,
+        },
+        "content": [{"type": "text", "text": f"Found {len(rows)} file(s)."}],
+    }
+
+
+@app.post("/files/upload")
+def upload_file(payload: FileUploadRequest) -> Dict[str, Any]:
+    resolved_workspace_id = _resolve_http_workspace_id(payload.workspace_id, payload.session_id)
+    scope = str(payload.scope or "workspace").strip().lower() or "workspace"
+    service = private_file_service if scope == "private" else workspace_file_service
+    record = service.upload_file(
+        workspace_id=resolved_workspace_id,
+        original_name=payload.name,
+        content_text=payload.content_text,
+        content_base64=payload.content_base64,
+        data_url=payload.data_url,
+        mime_type=payload.mime_type,
+        kind=payload.kind,
+        scope=scope,
+        scope_ref=str(payload.scope_ref or "").strip() or scope,
+        description=payload.description,
+        uploaded_by_user_id=payload.uploaded_by_user_id,
+        uploaded_by_session_id=payload.session_id,
+    )
+    return {
+        "structuredContent": record,
+        "content": [{"type": "text", "text": f"Uploaded file {record['original_name']} as {record['file_id']}."}],
+    }
+
+
+@app.get("/files/{file_id}")
+def get_file_metadata(
+    file_id: str,
+    workspace_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    scope: Optional[str] = None,
+) -> Dict[str, Any]:
+    resolved_workspace_id = _resolve_http_workspace_id(workspace_id, session_id)
+    selected_scope = str(scope or "workspace").strip().lower() or "workspace"
+    service = private_file_service if selected_scope == "private" else workspace_file_service
+    record = service.get_file(resolved_workspace_id, file_id)
+    return {
+        "structuredContent": record,
+        "content": [{"type": "text", "text": f"File {record['file_id']} - {record['original_name']}."}],
+    }
+
+
+@app.get("/files/{file_id}/download")
+def download_file(
+    file_id: str,
+    workspace_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    scope: Optional[str] = None,
+):
+    resolved_workspace_id = _resolve_http_workspace_id(workspace_id, session_id)
+    selected_scope = str(scope or "workspace").strip().lower() or "workspace"
+    service = private_file_service if selected_scope == "private" else workspace_file_service
+    record, _ = service.file_bytes(resolved_workspace_id, file_id)
+    return FileResponse(
+        path=record["storage_path"],
+        filename=record["original_name"],
+        media_type=record["mime_type"] or "application/octet-stream",
+    )
+
+
+@app.get("/private-files/{file_id}")
+def get_private_file_metadata(
+    file_id: str,
+    workspace_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    resolved_workspace_id = _resolve_http_workspace_id(workspace_id, session_id)
+    record = private_file_service.get_file(resolved_workspace_id, file_id)
+    return {
+        "structuredContent": record,
+        "content": [{"type": "text", "text": f"Private file {record['file_id']} - {record['original_name']}."}],
+    }
+
+
+@app.get("/private-files/{file_id}/download")
+def download_private_file(
+    file_id: str,
+    workspace_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+):
+    resolved_workspace_id = _resolve_http_workspace_id(workspace_id, session_id)
+    record, _ = private_file_service.file_bytes(resolved_workspace_id, file_id)
+    return FileResponse(
+        path=record["storage_path"],
+        filename=record["original_name"],
+        media_type=record["mime_type"] or "application/octet-stream",
+    )
+
+
 @app.post("/dev/reset-test-data")
 def reset_test_data() -> Dict[str, Any]:
+    import shutil
+
     with sqlite3.connect(user_service.db_path) as conn:
         conn.execute("DELETE FROM sessions")
         conn.execute("DELETE FROM users")
+        conn.execute("DELETE FROM receptionist_contexts")
+        conn.execute("DELETE FROM workspace_files")
         conn.commit()
+    private_db = RUNTIME_DIR / "private_files.db"
+    if private_db.exists():
+        private_db.unlink()
+    for path in [RUNTIME_DIR / "users", RUNTIME_DIR / "workspaces", RUNTIME_DIR / "private_files"]:
+        if path.exists():
+            shutil.rmtree(path, ignore_errors=True)
+    (RUNTIME_DIR / "users").mkdir(parents=True, exist_ok=True)
+    (RUNTIME_DIR / "workspaces").mkdir(parents=True, exist_ok=True)
+    (RUNTIME_DIR / "private_files").mkdir(parents=True, exist_ok=True)
     return {"ok": True}
 
 
@@ -375,6 +731,18 @@ def handle_office_bootstrap(args: Dict[str, Any]) -> Dict[str, Any]:
 def handle_office_state_get(args: Dict[str, Any]) -> Dict[str, Any]:
     workspace_id = args["workspace_id"]
     return pipeline.snapshot_response(workspace_id)
+
+
+def handle_commands_list(args: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "structuredContent": pipeline.tools_response(),
+        "content": [
+            {
+                "type": "text",
+                "text": "Available Veridex commands: Start Veridex, Install Watchdog, Remove Watchdog.",
+            }
+        ],
+    }
 
 
 def handle_office_room_set(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -430,6 +798,8 @@ def handle_ai_generate(args: Dict[str, Any]) -> Dict[str, Any]:
             f"You are Veridex. The active workspace is {workspace_id}. "
             f"The active room is {state.get('active_room', 'lobby')}. "
             f"The active persona is {state.get('active_persona', 'Receptionist')}. "
+            "If the user asks about uploading or downloading files or images, answer with the Veridex file workflow and do not redirect them to IT unless they explicitly ask for troubleshooting. "
+            "Never expose raw JSON, internal tool names, hidden schemas, or backend metadata in your response. "
             "Respond clearly, concisely, and stay within Veridex governance."
         )
 
@@ -440,6 +810,26 @@ def handle_ai_generate(args: Dict[str, Any]) -> Dict[str, Any]:
             "active_room": state.get("active_room", "lobby"),
             "active_persona": state.get("active_persona", "Receptionist"),
         }
+    receptionist_context = receptionist_context_service.build_model_context(
+        workspace_id=workspace_id,
+        user_profile=args.get("user_profile") if isinstance(args.get("user_profile"), dict) else None,
+        session_id=str(args.get("session_id") or "").strip() or None,
+    )
+    if isinstance(args.get("user_profile"), dict):
+        receptionist_context_service.update_context(
+            workspace_id,
+            {"known_user_profile": args.get("user_profile")},
+        )
+    context = {
+        **context,
+        "receptionist_context": receptionist_context,
+        "room_directory_text": receptionist_context.get("room_directory_text", ""),
+        "known_user_profile_text": receptionist_context.get("known_user_profile_text", ""),
+        "session_summary_text": receptionist_context.get("session_summary_text", ""),
+        "recent_turns_text": receptionist_context.get("recent_turns_text", []),
+        "prompt_state_text": receptionist_context.get("prompt_state_text", ""),
+        "behavior_rules": receptionist_context.get("behavior_rules", []),
+    }
 
     settings = args.get("settings")
     if not isinstance(settings, dict):
@@ -886,6 +1276,244 @@ def handle_nancy_workspace_briefing(args: Dict[str, Any]) -> Dict[str, Any]:
     return nancy_service.workspace_briefing_response(workspace_id)
 
 
+def _resolve_file_workspace(args: Dict[str, Any]) -> str:
+    tool = "office.file_upload"
+    workspace_id = str(args.get("workspace_id", "")).strip()
+    session_id = str(args.get("session_id", "")).strip()
+    if session_id:
+        return resolve_workspace_id(tool, {"session_id": session_id, "workspace_id": workspace_id})
+    if workspace_id:
+        return workspace_id
+    return resolve_workspace_id(tool, args)
+
+
+def handle_file_upload(args: Dict[str, Any]) -> Dict[str, Any]:
+    workspace_id = _resolve_file_workspace(args)
+    original_name = str(args.get("name") or args.get("filename") or args.get("file_name") or "").strip()
+    if not original_name:
+        raise error_missing_required_field("name")
+    scope = str(args.get("scope") or "workspace").strip().lower() or "workspace"
+    scope_ref = str(args.get("scope_ref") or "").strip()
+    service = private_file_service if scope == "private" else workspace_file_service
+    record = service.upload_file(
+        workspace_id=workspace_id,
+        original_name=original_name,
+        content_text=args.get("content_text"),
+        content_base64=args.get("content_base64"),
+        data_url=args.get("data_url"),
+        mime_type=str(args.get("mime_type") or "").strip() or None,
+        kind=str(args.get("kind") or "generic").strip() or "generic",
+        scope=scope,
+        scope_ref=scope_ref or scope,
+        description=args.get("description"),
+        uploaded_by_user_id=str(args.get("uploaded_by_user_id") or "").strip() or None,
+        uploaded_by_session_id=str(args.get("session_id") or "").strip() or None,
+    )
+    return {
+        **record,
+        "structuredContent": record,
+        "content": [{"type": "text", "text": f"Uploaded file {record['original_name']} as {record['file_id']}."}],
+    }
+
+
+def handle_file_list(args: Dict[str, Any]) -> Dict[str, Any]:
+    workspace_id = _resolve_file_workspace(args)
+    scope = str(args.get("scope") or "").strip().lower() or None
+    scope_ref = str(args.get("scope_ref") or "").strip() or None
+    service = private_file_service if scope == "private" else workspace_file_service
+    rows = service.list_files(workspace_id, scope=scope, scope_ref=scope_ref)
+    return {
+        "workspace_id": workspace_id,
+        "count": len(rows),
+        "files": rows,
+        "structuredContent": {
+            "workspace_id": workspace_id,
+            "count": len(rows),
+            "files": rows,
+        },
+        "content": [{"type": "text", "text": f"Found {len(rows)} file(s)."}],
+    }
+
+
+def handle_file_get(args: Dict[str, Any]) -> Dict[str, Any]:
+    workspace_id = _resolve_file_workspace(args)
+    file_id = str(args.get("file_id") or "").strip()
+    if not file_id:
+        raise error_missing_required_field("file_id")
+    scope = str(args.get("scope") or "").strip().lower() or "workspace"
+    service = private_file_service if scope == "private" else workspace_file_service
+    record = service.get_file(workspace_id, file_id)
+    return {
+        **record,
+        "structuredContent": record,
+        "content": [{"type": "text", "text": f"File {record['file_id']} - {record['original_name']}."}],
+    }
+
+
+def handle_file_download_response(workspace_id: str, file_id: str, scope: str = "workspace"):
+    service = private_file_service if scope == "private" else workspace_file_service
+    record = service.get_file(workspace_id, file_id)
+    return FileResponse(
+        path=record["storage_path"],
+        filename=record["original_name"],
+        media_type=record["mime_type"] or "application/octet-stream",
+    )
+
+
+def handle_receptionist_context_get(args: Dict[str, Any]) -> Dict[str, Any]:
+    workspace_id = resolve_workspace_id("office.receptionist_context_get", args)
+    context = receptionist_context_service.get_context(workspace_id)
+    return {
+        "structuredContent": context,
+        "content": [{"type": "text", "text": f"Loaded receptionist context for {workspace_id}."}],
+    }
+
+
+def handle_private_file_upload(args: Dict[str, Any]) -> Dict[str, Any]:
+    args = dict(args)
+    args["scope"] = "private"
+    return handle_file_upload(args)
+
+
+def handle_private_file_list(args: Dict[str, Any]) -> Dict[str, Any]:
+    args = dict(args)
+    args["scope"] = "private"
+    return handle_file_list(args)
+
+
+def handle_private_file_get(args: Dict[str, Any]) -> Dict[str, Any]:
+    args = dict(args)
+    args["scope"] = "private"
+    return handle_file_get(args)
+
+
+def handle_receptionist_context_update(args: Dict[str, Any]) -> Dict[str, Any]:
+    workspace_id = resolve_workspace_id("office.receptionist_context_update", args)
+    updates = {
+        "room_directory": args.get("room_directory"),
+        "persona_directory": args.get("persona_directory"),
+        "receptionist_script": args.get("receptionist_script"),
+        "policy_summary": args.get("policy_summary"),
+        "known_user_profile": args.get("known_user_profile"),
+        "session_summary_text": args.get("session_summary_text"),
+        "recent_turns": args.get("recent_turns"),
+        "current_prompt_state": args.get("current_prompt_state"),
+    }
+    context = receptionist_context_service.update_context(workspace_id, updates)
+    return {
+        "structuredContent": context,
+        "content": [{"type": "text", "text": f"Updated receptionist context for {workspace_id}."}],
+    }
+
+
+def refresh_handler_bindings() -> None:
+    global handle_workspaces_list
+    global handle_workspace_new
+    global handle_office_bootstrap
+    global handle_office_state_get
+    global handle_commands_list
+    global handle_office_room_set
+    global handle_office_nancy_route
+    global handle_mailroom_dispatch
+    global handle_memos_list
+    global handle_memo_get
+    global handle_artifact_create
+    global handle_artifact_get
+    global handle_artifact_list
+    global handle_artifact_update
+    global handle_artifact_append
+    global handle_artifact_archive
+    global handle_archive_store_text
+    global handle_archive_list
+    global handle_archive_get
+    global handle_nancy_artifacts_list
+    global handle_nancy_artifact_open
+    global handle_nancy_workspace_briefing
+    global handle_file_upload
+    global handle_file_list
+    global handle_file_get
+    global handle_file_download_response
+    global handle_private_file_upload
+    global handle_private_file_list
+    global handle_private_file_get
+    global handle_receptionist_context_get
+    global handle_receptionist_context_update
+    global handle_ai_generate
+    global handle_search_web
+    global handle_search_reviews
+    global handle_search_places
+    global handle_ocr_extract
+
+    handler_deps = HandlerDeps(
+        kernel=kernel,
+        store=store,
+        pipeline=pipeline,
+        archive_service=archive_service,
+        memo_service=memo_service,
+        nancy_service=nancy_service,
+        receptionist_context_service=receptionist_context_service,
+        workspace_file_service=workspace_file_service,
+        private_file_service=private_file_service,
+        model_router=model_router,
+        user_service=user_service,
+        utc_now=utc_now,
+        stable_state_sha=stable_state_sha,
+        append_incident=append_incident,
+        error_missing_required_field=error_missing_required_field,
+        resolve_workspace_id=resolve_workspace_id,
+    )
+
+    workspace_handlers = build_workspace_handlers(handler_deps)
+    memo_handlers = build_memo_handlers(handler_deps)
+    artifact_handlers = build_artifact_handlers(handler_deps)
+    file_handlers = build_file_handlers(handler_deps)
+    ai_handlers = build_ai_handlers(handler_deps)
+
+    handle_workspaces_list = workspace_handlers["office.workspaces_list"]
+    handle_workspace_new = workspace_handlers["office.workspace_new"]
+    handle_office_bootstrap = workspace_handlers["office.bootstrap"]
+    handle_office_state_get = workspace_handlers["office.state_get"]
+    handle_commands_list = workspace_handlers["office.commands_list"]
+    handle_office_room_set = workspace_handlers["office.room_set"]
+    handle_office_nancy_route = workspace_handlers["office.nancy_route"]
+
+    handle_mailroom_dispatch = memo_handlers["mailroom.dispatch"]
+    handle_memos_list = memo_handlers["office.memos_list"]
+    handle_memo_get = memo_handlers["office.memo_get"]
+
+    handle_artifact_create = artifact_handlers["office.artifact_create"]
+    handle_artifact_get = artifact_handlers["office.artifact_get"]
+    handle_artifact_list = artifact_handlers["office.artifact_list"]
+    handle_artifact_update = artifact_handlers["office.artifact_update"]
+    handle_artifact_append = artifact_handlers["office.artifact_append"]
+    handle_artifact_archive = artifact_handlers["office.artifact_archive"]
+    handle_archive_store_text = artifact_handlers["office.archive_store_text"]
+    handle_archive_list = artifact_handlers["office.archive_list"]
+    handle_archive_get = artifact_handlers["office.archive_get"]
+    handle_nancy_artifacts_list = artifact_handlers["office.nancy_artifacts_list"]
+    handle_nancy_artifact_open = artifact_handlers["office.nancy_artifact_open"]
+    handle_nancy_workspace_briefing = artifact_handlers["office.nancy_workspace_briefing"]
+
+    handle_file_upload = file_handlers["office.file_upload"]
+    handle_file_list = file_handlers["office.file_list"]
+    handle_file_get = file_handlers["office.file_get"]
+    handle_file_download_response = file_handlers["__file_download_response__"]
+    handle_private_file_upload = file_handlers["office.private_file_upload"]
+    handle_private_file_list = file_handlers["office.private_file_list"]
+    handle_private_file_get = file_handlers["office.private_file_get"]
+    handle_receptionist_context_get = file_handlers["office.receptionist_context_get"]
+    handle_receptionist_context_update = file_handlers["office.receptionist_context_update"]
+
+    handle_ai_generate = ai_handlers["office.ai_generate"]
+    handle_search_web = ai_handlers["office.search_web"]
+    handle_search_reviews = ai_handlers["office.search_reviews"]
+    handle_search_places = ai_handlers["office.search_places"]
+    handle_ocr_extract = ai_handlers["office.ocr_extract"]
+
+
+refresh_handler_bindings()
+
+
 register_tools(
     router,
     {
@@ -893,9 +1521,14 @@ register_tools(
         "office.workspace_new": handle_workspace_new,
         "office.bootstrap": handle_office_bootstrap,
         "office.state_get": handle_office_state_get,
+        "office.commands_list": handle_commands_list,
         "office.room_set": handle_office_room_set,
         "office.nancy_route": handle_office_nancy_route,
         "office.ai_generate": handle_ai_generate,
+        "office.search_web": handle_search_web,
+        "office.search_reviews": handle_search_reviews,
+        "office.search_places": handle_search_places,
+        "office.ocr_extract": handle_ocr_extract,
         "mailroom.dispatch": handle_mailroom_dispatch,
         "office.artifact_create": handle_artifact_create,
         "office.artifact_get": handle_artifact_get,
@@ -911,7 +1544,26 @@ register_tools(
         "office.nancy_artifacts_list": handle_nancy_artifacts_list,
         "office.nancy_artifact_open": handle_nancy_artifact_open,
         "office.nancy_workspace_briefing": handle_nancy_workspace_briefing,
+        "office.receptionist_context_get": handle_receptionist_context_get,
+        "office.receptionist_context_update": handle_receptionist_context_update,
+        "office.file_upload": handle_file_upload,
+        "office.file_list": handle_file_list,
+        "office.file_get": handle_file_get,
+        "office.file_download": handle_file_get,
+        "office.private_file_upload": handle_private_file_upload,
+        "office.private_file_list": handle_private_file_list,
+        "office.private_file_get": handle_private_file_get,
     },
+    definitions=VERIDEX_TOOL_DEFINITIONS,
 )
 
 pipeline.tool_names = router.tool_names()
+pipeline.tool_catalog = [
+    {
+        "tool_name": definition.tool_name,
+        "capability": definition.capability,
+        "visibility": definition.visibility,
+        "description": definition.description,
+    }
+    for definition in router.definitions()
+]

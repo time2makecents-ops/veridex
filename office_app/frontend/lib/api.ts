@@ -32,14 +32,49 @@ export type ToolResponse = {
   [key: string]: unknown;
 };
 
+export type FileRecord = {
+  file_id: string;
+  workspace_id: string;
+  scope?: string;
+  scope_ref?: string;
+  original_name: string;
+  mime_type?: string;
+  kind?: string;
+  description?: string;
+  download_url?: string;
+  created_at?: string;
+  updated_at?: string;
+  byte_size?: number;
+  sha256?: string;
+  storage_path?: string;
+  [key: string]: unknown;
+};
+
 function backendBaseUrl(): string {
   return process.env.NEXT_PUBLIC_VERIDEX_API_BASE_URL ?? "";
 }
 
 async function readResponseError(response: Response): Promise<string> {
   try {
-    const payload = (await response.json()) as { detail?: string; message?: string };
-    return payload.detail || payload.message || `Request failed with ${response.status}`;
+    const payload = (await response.json()) as { detail?: unknown; message?: unknown };
+    if (typeof payload.detail === "string" && payload.detail.trim()) {
+      return payload.detail;
+    }
+    if (payload.detail && typeof payload.detail === "object") {
+      const detail = payload.detail as Record<string, unknown>;
+      const detailMessage = detail.message;
+      if (typeof detailMessage === "string" && detailMessage.trim()) {
+        return detailMessage;
+      }
+      return JSON.stringify(detail);
+    }
+    if (typeof payload.message === "string" && payload.message.trim()) {
+      return payload.message;
+    }
+    if (payload.message && typeof payload.message === "object") {
+      return JSON.stringify(payload.message);
+    }
+    return `Request failed with ${response.status}`;
   } catch {
     return `Request failed with ${response.status}`;
   }
@@ -77,6 +112,22 @@ async function postJson<T>(path: string, body: unknown, headers?: HeadersInit): 
     throw new Error(await readResponseError(response));
   }
 
+  return (await response.json()) as T;
+}
+
+async function authorizedGetJson<T>(path: string): Promise<T> {
+  const sessionId = typeof window === "undefined" ? "" : window.localStorage.getItem("veridex.session_id") ?? "";
+  if (!sessionId) {
+    throw new Error("Session ID required");
+  }
+  const url = new URL(path, window.location.origin);
+  url.searchParams.set("session_id", sessionId);
+  const response = await fetchJsonWithTimeout(url.pathname + url.search, {
+    method: "GET",
+  });
+  if (!response.ok) {
+    throw new Error(await readResponseError(response));
+  }
   return (await response.json()) as T;
 }
 
@@ -140,6 +191,56 @@ export async function callTool(tool: string, arguments_: Record<string, unknown>
   }
 
   return (await response.json()) as ToolResponse;
+}
+
+export async function uploadFile(payload: {
+  name: string;
+  content_text?: string;
+  content_base64?: string;
+  data_url?: string;
+  mime_type?: string;
+  kind?: string;
+  scope?: string;
+  scope_ref?: string;
+  description?: string;
+}): Promise<FileRecord> {
+  const sessionId = typeof window === "undefined" ? "" : window.localStorage.getItem("veridex.session_id") ?? "";
+  if (!sessionId) {
+    throw new Error("Session ID required");
+  }
+  return postJson<FileRecord>("/files/upload", {
+    ...payload,
+    session_id: sessionId,
+  });
+}
+
+export async function listFiles(scope?: string, scope_ref?: string): Promise<{ workspace_id: string; count: number; files: FileRecord[] }> {
+  const query = new URLSearchParams();
+  if (scope) {
+    query.set("scope", scope);
+  }
+  if (scope_ref) {
+    query.set("scope_ref", scope_ref);
+  }
+  return authorizedGetJson<{ workspace_id: string; count: number; files: FileRecord[] }>(`/files${query.toString() ? `?${query.toString()}` : ""}`);
+}
+
+export function fileDownloadUrl(file: FileRecord): string {
+  const sessionId = typeof window === "undefined" ? "" : window.localStorage.getItem("veridex.session_id") ?? "";
+  const url = new URL(String(file.download_url || `/files/${file.file_id}/download`), window.location.origin);
+  if (sessionId) {
+    url.searchParams.set("session_id", sessionId);
+  }
+  return url.pathname + url.search;
+}
+
+export async function readFileText(file: FileRecord): Promise<string> {
+  const url = fileDownloadUrl(file);
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(await readResponseError(response));
+  }
+  return await response.text();
 }
 
 export function requestText(response: RequestResponse): string {
