@@ -174,6 +174,14 @@ button {
   padding: 0;
 }
 
+.lobby-page-plain {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 16px 12px 28px;
+  gap: 12px;
+  background: linear-gradient(180deg, rgba(20, 33, 61, 0.04), transparent 32%), var(--bg);
+}
+
 .lobby-page .card:last-child,
 .lobby-page .composer {
   margin-bottom: 8px;
@@ -212,6 +220,56 @@ button {
   max-width: none;
   flex: 0 0 auto;
   margin: 0;
+}
+
+.lobby-page-header,
+.lobby-chat-card,
+.lobby-config-shell {
+  border-radius: 22px;
+}
+
+.lobby-chat-card,
+.lobby-config-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lobby-chat-window {
+  min-height: 42vh;
+  max-height: 48vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-right: 4px;
+}
+
+.chat-role {
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.chat-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.lobby-composer {
+  align-items: stretch;
+}
+
+.lobby-composer textarea {
+  min-height: 84px;
+  resize: vertical;
+}
+
+.lobby-composer button {
+  align-self: flex-end;
+  min-width: 120px;
 }
 
 .lobby-terminal-image-wrap {
@@ -435,7 +493,27 @@ button {
   background: #04070b;
   box-shadow:
     inset 0 0 0 1px rgba(141, 253, 167, 0.12),
-    0 0 24px rgba(62, 196, 255, 0.06);
+  0 0 24px rgba(62, 196, 255, 0.06);
+}
+
+.calibration-preview-blank {
+  min-height: 56vh;
+  background:
+    linear-gradient(rgba(141, 253, 167, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(141, 253, 167, 0.06) 1px, transparent 1px),
+    linear-gradient(180deg, #07111d, #02060b);
+  background-size: 26px 26px, 26px 26px, 100% 100%;
+}
+
+.calibration-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.35;
+  background:
+    linear-gradient(rgba(141, 253, 167, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(141, 253, 167, 0.12) 1px, transparent 1px);
+  background-size: 18px 18px, 18px 18px;
 }
 
 .calibration-preview-image {
@@ -497,6 +575,11 @@ button {
   border-radius: 14px;
   background: rgba(0, 0, 0, 0.44);
   backdrop-filter: blur(6px);
+}
+
+.calibration-overlay-copy .terminal-label,
+.calibration-overlay-badge {
+  color: #d9ffe2;
 }
 
 .calibration-overlay-badge {

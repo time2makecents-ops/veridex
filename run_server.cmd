@@ -1,3 +1,3 @@
 @echo off
 echo Starting Office App Server...
-uvicorn office_app.server.app:app --port 8000
+uvicorn office_app.server.app:app --port 8078

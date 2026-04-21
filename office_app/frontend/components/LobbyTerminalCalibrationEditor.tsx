@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -252,8 +251,7 @@ export default function LobbyTerminalCalibrationEditor() {
         <div className="terminal-label">Lobby Terminal Calibration</div>
         <h1 className="title">Overlay editor</h1>
         <p className="muted">
-          Drag the layer box, resize it with the corner handle, and fine-tune the terminal without editing component
-          code.
+          Move and resize each layer directly on a blank work surface. No graphics, no frame art, just layout.
         </p>
       </section>
 
@@ -355,77 +353,12 @@ export default function LobbyTerminalCalibrationEditor() {
             </select>
           </label>
         </div>
-        <div className="calibration-field-grid calibration-top-gap">
-          <label>
-            <span>Fill viewport</span>
-            <select
-              value={draft.mobile.fillViewport ? "yes" : "no"}
-              onChange={(event) =>
-                updateGeneral({
-                  mobile: {
-                    ...draft.mobile,
-                    fillViewport: event.target.value === "yes",
-                  },
-                })
-              }
-            >
-              <option value="yes">yes</option>
-              <option value="no">no</option>
-            </select>
-          </label>
-          <label>
-            <span>Lock scroll</span>
-            <select
-              value={draft.mobile.lockScroll ? "yes" : "no"}
-              onChange={(event) =>
-                updateGeneral({
-                  mobile: {
-                    ...draft.mobile,
-                    lockScroll: event.target.value === "yes",
-                  },
-                })
-              }
-            >
-              <option value="yes">yes</option>
-              <option value="no">no</option>
-            </select>
-          </label>
-          <label>
-            <span>Scale mode</span>
-            <select
-              value={draft.mobile.scaleMode}
-              onChange={(event) =>
-                updateGeneral({
-                  mobile: {
-                    ...draft.mobile,
-                    scaleMode: event.target.value as LobbyTerminalConfig["mobile"]["scaleMode"],
-                  },
-                })
-              }
-            >
-              <option value="cover">cover</option>
-              <option value="contain">contain</option>
-            </select>
-          </label>
-        </div>
       </section>
 
       <section className="calibration-workbench">
         <div className="card calibration-preview-card">
-          <div
-            ref={previewRef}
-            className="calibration-preview"
-            style={{ aspectRatio: `${draft.aspectRatio.width} / ${draft.aspectRatio.height}` }}
-          >
-            <Image
-              src={draft.frameAsset}
-              alt={draft.name}
-              fill
-              priority
-              sizes="100vw"
-              className="calibration-preview-image"
-            />
-
+          <div ref={previewRef} className="calibration-preview calibration-preview-blank">
+            <div className="calibration-grid" />
             {LOBBY_TERMINAL_REGION_NAMES.map((name) => {
               const region = draft.regions[name];
               const active = selectedRegion === name;
@@ -435,9 +368,7 @@ export default function LobbyTerminalCalibrationEditor() {
               return (
                 <div
                   key={name}
-                  className={`${lobbyTerminalRegionClass(name)} calibration-region-box ${
-                    active ? "is-selected" : ""
-                  }`}
+                  className={`${lobbyTerminalRegionClass(name)} calibration-region-box ${active ? "is-selected" : ""}`}
                   style={{
                     position: "absolute",
                     top: region.top,
@@ -467,7 +398,6 @@ export default function LobbyTerminalCalibrationEditor() {
                 </div>
               );
             })}
-
             <div className="calibration-overlay-copy">
               <div className="terminal-label">Mode preview</div>
               <div className="calibration-overlay-badge">{modeLabel(previewMode)}</div>
@@ -579,25 +509,29 @@ export default function LobbyTerminalCalibrationEditor() {
                   </select>
                 </label>
               </div>
-              <div className="calibration-visibility">
-                {(["text", "pin", "voice", "none"] as LobbyTerminalMode[]).map((mode) => (
-                  <label key={mode} className="calibration-toggle">
-                    <input
-                      type="checkbox"
-                      checked={selected.visible[mode]}
-                      onChange={(event) =>
-                        updateRegion(selectedRegion, {
-                          visible: {
-                            ...selected.visible,
-                            [mode]: event.target.checked,
-                          },
-                        })
-                      }
-                    />
-                    <span>{modeLabel(mode)}</span>
-                  </label>
-                ))}
-              </div>
+            </div>
+          </section>
+
+          <section className="card calibration-panel">
+            <div className="terminal-panel-title">Mode visibility</div>
+            <div className="calibration-visibility">
+              {(["text", "pin", "voice", "none"] as LobbyTerminalMode[]).map((mode) => (
+                <label key={mode} className="calibration-toggle">
+                  <input
+                    type="checkbox"
+                    checked={selected.visible[mode]}
+                    onChange={(event) =>
+                      updateRegion(selectedRegion, {
+                        visible: {
+                          ...selected.visible,
+                          [mode]: event.target.checked,
+                        },
+                      })
+                    }
+                  />
+                  <span>{modeLabel(mode)}</span>
+                </label>
+              ))}
             </div>
           </section>
 

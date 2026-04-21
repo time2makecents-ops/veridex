@@ -461,6 +461,8 @@ def handle_ai_generate(args: Dict[str, Any]) -> Dict[str, Any]:
             detail={
                 "message": str(exc),
                 "attempts": exc.attempts,
+                "workspace_id": workspace_id,
+                "task_type": task_type,
             },
         ) from exc
 

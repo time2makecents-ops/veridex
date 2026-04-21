@@ -45,8 +45,26 @@ async function readResponseError(response: Response): Promise<string> {
   }
 }
 
+async function fetchJsonWithTimeout(path: string, init: RequestInit, timeoutMs = 30000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(path, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 async function postJson<T>(path: string, body: unknown, headers?: HeadersInit): Promise<T> {
-  const response = await fetch(`${backendBaseUrl()}${path}`, {
+  const response = await fetchJsonWithTimeout(path, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -80,7 +98,7 @@ export async function request(text: string): Promise<RequestResponse> {
   if (!sessionId) {
     throw new Error("Session ID required");
   }
-  const response = await fetch(`${backendBaseUrl()}/request`, {
+  const response = await fetchJsonWithTimeout("/request", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -102,7 +120,7 @@ export async function callTool(tool: string, arguments_: Record<string, unknown>
     throw new Error("Session ID required");
   }
 
-  const response = await fetch(`${backendBaseUrl()}/call`, {
+  const response = await fetchJsonWithTimeout("/call", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

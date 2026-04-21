@@ -1,5 +1,5 @@
-import LobbyTerminalCalibrationEditor from "@/components/LobbyTerminalCalibrationEditor";
+import { redirect } from "next/navigation";
 
 export default function LobbyTerminalCalibrationPage() {
-  return <LobbyTerminalCalibrationEditor />;
+  redirect("/chat");
 }
