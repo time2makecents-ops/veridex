@@ -51,7 +51,9 @@ class UserServiceTests(unittest.TestCase):
             self.assertTrue(profile_path.exists())
             profile = json.loads(profile_path.read_text(encoding="utf-8"))
             self.assertEqual(profile["user_id"], user["user_id"])
+            self.assertEqual(profile["pin_code"], "2468")
             self.assertFalse(profile["has_face_photo"])
+            self.assertEqual((user_folders[0] / "pin_code.txt").read_text(encoding="utf-8").strip(), "2468")
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 
@@ -83,8 +85,10 @@ class UserServiceTests(unittest.TestCase):
             user_folder = user_folders[0]
             profile = json.loads((user_folder / "profile.json").read_text(encoding="utf-8"))
             self.assertEqual(profile["user_id"], result["user"]["user_id"])
+            self.assertEqual(profile["pin_code"], "1358")
             self.assertTrue(profile["has_face_photo"])
             self.assertEqual(profile["face_photo_file"], "face_photo.png")
+            self.assertEqual((user_folder / "pin_code.txt").read_text(encoding="utf-8").strip(), "1358")
             self.assertTrue((user_folder / "face_photo.png").exists())
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)

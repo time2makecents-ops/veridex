@@ -118,6 +118,7 @@ class UserService:
             "user_id": record.get("user_id"),
             "name": record.get("name"),
             "display_name": record.get("display_name"),
+            "pin_code": record.get("pin_code"),
             "onboarding_complete": bool(record.get("onboarding_complete")),
             "default_workspace_id": record.get("default_workspace_id"),
             "last_active_workspace_id": record.get("last_active_workspace_id"),
@@ -130,6 +131,9 @@ class UserService:
             json.dumps(profile, indent=2, sort_keys=True),
             encoding="utf-8",
         )
+        pin_code = str(record.get("pin_code") or "").strip()
+        if pin_code:
+            (folder / "pin_code.txt").write_text(f"{pin_code}\n", encoding="utf-8")
 
     def _ensure_workspace(self, workspace_id: str, label: str) -> Dict[str, Any]:
         try:

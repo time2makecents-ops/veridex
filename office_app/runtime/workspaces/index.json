@@ -167,6 +167,83 @@
       "created_utc": "2026-04-18T02:00:53.963019Z",
       "last_seen_utc": "2026-04-18T02:00:53.963055Z",
       "last_room": "lobby"
+    },
+    {
+      "workspace_id": "ws_fcb0de95",
+      "label": "JR",
+      "created_utc": "2026-04-18T03:01:57.096845Z",
+      "last_seen_utc": "2026-04-18T03:01:57.096871Z",
+      "last_room": "lobby"
+    },
+    {
+      "workspace_id": "ws_fb45ea14",
+      "label": "Mr. Willis",
+      "created_utc": "2026-04-18T13:49:31.313299Z",
+      "last_seen_utc": "2026-04-18T13:49:31.313330Z",
+      "last_room": "lobby"
+    },
+    {
+      "workspace_id": "ws_e536bd05",
+      "label": "Sir",
+      "created_utc": "2026-04-18T18:47:44.202016Z",
+      "last_seen_utc": "2026-04-18T18:47:44.202049Z",
+      "last_room": "lobby"
+    },
+    {
+      "workspace_id": "ws_dcb1ea9e",
+      "label": "lucky",
+      "created_utc": "2026-04-18T19:09:49.076468Z",
+      "last_seen_utc": "2026-04-18T19:09:49.076501Z",
+      "last_room": "lobby"
+    },
+    {
+      "workspace_id": "ws_5a7b324a",
+      "label": "nam",
+      "created_utc": "2026-04-18T19:23:09.775607Z",
+      "last_seen_utc": "2026-04-18T19:23:09.775640Z",
+      "last_room": "lobby"
+    },
+    {
+      "workspace_id": "ws_7bf0473b",
+      "label": "corky",
+      "created_utc": "2026-04-18T19:53:56.440602Z",
+      "last_seen_utc": "2026-04-18T19:53:56.440635Z",
+      "last_room": "lobby"
+    },
+    {
+      "workspace_id": "ws_2c8c6bb5",
+      "label": "Tram",
+      "created_utc": "2026-04-18T20:07:46.996663Z",
+      "last_seen_utc": "2026-04-18T20:07:46.996695Z",
+      "last_room": "lobby"
+    },
+    {
+      "workspace_id": "ws_fe227abf",
+      "label": "jack",
+      "created_utc": "2026-04-18T20:08:54.616180Z",
+      "last_seen_utc": "2026-04-18T20:08:54.616209Z",
+      "last_room": "lobby"
+    },
+    {
+      "workspace_id": "ws_51d079d3",
+      "label": "pimp",
+      "created_utc": "2026-04-18T23:22:31.192660Z",
+      "last_seen_utc": "2026-04-18T23:35:15.881102Z",
+      "last_room": "rnd_room"
+    },
+    {
+      "workspace_id": "ws_92254cc0",
+      "label": "Dale",
+      "created_utc": "2026-04-18T23:55:24.809772Z",
+      "last_seen_utc": "2026-04-18T23:56:24.192364Z",
+      "last_room": "break_room"
+    },
+    {
+      "workspace_id": "ws_ba054d64",
+      "label": "The Tank",
+      "created_utc": "2026-04-19T16:36:43.708353Z",
+      "last_seen_utc": "2026-04-19T16:36:43.708398Z",
+      "last_room": "lobby"
     }
   ]
 }
