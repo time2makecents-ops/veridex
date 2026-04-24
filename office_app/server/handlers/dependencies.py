@@ -16,6 +16,7 @@ class HandlerDeps:
     workspace_file_service: Any
     private_file_service: Any
     search_service: Any
+    ocr_service: Any
     model_router: Any
     user_service: Any
     utc_now: Callable[[], str]

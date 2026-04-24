@@ -114,6 +114,27 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "search.web")
         self.assertEqual(routed["tool"], "office.search_web")
 
+    def test_ocr_request_routes_to_document_ocr(self) -> None:
+        routed = self.pipeline.route_user_request("default", "extract text from file_abc123")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "document.ocr")
+        self.assertEqual(routed["tool"], "office.ocr_extract")
+        self.assertEqual(routed["arguments"]["file_id"], "file_abc123")
+
+    def test_ocr_request_routes_to_document_ocr_by_filename(self) -> None:
+        routed = self.pipeline.route_user_request("default", "extract text from JW_Cover.rtf")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "document.ocr")
+        self.assertEqual(routed["tool"], "office.ocr_extract")
+        self.assertEqual(routed["arguments"]["file_name"], "JW_Cover.rtf")
+
+    def test_ocr_request_routes_from_show_me_followup(self) -> None:
+        routed = self.pipeline.route_user_request("default", "show me the extracted text from JW_Cover.rtf")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "document.ocr")
+        self.assertEqual(routed["tool"], "office.ocr_extract")
+        self.assertEqual(routed["arguments"]["file_name"], "JW_Cover.rtf")
+
     def test_non_navigation_break_phrase_does_not_switch_rooms(self) -> None:
         routed = self.pipeline.route_user_request("default", "did i break the thread?")
         self.assertEqual(routed["route_kind"], "model")

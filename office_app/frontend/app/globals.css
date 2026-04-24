@@ -401,6 +401,13 @@ button {
 
 .load-item {
   display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.load-item-main {
+  flex: 1;
+  display: flex;
   flex-direction: column;
   gap: 4px;
   width: 100%;
@@ -420,6 +427,11 @@ button {
   color: var(--muted);
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.load-download-button {
+  flex: 0 0 auto;
+  min-width: 96px;
 }
 
 .hidden-file-input {

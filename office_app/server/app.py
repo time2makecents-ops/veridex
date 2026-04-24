@@ -21,6 +21,7 @@ from office_app.server.model_router import ModelRouter, ModelRoutingError
 from office_app.server.receptionist_context_service import ReceptionistContextService
 from office_app.server.memo_service import MemoService
 from office_app.server.nancy_service import NancyService
+from office_app.server.ocr_service import OcrService
 from office_app.server.request_pipeline import RequestPipeline
 from office_app.server.search_service import SearchService
 from office_app.server.handlers.ai_handlers import build_ai_handlers
@@ -80,6 +81,7 @@ receptionist_context_service = ReceptionistContextService(kernel=kernel, runtime
 workspace_file_service = WorkspaceFileService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
 private_file_service = PrivateFileService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
 search_service = SearchService()
+ocr_service = OcrService()
 model_router = ModelRouter.from_env()
 nancy_service = NancyService(
     kernel=kernel,
@@ -1529,6 +1531,7 @@ def refresh_handler_bindings() -> None:
         workspace_file_service=workspace_file_service,
         private_file_service=private_file_service,
         search_service=search_service,
+        ocr_service=ocr_service,
         model_router=model_router,
         user_service=user_service,
         utc_now=utc_now,

@@ -1,16 +1,80 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 
 from office_app.server.model_router import ModelRoutingError
+from office_app.server.ocr_service import OcrServiceError
 from office_app.server.search_service import SearchServiceError
 
 from .dependencies import HandlerDeps
 
 
 def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
+    def _resolve_ocr_file_record(
+        *,
+        workspace_id: str,
+        file_id: str,
+        file_name: str,
+        scope: str,
+        session_id: Optional[str],
+    ) -> Tuple[Dict[str, Any], bytes]:
+        if file_id:
+            service = deps.private_file_service if scope == "private" else deps.workspace_file_service
+            return service.file_bytes(workspace_id, file_id)
+
+        normalized_name = file_name.strip().lower()
+        if not normalized_name:
+            raise deps.error_missing_required_field("file_id")
+
+        state = deps.kernel.get_state(workspace_id)
+        active_room = str(state.get("active_room") or "").strip()
+
+        def _list_scope(service: Any, scope_name: Optional[str], scope_ref: Optional[str]) -> List[Dict[str, Any]]:
+            if scope_name == "private" and not scope_ref:
+                rows = service.store.list_files(workspace_id)
+                return [row for row in rows if str(row.get("scope") or "").strip().lower() == "private"]
+            return service.list_files(workspace_id, scope=scope_name, scope_ref=scope_ref)
+
+        search_plan: List[Tuple[Any, Optional[str], Optional[str]]] = []
+        explicit_scope = scope if scope and scope != "workspace" else ""
+        if explicit_scope:
+            if explicit_scope == "room":
+                search_plan.append((deps.workspace_file_service, "room", active_room or None))
+            elif explicit_scope == "session":
+                search_plan.append((deps.workspace_file_service, "session", session_id or None))
+            elif explicit_scope == "public":
+                search_plan.append((deps.workspace_file_service, "public", "public"))
+            elif explicit_scope == "private":
+                search_plan.append((deps.private_file_service, "private", None))
+            else:
+                search_plan.append((deps.workspace_file_service, explicit_scope, None))
+        else:
+            if active_room:
+                search_plan.append((deps.workspace_file_service, "room", active_room))
+            if session_id:
+                search_plan.append((deps.workspace_file_service, "session", session_id))
+            search_plan.extend(
+                [
+                    (deps.workspace_file_service, "public", "public"),
+                    (deps.workspace_file_service, "workspace", None),
+                    (deps.private_file_service, "private", None),
+                ]
+            )
+
+        seen_specs = set()
+        for service, scope_name, scope_ref in search_plan:
+            spec = (id(service), scope_name or "", scope_ref or "")
+            if spec in seen_specs:
+                continue
+            seen_specs.add(spec)
+            rows = _list_scope(service, scope_name, scope_ref)
+            for row in rows:
+                if str(row.get("original_name") or "").strip().lower() == normalized_name:
+                    return service.file_bytes(workspace_id, str(row["file_id"]))
+        raise FileNotFoundError(file_name)
+
     def handle_ai_generate(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = str(args.get("workspace_id", "")).strip()
         if not workspace_id:
@@ -176,13 +240,40 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         }
 
     def handle_ocr_extract(args: Dict[str, Any]) -> Dict[str, Any]:
-        raise HTTPException(
-            status_code=501,
-            detail={
-                "message": "office.ocr_extract is defined in Veridex but not configured yet.",
-                "capability": "document.ocr",
+        workspace_id = _workspace_id(args, "office.ocr_extract")
+        file_id = str(args.get("file_id") or "").strip()
+        file_name = str(args.get("file_name") or args.get("name") or "").strip()
+        if not file_id and not file_name:
+            raise deps.error_missing_required_field("file_id")
+        scope = str(args.get("scope") or "workspace").strip().lower() or "workspace"
+        session_id = str(args.get("session_id") or "").strip() or None
+        try:
+            record, content_bytes = _resolve_ocr_file_record(
+                workspace_id=workspace_id,
+                file_id=file_id,
+                file_name=file_name,
+                scope=scope,
+                session_id=session_id,
+            )
+            result = deps.ocr_service.extract_text(
+                file_name=str(record.get("original_name") or file_name or file_id),
+                mime_type=str(record.get("mime_type") or "").strip() or None,
+                content_bytes=content_bytes,
+            )
+        except FileNotFoundError as exc:
+            missing_target = file_id or file_name
+            raise HTTPException(status_code=404, detail={"message": f"File not found: {missing_target}", "capability": "document.ocr"}) from exc
+        except OcrServiceError as exc:
+            raise HTTPException(status_code=502, detail={"message": str(exc), "capability": "document.ocr"}) from exc
+        return {
+            "structuredContent": {
+                "workspace_id": workspace_id,
+                "file_id": record.get("file_id"),
+                "original_name": record.get("original_name"),
+                **result,
             },
-        )
+            "content": [{"type": "text", "text": result["text"]}],
+        }
 
     return {
         "office.ai_generate": handle_ai_generate,

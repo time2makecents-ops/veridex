@@ -55,6 +55,11 @@ class RequestPipeline:
     )
     ARTIFACT_ARCHIVE_ROOM = "records_archive"
     ARTIFACT_ID_RE = re.compile(r"\bart_[A-Za-z0-9]+\b", re.IGNORECASE)
+    FILE_ID_RE = re.compile(r"\bfile_[A-Za-z0-9]+\b", re.IGNORECASE)
+    FILE_NAME_RE = re.compile(
+        r"(?P<name>[A-Za-z0-9_().-]{1,120}\.(?:txt|rtf|pdf|png|jpg|jpeg|webp|gif|bmp|tif|tiff|md|csv|json|xml|html|htm|doc|docx))",
+        re.IGNORECASE,
+    )
     ROOM_NAVIGATION_PREFIXES = (
         "go to ",
         "take me to ",
@@ -353,6 +358,15 @@ class RequestPipeline:
                 **artifact_route,
             }
 
+        ocr_route = self.route_ocr_request(workspace_id, request_text)
+        if ocr_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **ocr_route,
+            }
+
         search_route = self.route_search_request(workspace_id, request_text)
         if search_route is not None:
             return {
@@ -459,6 +473,34 @@ class RequestPipeline:
             }
 
         return None
+
+    def route_ocr_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = request_text.lower().strip()
+        if not text:
+            return None
+        if "ocr" not in text and "extract text" not in text and "extracted text" not in text and "read file" not in text and "show me" not in text:
+            return None
+        match = self.FILE_ID_RE.search(request_text)
+        if match:
+            return {
+                "capability": "document.ocr",
+                "tool": "office.ocr_extract",
+                "arguments": {
+                    "file_id": match.group(0),
+                },
+                "reason": "Matched OCR request with a file id.",
+            }
+        file_name_match = self.FILE_NAME_RE.search(request_text)
+        if not file_name_match:
+            return None
+        return {
+            "capability": "document.ocr",
+            "tool": "office.ocr_extract",
+            "arguments": {
+                "file_name": file_name_match.group("name").strip(),
+            },
+            "reason": "Matched OCR request with a file name.",
+        }
 
     def is_explicit_room_navigation(self, request_text: str) -> bool:
         text = request_text.strip().lower()

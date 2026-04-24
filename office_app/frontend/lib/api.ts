@@ -282,6 +282,26 @@ export async function readFileText(file: FileRecord): Promise<string> {
   return await response.text();
 }
 
+export async function extractFileText(file: FileRecord): Promise<string> {
+  const sessionId = typeof window === "undefined" ? "" : window.localStorage.getItem("veridex.session_id") ?? "";
+  if (!sessionId) {
+    throw new Error("Session ID required");
+  }
+  const response = await callTool("office.ocr_extract", {
+    file_id: file.file_id,
+    scope: file.scope || "workspace",
+  });
+  const structured = response.structuredContent as { text?: unknown } | undefined;
+  const contentText = response.content?.find((item) => item.type === "text")?.text;
+  if (typeof structured?.text === "string" && structured.text.trim()) {
+    return structured.text;
+  }
+  if (typeof contentText === "string" && contentText.trim()) {
+    return contentText;
+  }
+  return "No extracted text returned.";
+}
+
 export function requestText(response: RequestResponse): string {
   const structured = response.structuredContent as { response_text?: unknown } | undefined;
   const contentText = response.content?.find((item) => item.type === "text")?.text;

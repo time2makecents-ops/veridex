@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { callTool, fileDownloadUrl, listFiles, loadTranscript, readFileText, request, requestText, uploadFile, type FileRecord, type TranscriptEntry } from "@/lib/api";
+import { callTool, extractFileText, fileDownloadUrl, listFiles, loadTranscript, request, requestText, uploadFile, type FileRecord, type TranscriptEntry } from "@/lib/api";
 import { clearStoredSessionId, getSessionShortLabel, getStoredSessionId } from "@/lib/session";
 import { ROOM_GROUPS, ROOMS, type RoomInfo } from "@/lib/rooms";
 
@@ -90,6 +90,7 @@ export default function ChatPage() {
   const [readerTitle, setReaderTitle] = useState("");
   const [readerText, setReaderText] = useState("");
   const [readerLoading, setReaderLoading] = useState(false);
+  const [readerFile, setReaderFile] = useState<FileRecord | null>(null);
   const [selectedUploadName, setSelectedUploadName] = useState("");
   const [selectedUploadDataUrl, setSelectedUploadDataUrl] = useState("");
   const [selectedUploadMime, setSelectedUploadMime] = useState("");
@@ -218,10 +219,11 @@ export default function ChatPage() {
     setReaderOpen(true);
     setReaderLoading(true);
     setReaderTitle(file.original_name || "Document");
+    setReaderFile(file);
     setReaderText("");
     setError("");
     try {
-      const text = await readFileText(file);
+      const text = await extractFileText(file);
       setReaderText(text);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to read file.";
@@ -424,6 +426,10 @@ export default function ChatPage() {
 
   function openPicker() {
     fileInputRef.current?.click();
+  }
+
+  function downloadFile(file: FileRecord) {
+    window.open(fileDownloadUrl(file), "_blank", "noopener,noreferrer");
   }
 
   useEffect(() => {
@@ -654,10 +660,15 @@ export default function ChatPage() {
                 <div className="load-list">
                   {(loadScope === "private" ? privateFiles : workspaceFiles).length ? (
                     (loadScope === "private" ? privateFiles : workspaceFiles).map((file) => (
-                      <button key={file.file_id} type="button" className="load-item" onClick={() => void openReader(file)}>
-                        <span className="load-item-title">{file.original_name}</span>
-                        <span className="load-item-meta">{fileSortLabel(file)}</span>
-                      </button>
+                      <div key={file.file_id} className="load-item">
+                        <button type="button" className="load-item-main" onClick={() => void openReader(file)}>
+                          <span className="load-item-title">{file.original_name}</span>
+                          <span className="load-item-meta">{fileSortLabel(file)}</span>
+                        </button>
+                        <button type="button" className="secondary load-download-button" onClick={() => downloadFile(file)}>
+                          Download
+                        </button>
+                      </div>
                     ))
                   ) : (
                     <div className="muted">
@@ -820,6 +831,11 @@ export default function ChatPage() {
           <div className="terminal-panel-title">Document Reader</div>
           <div className="toolbar-row">
             <div className="reader-title">{readerTitle}</div>
+            {readerFile ? (
+              <button type="button" className="secondary" onClick={() => downloadFile(readerFile)}>
+                Download
+              </button>
+            ) : null}
             <button type="button" className="ghost toolbar-button" onClick={() => setReaderOpen(false)}>
               Close
             </button>
