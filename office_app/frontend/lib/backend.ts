@@ -3,3 +3,7 @@ const BACKEND_BASE_URL = process.env.VERIDEX_BACKEND_URL ?? "http://127.0.0.1:80
 export async function proxyJsonRequest(path: string, init: RequestInit): Promise<Response> {
   return fetch(`${BACKEND_BASE_URL}${path}`, init);
 }
+
+export async function proxyRequest(path: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(`${BACKEND_BASE_URL}${path}`, init);
+}

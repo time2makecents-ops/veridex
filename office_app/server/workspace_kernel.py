@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from office_app.server.errors import error_workspace_not_initialized
 from office_app.server.persona_registry import persona_profile_for_name
@@ -55,12 +55,43 @@ class WorkspaceStore:
         state["updated_at"] = self.utc_now()
         _write_json(self.state_path(workspace_id), state)
 
-    def append_transcript(self, workspace_id: str, role: str, room_id: str, text: str) -> None:
+    def append_transcript(
+        self,
+        workspace_id: str,
+        role: str,
+        room_id: str,
+        text: str,
+        *,
+        speaker: Optional[str] = None,
+    ) -> None:
         entry = {"ts": self.utc_now(), "role": role, "room": room_id, "text": text}
+        if speaker:
+            entry["speaker"] = speaker
         tp = self.transcript_path(workspace_id)
         tp.parent.mkdir(parents=True, exist_ok=True)
         with tp.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\\n")
+            f.write(json.dumps(entry) + "\n")
+
+    def load_transcript(self, workspace_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        tp = self.transcript_path(workspace_id)
+        if not tp.exists():
+            return []
+        rows: List[Dict[str, Any]] = []
+        with tp.open("r", encoding="utf-8") as f:
+            raw = f.read()
+        for line in raw.replace("\\n", "\n").splitlines():
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                obj = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                rows.append(obj)
+        if limit > 0:
+            rows = rows[-limit:]
+        return rows
 
     def load_index(self) -> Dict[str, Any]:
         idx = _read_json(self.index_path, {"workspaces": []})
@@ -184,7 +215,13 @@ class WorkspaceKernel:
         state["active_persona"] = str(room.get("default_persona") or "Navigator")
         self.store.save_state(workspace_id, state)
         self.store.touch_workspace(workspace_id, target_external)
-        self.store.append_transcript(workspace_id, "system", target_external, f"Entered {room['title']}")
+        self.store.append_transcript(
+            workspace_id,
+            "system",
+            target_external,
+            f"Now in {room['title']}. Persona: {state['active_persona']}.",
+            speaker="System",
+        )
 
         return {
             "previous_room": previous_room,

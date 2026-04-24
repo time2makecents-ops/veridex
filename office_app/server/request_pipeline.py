@@ -63,6 +63,35 @@ class RequestPipeline:
         "enter ",
         "open ",
     )
+    SEARCH_WEB_HINTS = (
+        "search the internet",
+        "search the web",
+        "look this up",
+        "look it up",
+        "search online",
+        "web search",
+    )
+    SEARCH_REVIEW_HINTS = (
+        "reviews",
+        "review",
+        "highest rated",
+        "top rated",
+        "best rated",
+        "yelp",
+        "tripadvisor",
+    )
+    SEARCH_PLACE_HINTS = (
+        "restaurant",
+        "restaurants",
+        "bar",
+        "bars",
+        "coffee",
+        "cafe",
+        "hotel",
+        "hotels",
+        "place",
+        "places",
+    )
 
     def __init__(
         self,
@@ -324,6 +353,15 @@ class RequestPipeline:
                 **artifact_route,
             }
 
+        search_route = self.route_search_request(workspace_id, request_text)
+        if search_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **search_route,
+            }
+
         route = self.recommend_room(request_text)
         if route.get("matched") and self.is_explicit_room_navigation(request_text):
             return {
@@ -374,11 +412,80 @@ class RequestPipeline:
             "reason": "No strong department match found. Using the model route.",
         }
 
+    def route_search_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = request_text.lower().strip()
+        if not text:
+            return None
+
+        location = self.extract_location(request_text)
+        time_window = self.extract_time_window(text)
+
+        if any(hint in text for hint in self.SEARCH_REVIEW_HINTS) and any(hint in text for hint in self.SEARCH_PLACE_HINTS):
+            return {
+                "capability": "search.reviews",
+                "tool": "office.search_reviews",
+                "arguments": {
+                    "query": request_text,
+                    "location": location,
+                    "time_window": time_window,
+                    "limit": 5,
+                },
+                "reason": "Matched review and place lookup intent.",
+            }
+
+        if any(hint in text for hint in self.SEARCH_WEB_HINTS):
+            return {
+                "capability": "search.web",
+                "tool": "office.search_web",
+                "arguments": {
+                    "query": request_text,
+                    "limit": 5,
+                },
+                "reason": "Matched explicit web search intent.",
+            }
+
+        if any(hint in text for hint in self.SEARCH_PLACE_HINTS) and ("find" in text or location or "near" in text):
+            category = self.extract_place_category(text)
+            return {
+                "capability": "search.places",
+                "tool": "office.search_places",
+                "arguments": {
+                    "query": request_text,
+                    "location": location,
+                    "category": category,
+                    "limit": 5,
+                },
+                "reason": "Matched place lookup intent.",
+            }
+
+        return None
+
     def is_explicit_room_navigation(self, request_text: str) -> bool:
         text = request_text.strip().lower()
         if not text:
             return False
         return any(text.startswith(prefix) for prefix in self.ROOM_NAVIGATION_PREFIXES)
+
+    def extract_location(self, request_text: str) -> Optional[str]:
+        match = re.search(r"\bin\s+([A-Za-z][A-Za-z0-9 .,'&-]{1,60})", request_text, re.IGNORECASE)
+        if not match:
+            return None
+        return match.group(1).strip(" .")
+
+    def extract_time_window(self, text: str) -> Optional[str]:
+        if "last month" in text:
+            return "last month"
+        if "last week" in text:
+            return "last week"
+        if "today" in text:
+            return "today"
+        return None
+
+    def extract_place_category(self, text: str) -> Optional[str]:
+        for candidate in ("restaurant", "bar", "bars", "coffee", "cafe", "hotel", "hotels"):
+            if candidate in text:
+                return candidate
+        return None
 
     def mailroom_header(self, to_persona: str, dest_room_title: str, subject: str) -> str:
         return f"Memo filed to: {to_persona} ({dest_room_title})\\nSubject: {subject}\\n"

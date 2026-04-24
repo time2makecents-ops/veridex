@@ -98,6 +98,22 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "room.navigate")
         self.assertEqual(routed["room_id"], "it_department")
 
+    def test_review_request_routes_to_review_search(self) -> None:
+        routed = self.pipeline.route_user_request(
+            "default",
+            "based on yelp reviews over the last month, what are a few of the highest rated restaurants in Eugene?",
+        )
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.reviews")
+        self.assertEqual(routed["tool"], "office.search_reviews")
+        self.assertEqual(routed["arguments"]["location"], "Eugene")
+
+    def test_explicit_web_search_routes_to_web_search(self) -> None:
+        routed = self.pipeline.route_user_request("default", "search the internet for Eugene networking events")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.web")
+        self.assertEqual(routed["tool"], "office.search_web")
+
     def test_non_navigation_break_phrase_does_not_switch_rooms(self) -> None:
         routed = self.pipeline.route_user_request("default", "did i break the thread?")
         self.assertEqual(routed["route_kind"], "model")

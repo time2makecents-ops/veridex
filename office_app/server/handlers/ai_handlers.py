@@ -5,6 +5,7 @@ from typing import Any, Dict
 from fastapi import HTTPException
 
 from office_app.server.model_router import ModelRoutingError
+from office_app.server.search_service import SearchServiceError
 
 from .dependencies import HandlerDeps
 
@@ -103,22 +104,90 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "content": [{"type": "text", "text": result.text}],
         }
 
-    def _not_configured(tool_name: str, capability: str):
-        def handler(args: Dict[str, Any]) -> Dict[str, Any]:
-            raise HTTPException(
-                status_code=501,
-                detail={
-                    "message": f"{tool_name} is defined in Veridex but not configured yet.",
-                    "capability": capability,
-                },
-            )
+    def _workspace_id(args: Dict[str, Any], tool_name: str) -> str:
+        workspace_id = str(args.get("workspace_id") or "").strip()
+        if not workspace_id:
+            raise deps.error_missing_required_field("workspace_id")
+        return workspace_id
 
-        return handler
+    def handle_search_web(args: Dict[str, Any]) -> Dict[str, Any]:
+        workspace_id = _workspace_id(args, "office.search_web")
+        query = str(args.get("query") or args.get("request") or args.get("text") or "").strip()
+        if not query:
+            raise deps.error_missing_required_field("query")
+        try:
+            result = deps.search_service.search_web(
+                query=query,
+                limit=max(1, min(int(args.get("limit") or 5), 8)),
+                recency_days=int(args["recency_days"]) if args.get("recency_days") is not None else None,
+            )
+        except SearchServiceError as exc:
+            raise HTTPException(status_code=502, detail={"message": str(exc), "capability": "search.web"}) from exc
+        return {
+            "structuredContent": {
+                "workspace_id": workspace_id,
+                **result,
+            },
+            "content": [{"type": "text", "text": result["summary_text"]}],
+        }
+
+    def handle_search_reviews(args: Dict[str, Any]) -> Dict[str, Any]:
+        workspace_id = _workspace_id(args, "office.search_reviews")
+        query = str(args.get("query") or args.get("request") or args.get("text") or "").strip()
+        if not query:
+            raise deps.error_missing_required_field("query")
+        try:
+            result = deps.search_service.search_reviews(
+                query=query,
+                location=str(args.get("location") or "").strip() or None,
+                time_window=str(args.get("time_window") or "").strip() or None,
+                limit=max(1, min(int(args.get("limit") or 5), 8)),
+            )
+        except SearchServiceError as exc:
+            raise HTTPException(status_code=502, detail={"message": str(exc), "capability": "search.reviews"}) from exc
+        return {
+            "structuredContent": {
+                "workspace_id": workspace_id,
+                **result,
+            },
+            "content": [{"type": "text", "text": result["summary_text"]}],
+        }
+
+    def handle_search_places(args: Dict[str, Any]) -> Dict[str, Any]:
+        workspace_id = _workspace_id(args, "office.search_places")
+        query = str(args.get("query") or args.get("request") or args.get("text") or "").strip()
+        if not query:
+            raise deps.error_missing_required_field("query")
+        try:
+            result = deps.search_service.search_places(
+                query=query,
+                location=str(args.get("location") or "").strip() or None,
+                category=str(args.get("category") or "").strip() or None,
+                limit=max(1, min(int(args.get("limit") or 5), 8)),
+            )
+        except SearchServiceError as exc:
+            raise HTTPException(status_code=502, detail={"message": str(exc), "capability": "search.places"}) from exc
+        return {
+            "structuredContent": {
+                "workspace_id": workspace_id,
+                **result,
+            },
+            "content": [{"type": "text", "text": result["summary_text"]}],
+        }
+
+    def handle_ocr_extract(args: Dict[str, Any]) -> Dict[str, Any]:
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "message": "office.ocr_extract is defined in Veridex but not configured yet.",
+                "capability": "document.ocr",
+            },
+        )
 
     return {
         "office.ai_generate": handle_ai_generate,
-        "office.search_web": _not_configured("office.search_web", "search.web"),
-        "office.search_reviews": _not_configured("office.search_reviews", "search.reviews"),
-        "office.search_places": _not_configured("office.search_places", "search.places"),
-        "office.ocr_extract": _not_configured("office.ocr_extract", "document.ocr"),
+        "office.search_web": handle_search_web,
+        "office.search_reviews": handle_search_reviews,
+        "office.search_places": handle_search_places,
+        "office.ocr_extract": handle_ocr_extract,
     }

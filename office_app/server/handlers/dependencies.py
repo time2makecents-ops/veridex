@@ -15,6 +15,7 @@ class HandlerDeps:
     receptionist_context_service: Any
     workspace_file_service: Any
     private_file_service: Any
+    search_service: Any
     model_router: Any
     user_service: Any
     utc_now: Callable[[], str]

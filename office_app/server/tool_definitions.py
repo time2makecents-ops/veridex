@@ -31,6 +31,7 @@ VERIDEX_TOOL_DEFINITIONS = {
     "office.workspace_new": tool_definition("office.workspace_new", "workspace.create", "Create a workspace."),
     "office.bootstrap": tool_definition("office.bootstrap", "workspace.bootstrap", "Bootstrap a workspace.", requires_workspace=True),
     "office.state_get": tool_definition("office.state_get", "workspace.state.get", "Read workspace state.", requires_workspace=True),
+    "office.transcript_get": tool_definition("office.transcript_get", "workspace.transcript.get", "Read recent workspace transcript.", requires_workspace=True),
     "office.commands_list": tool_definition("office.commands_list", "system.commands.list", "List available Veridex commands."),
     "office.room_set": tool_definition("office.room_set", "room.navigate", "Switch the active room.", requires_workspace=True),
     "office.nancy_route": tool_definition("office.nancy_route", "room.recommend", "Recommend a room for a request.", requires_workspace=True),

@@ -128,6 +128,25 @@ button {
 .toolbar-button-active {
   background: var(--accent);
   color: #fff;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(45, 106, 255, 0.18);
+}
+
+.option-button {
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text);
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.option-button.is-active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(45, 106, 255, 0.18);
 }
 
 .dropdown-panel {
@@ -171,6 +190,17 @@ button {
 .room-option-persona {
   font-size: 0.78rem;
   color: var(--muted);
+}
+
+.room-option.toolbar-button-active,
+.toolbar-button.toolbar-button-active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.room-option.toolbar-button-active .room-option-persona,
+.toolbar-button.toolbar-button-active .room-option-persona {
+  color: rgba(255, 255, 255, 0.86);
 }
 
 .composer-actions {

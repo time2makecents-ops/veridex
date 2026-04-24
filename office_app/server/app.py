@@ -22,6 +22,7 @@ from office_app.server.receptionist_context_service import ReceptionistContextSe
 from office_app.server.memo_service import MemoService
 from office_app.server.nancy_service import NancyService
 from office_app.server.request_pipeline import RequestPipeline
+from office_app.server.search_service import SearchService
 from office_app.server.handlers.ai_handlers import build_ai_handlers
 from office_app.server.handlers.artifact_handlers import build_artifact_handlers
 from office_app.server.handlers.dependencies import HandlerDeps
@@ -78,6 +79,7 @@ user_service = UserService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=ut
 receptionist_context_service = ReceptionistContextService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
 workspace_file_service = WorkspaceFileService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
 private_file_service = PrivateFileService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
+search_service = SearchService()
 model_router = ModelRouter.from_env()
 nancy_service = NancyService(
     kernel=kernel,
@@ -371,16 +373,25 @@ def handle_natural_language_request(
     user_profile = _session_user_profile(session_id)
     routed = pipeline.route_user_request(workspace_id, request_text)
 
-    should_record = routed["route_kind"] in {"model", "nancy"}
+    should_record = routed["route_kind"] in {"model", "nancy", "tool"}
     if should_record:
+        current_state = kernel.get_state(workspace_id)
+        active_room_for_user = str(current_state.get("active_room") or "lobby")
         receptionist_context_service.record_turn(
             workspace_id=workspace_id,
             role="user",
             text=request_text,
-            room_id=kernel.get_state(workspace_id).get("active_room", "lobby"),
-            persona_name=kernel.get_state(workspace_id).get("active_persona", "Receptionist"),
+            room_id=active_room_for_user,
+            persona_name=current_state.get("active_persona", "Receptionist"),
             user_id=str((user_profile or {}).get("user_id") or "").strip() or None,
             session_id=session_id,
+        )
+        store.append_transcript(
+            workspace_id,
+            "user",
+            active_room_for_user,
+            request_text,
+            speaker="You",
         )
 
     if routed["route_kind"] == "artifact":
@@ -404,6 +415,45 @@ def handle_natural_language_request(
                 }
             return attach_request_context(result, workspace_id=workspace_id, session_id=session_id)
 
+    if routed["route_kind"] == "tool":
+        args = dict(routed["arguments"])
+        args["workspace_id"] = workspace_id
+        if session_id:
+            args["session_id"] = session_id
+        result = router.dispatch_capability(
+            routed["capability"],
+            args,
+            preferred_tool=routed.get("tool"),
+        )
+        if isinstance(result, dict):
+            structured = result.get("structuredContent")
+            if isinstance(structured, dict):
+                structured["routing"] = {
+                    "route_kind": "tool",
+                    "capability": routed["capability"],
+                    "tool": routed["tool"],
+                    "reason": routed["reason"],
+                }
+        enriched = attach_request_context(result, workspace_id=workspace_id, session_id=session_id)
+        receptionist_context_service.record_turn(
+            workspace_id=workspace_id,
+            role="assistant",
+            text=_request_text_from_response(enriched),
+            room_id=kernel.get_state(workspace_id).get("active_room", "lobby"),
+            persona_name=kernel.get_state(workspace_id).get("active_persona", "Receptionist"),
+            user_id=str((user_profile or {}).get("user_id") or "").strip() or None,
+            session_id=session_id,
+        )
+        current_state = kernel.get_state(workspace_id)
+        store.append_transcript(
+            workspace_id,
+            "assistant",
+            str(current_state.get("active_room") or "lobby"),
+            _request_text_from_response(enriched),
+            speaker=str(current_state.get("active_persona") or "Receptionist"),
+        )
+        return enriched
+
     if routed["route_kind"] == "nancy":
         target_room = str(routed.get("room_id") or "").strip()
         if not target_room:
@@ -426,6 +476,13 @@ def handle_natural_language_request(
             persona_name=str((structured_result or {}).get("active_persona") or ""),
             user_id=str((user_profile or {}).get("user_id") or "").strip() or None,
             session_id=session_id,
+        )
+        store.append_transcript(
+            workspace_id,
+            "assistant",
+            str((structured_result or {}).get("active_room") or target_room),
+            _request_text_from_response(result),
+            speaker="System",
         )
         response = result
         if isinstance(response, dict):
@@ -470,6 +527,14 @@ def handle_natural_language_request(
             user_id=str((user_profile or {}).get("user_id") or "").strip() or None,
             session_id=session_id,
         )
+        current_state = kernel.get_state(workspace_id)
+        store.append_transcript(
+            workspace_id,
+            "assistant",
+            str(current_state.get("active_room") or "lobby"),
+            _request_text_from_response(enriched),
+            speaker=str(current_state.get("active_persona") or "Receptionist"),
+        )
         return enriched
 
     response = pipeline.nancy_route_response(workspace_id, request_text)
@@ -481,6 +546,14 @@ def handle_natural_language_request(
         persona_name=kernel.get_state(workspace_id).get("active_persona", "Receptionist"),
         user_id=str((user_profile or {}).get("user_id") or "").strip() or None,
         session_id=session_id,
+    )
+    current_state = kernel.get_state(workspace_id)
+    store.append_transcript(
+        workspace_id,
+        "assistant",
+        str(current_state.get("active_room") or "lobby"),
+        _request_text_from_response(response),
+        speaker=str(current_state.get("active_persona") or "Receptionist"),
     )
     return attach_request_context(
         response,
@@ -1411,6 +1484,7 @@ def refresh_handler_bindings() -> None:
     global handle_workspace_new
     global handle_office_bootstrap
     global handle_office_state_get
+    global handle_office_transcript_get
     global handle_commands_list
     global handle_office_room_set
     global handle_office_nancy_route
@@ -1454,6 +1528,7 @@ def refresh_handler_bindings() -> None:
         receptionist_context_service=receptionist_context_service,
         workspace_file_service=workspace_file_service,
         private_file_service=private_file_service,
+        search_service=search_service,
         model_router=model_router,
         user_service=user_service,
         utc_now=utc_now,
@@ -1473,6 +1548,7 @@ def refresh_handler_bindings() -> None:
     handle_workspace_new = workspace_handlers["office.workspace_new"]
     handle_office_bootstrap = workspace_handlers["office.bootstrap"]
     handle_office_state_get = workspace_handlers["office.state_get"]
+    handle_office_transcript_get = workspace_handlers["office.transcript_get"]
     handle_commands_list = workspace_handlers["office.commands_list"]
     handle_office_room_set = workspace_handlers["office.room_set"]
     handle_office_nancy_route = workspace_handlers["office.nancy_route"]
@@ -1521,6 +1597,7 @@ register_tools(
         "office.workspace_new": handle_workspace_new,
         "office.bootstrap": handle_office_bootstrap,
         "office.state_get": handle_office_state_get,
+        "office.transcript_get": handle_office_transcript_get,
         "office.commands_list": handle_commands_list,
         "office.room_set": handle_office_room_set,
         "office.nancy_route": handle_office_nancy_route,

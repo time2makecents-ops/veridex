@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { callTool, fileDownloadUrl, listFiles, readFileText, request, requestText, uploadFile, type FileRecord } from "@/lib/api";
+import { callTool, fileDownloadUrl, listFiles, loadTranscript, readFileText, request, requestText, uploadFile, type FileRecord, type TranscriptEntry } from "@/lib/api";
 import { clearStoredSessionId, getSessionShortLabel, getStoredSessionId } from "@/lib/session";
 import { ROOM_GROUPS, ROOMS, type RoomInfo } from "@/lib/rooms";
 
@@ -15,12 +15,21 @@ type LobbyState = {
 
 type Message = {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   text: string;
   speaker?: string;
+  room?: string;
+};
+
+type SavedFileNotice = {
+  name: string;
+  scope: string;
+  scopeRef: string;
+  fileId: string;
 };
 
 type FileScope = "room" | "session" | "public" | "private";
+type ChatScope = "room" | "global";
 
 const FILE_KIND_OPTIONS = [
   { value: "audio", label: "Audio" },
@@ -71,6 +80,8 @@ export default function ChatPage() {
   const [recentRooms, setRecentRooms] = useState<string[]>([]);
   const [fileKind, setFileKind] = useState("document");
   const [fileScope, setFileScope] = useState<FileScope>("room");
+  const [loadScope, setLoadScope] = useState<FileScope>("room");
+  const [chatScope, setChatScope] = useState<ChatScope>("room");
   const [privateBucket, setPrivateBucket] = useState("by_type");
   const [workspaceFiles, setWorkspaceFiles] = useState<FileRecord[]>([]);
   const [privateFiles, setPrivateFiles] = useState<FileRecord[]>([]);
@@ -85,11 +96,10 @@ export default function ChatPage() {
   const [selectedUploadDescription, setSelectedUploadDescription] = useState("");
   const [selectedUploadReady, setSelectedUploadReady] = useState(false);
   const [uploadNote, setUploadNote] = useState("");
+  const [lastSavedFile, setLastSavedFile] = useState<SavedFileNotice | null>(null);
   const [roomStatus, setRoomStatus] = useState("Waiting for room state.");
   const [backendBanner, setBackendBanner] = useState("");
-  const [messages, setMessages] = useState<Message[]>([
-    { id: "welcome", role: "assistant", speaker: "Receptionist", text: "Receptionist ready. How may I help you today?" },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
   const draftRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -116,8 +126,11 @@ export default function ChatPage() {
     let cancelled = false;
     const loadState = async () => {
       try {
-        const response = await callTool("office.state_get", {});
-        const structured = response.structuredContent as LobbyState | undefined;
+        const [stateResponse, transcriptEntries] = await Promise.all([
+          callTool("office.state_get", {}),
+          loadTranscript(120),
+        ]);
+        const structured = stateResponse.structuredContent as LobbyState | undefined;
         if (cancelled || !structured) {
           return;
         }
@@ -128,10 +141,7 @@ export default function ChatPage() {
         setActiveRoom(nextRoom);
         setActivePersona(nextPersona);
         setRecentRooms((current) => pushRecentRoom(current, nextRoom));
-        if (!announcedRoomRef.current) {
-          announcedRoomRef.current = true;
-          appendRoomTransition(nextRoom, nextPersona);
-        }
+        applyHydratedMessages(nextRoom, nextPersona, transcriptEntries);
         } catch (err) {
           const message = err instanceof Error ? err.message : "Unable to load lobby state.";
           setError(message);
@@ -152,6 +162,25 @@ export default function ChatPage() {
   const sessionLabel = useMemo(() => getSessionShortLabel(sessionId), [sessionId]);
   const currentRoom = useMemo(() => roomById(activeRoom), [activeRoom]);
   const currentTitle = currentRoom?.title || activeRoom;
+  const visibleMessages = useMemo(
+    () => (chatScope === "global" ? messages : messages.filter((message) => !message.room || message.room === activeRoom)),
+    [activeRoom, chatScope, messages],
+  );
+
+  function applyHydratedMessages(nextRoom: string, nextPersona: string, transcriptEntries: TranscriptEntry[]) {
+    const nextStatus = roomTransitionText(nextRoom, nextPersona);
+    setRoomStatus(nextStatus);
+    const hydratedMessages = mapTranscriptEntries(transcriptEntries);
+    if (hydratedMessages.length) {
+      announcedRoomRef.current = true;
+      setMessages(hydratedMessages);
+    } else {
+      announcedRoomRef.current = true;
+      setMessages([
+        { id: "welcome", role: "assistant", speaker: "Receptionist", text: "Receptionist ready. How may I help you today?" },
+      ]);
+    }
+  }
 
   function pushRecentRoom(existing: string[], roomId: string): string[] {
     const next = [roomId, ...existing.filter((item) => item !== roomId)];
@@ -161,15 +190,6 @@ export default function ChatPage() {
   function appendRoomTransition(roomId: string, persona: string) {
     const text = roomTransitionText(roomId, persona);
     setRoomStatus(text);
-    setMessages((current) => [
-      ...current,
-      {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        speaker: "System",
-        text,
-      },
-    ]);
   }
 
   function backendDisconnectedMessage(message: string): string {
@@ -219,12 +239,16 @@ export default function ChatPage() {
     }
     setFilesLoading(true);
     try {
-      const [workspaceResponse, privateResponse] = await Promise.all([
-        listFiles(),
-        listFiles("private", fileScope === "private" ? privateBucket : undefined),
-      ]);
-      setWorkspaceFiles(workspaceResponse.files || []);
-      setPrivateFiles(privateResponse.files || []);
+      if (loadScope === "private") {
+        const privateResponse = await listFiles("private", privateBucket);
+        setWorkspaceFiles([]);
+        setPrivateFiles(privateResponse.files || []);
+      } else {
+        const scopeRef = loadScope === "room" ? activeRoom : loadScope === "session" ? sessionId : "public";
+        const response = await listFiles(loadScope, scopeRef);
+        setWorkspaceFiles(response.files || []);
+        setPrivateFiles([]);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to load files.";
       setError(message);
@@ -243,7 +267,7 @@ export default function ChatPage() {
     setError("");
     setBackendBanner("");
     setLoading(true);
-    setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text: value }]);
+    setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text: value, room: activeRoom }]);
     try {
       const response = await request(value);
       const assistantText = requestText(response);
@@ -256,7 +280,10 @@ export default function ChatPage() {
       setActiveRoom(nextRoom);
       setActivePersona(nextPersona);
       setRecentRooms((current) => pushRecentRoom(current, nextRoom));
-      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", speaker: nextPersona, text: assistantText }]);
+      setMessages((current) => [
+        ...current,
+        { id: crypto.randomUUID(), role: "assistant", speaker: nextPersona, text: assistantText, room: nextRoom },
+      ]);
       if (nextRoom !== activeRoom || nextPersona !== activePersona) {
         appendRoomTransition(nextRoom, nextPersona);
       }
@@ -264,7 +291,7 @@ export default function ChatPage() {
       const message = err instanceof Error ? err.message : "Request failed.";
       setError(message);
       setBackendBanner(backendDisconnectedMessage(message));
-      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message }]);
+      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message, room: activeRoom }]);
       if (message.toLowerCase().includes("session")) {
         clearStoredSessionId();
         router.replace("/");
@@ -303,10 +330,12 @@ export default function ChatPage() {
       const structured = response.structuredContent as { active_room?: string; active_persona?: string } | undefined;
       const nextRoom = String(structured?.active_room || roomId);
       const nextPersona = String(structured?.active_persona || roomById(nextRoom)?.persona || "Receptionist");
+      const transcriptEntries = await loadTranscript(120);
       setActiveRoom(nextRoom);
       setActivePersona(nextPersona);
+      setChatScope("room");
       setRecentRooms((current) => pushRecentRoom(current, nextRoom));
-      appendRoomTransition(nextRoom, nextPersona);
+      applyHydratedMessages(nextRoom, nextPersona, transcriptEntries);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to change room.";
       setError(message);
@@ -328,7 +357,7 @@ export default function ChatPage() {
             ? privateBucket
             : "public";
     try {
-      await uploadFile({
+      const saved = await uploadFile({
         name: file.name,
         data_url: dataUrl,
         mime_type: file.type || undefined,
@@ -337,14 +366,33 @@ export default function ChatPage() {
         scope_ref: scopeRef,
         description: selectedUploadDescription || undefined,
       });
-      setUploadNote(`${file.name} saved to ${fileScope}.`);
+      const savedNotice = {
+        name: saved.original_name || file.name,
+        scope: String(saved.scope || fileScope),
+        scopeRef: String(saved.scope_ref || scopeRef),
+        fileId: String(saved.file_id || ""),
+      };
+      setLastSavedFile(savedNotice);
+      setUploadNote(`${savedNotice.name} saved to ${savedNotice.scope}${savedNotice.scopeRef ? ` (${savedNotice.scopeRef})` : ""}.`);
       setSelectedUploadName("");
       setSelectedUploadDataUrl("");
       setSelectedUploadMime("");
+      setSelectedUploadDescription("");
       setSelectedUploadReady(false);
       setAttachmentMode("download");
       await refreshFiles();
+      setMessages((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          speaker: "System",
+          text: `Saved file ${savedNotice.name} to ${savedNotice.scope}${savedNotice.scopeRef ? ` (${savedNotice.scopeRef})` : ""}.`,
+          room: activeRoom,
+        },
+      ]);
       setSaveMenuOpen(false);
+      setLoadMenuOpen(true);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Upload failed.";
       setError(message);
@@ -390,7 +438,7 @@ export default function ChatPage() {
       void refreshFiles();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadMenuOpen]);
+  }, [activeRoom, loadMenuOpen, loadScope, privateBucket, sessionId]);
 
   return (
     <main
@@ -401,6 +449,7 @@ export default function ChatPage() {
       data-persona={activePersona}
     >
       <section className="card lobby-page-header">
+        <input ref={fileInputRef} type="file" className="hidden-file-input" onChange={onPickFile} />
         <div className="stack">
           <div className="lobby-title-row">
             <div className="stack" style={{ gap: 4 }}>
@@ -413,7 +462,7 @@ export default function ChatPage() {
           <div className="toolbar-row">
             <button
               type="button"
-              className="ghost toolbar-button"
+              className={`ghost toolbar-button ${roomMenuOpen ? "toolbar-button-active" : ""}`}
               onClick={() => {
                 setRoomMenuOpen((current) => !current);
                 setSaveMenuOpen(false);
@@ -438,7 +487,7 @@ export default function ChatPage() {
             })}
             <button
               type="button"
-              className="ghost toolbar-button"
+              className={`ghost toolbar-button ${saveMenuOpen ? "toolbar-button-active" : ""}`}
               onClick={() => {
                 setSaveMenuOpen((current) => !current);
                 setRoomMenuOpen(false);
@@ -450,7 +499,7 @@ export default function ChatPage() {
             </button>
             <button
               type="button"
-              className="ghost toolbar-button"
+              className={`ghost toolbar-button ${loadMenuOpen ? "toolbar-button-active" : ""}`}
               onClick={() => {
                 setLoadMenuOpen((current) => !current);
                 setRoomMenuOpen(false);
@@ -547,6 +596,12 @@ export default function ChatPage() {
                   </button>
                 </div>
                 {selectedUploadName ? <div className="muted">Selected: {selectedUploadName}</div> : null}
+                {lastSavedFile ? (
+                  <div className="muted">
+                    Last saved: {lastSavedFile.name} {"->"} {lastSavedFile.scope}
+                    {lastSavedFile.scopeRef ? ` (${lastSavedFile.scopeRef})` : ""}
+                  </div>
+                ) : null}
                 {uploadNote ? <div className="muted">{uploadNote}</div> : null}
               </div>
             </div>
@@ -559,32 +614,61 @@ export default function ChatPage() {
                 <div className="muted">Choose a document to open in the reader window.</div>
               </div>
               <div className="dropdown-group">
-                <div className="dropdown-group-title">Workspace / Session Files</div>
-                <div className="load-list">
-                  {workspaceFiles.length ? (
-                    workspaceFiles.map((file) => (
-                      <button key={file.file_id} type="button" className="load-item" onClick={() => void openReader(file)}>
-                        <span className="load-item-title">{file.original_name}</span>
-                        <span className="load-item-meta">{fileSortLabel(file)}</span>
-                      </button>
-                    ))
-                  ) : (
-                    <div className="muted">No workspace files yet.</div>
-                  )}
+                <div className="button-grid">
+                  {FILE_SCOPE_OPTIONS.map((option) => (
+                    <button
+                      key={`load-${option.value}`}
+                      type="button"
+                      className={`option-button ${loadScope === option.value ? "is-active" : ""}`}
+                      onClick={() => setLoadScope(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
                 </div>
+                {loadScope === "private" ? (
+                  <div className="button-grid compact-grid">
+                    {PRIVATE_BUCKET_OPTIONS.map((option) => (
+                      <button
+                        key={`load-private-${option.value}`}
+                        type="button"
+                        className={`option-button ${privateBucket === option.value ? "is-active" : ""}`}
+                        onClick={() => setPrivateBucket(option.value)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
               </div>
               <div className="dropdown-group">
-                <div className="dropdown-group-title">Private Files</div>
+                <div className="dropdown-group-title">
+                  {loadScope === "private"
+                    ? "Private Files"
+                    : loadScope === "room"
+                      ? "Current Room Files"
+                      : loadScope === "session"
+                        ? "Current Session Files"
+                        : "Public Files"}
+                </div>
                 <div className="load-list">
-                  {privateFiles.length ? (
-                    privateFiles.map((file) => (
+                  {(loadScope === "private" ? privateFiles : workspaceFiles).length ? (
+                    (loadScope === "private" ? privateFiles : workspaceFiles).map((file) => (
                       <button key={file.file_id} type="button" className="load-item" onClick={() => void openReader(file)}>
                         <span className="load-item-title">{file.original_name}</span>
                         <span className="load-item-meta">{fileSortLabel(file)}</span>
                       </button>
                     ))
                   ) : (
-                    <div className="muted">No private files yet.</div>
+                    <div className="muted">
+                      {loadScope === "private"
+                        ? "No private files yet."
+                        : loadScope === "room"
+                          ? "No room files yet."
+                          : loadScope === "session"
+                            ? "No session files yet."
+                            : "No public files yet."}
+                    </div>
                   )}
                 </div>
               </div>
@@ -597,10 +681,28 @@ export default function ChatPage() {
         <div className="terminal-panel-title">Chat Window</div>
         <div className="room-status-bar">{roomStatus}</div>
         {backendBanner ? <div className="backend-banner">{backendBanner}</div> : null}
+        <div className="toolbar-row" style={{ marginBottom: 10 }}>
+          <button
+            type="button"
+            className={`ghost toolbar-button ${chatScope === "room" ? "toolbar-button-active" : ""}`}
+            onClick={() => setChatScope("room")}
+          >
+            Room Chat
+          </button>
+          <button
+            type="button"
+            className={`ghost toolbar-button ${chatScope === "global" ? "toolbar-button-active" : ""}`}
+            onClick={() => setChatScope("global")}
+          >
+            Global Chat
+          </button>
+        </div>
         <section ref={logRef} className="chat lobby-chat-window">
-          {messages.map((message) => (
-            <div key={message.id} className={`bubble ${message.role}`}>
-              <div className="chat-role">{message.role === "user" ? "You" : message.speaker || activePersona}</div>
+          {visibleMessages.map((message) => (
+            <div key={message.id} className={`bubble ${message.role === "system" ? "assistant" : message.role}`}>
+              <div className="chat-role">
+                {message.role === "user" ? "You" : message.role === "system" ? "System" : message.speaker || activePersona}
+              </div>
               <div className="chat-text">{message.text}</div>
               </div>
             ))}
@@ -662,7 +764,6 @@ export default function ChatPage() {
 
             {attachmentMode === "upload" ? (
               <div className="stack">
-                <input ref={fileInputRef} type="file" className="hidden-file-input" onChange={onPickFile} />
                 <div className="toolbar-row">
                   <button type="button" className="secondary" onClick={openPicker}>
                     Choose file
@@ -739,4 +840,31 @@ function readFileAsDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error || new Error("Unable to read file."));
     reader.readAsDataURL(file);
   });
+}
+
+function mapTranscriptEntries(entries: TranscriptEntry[]): Message[] {
+  const mapped = entries
+    .filter((entry) => typeof entry.text === "string" && entry.text.trim())
+    .map((entry, index) => {
+      const entryRole = String(entry.role || "").trim().toLowerCase();
+      const role: Message["role"] = entryRole === "user" ? "user" : entryRole === "system" ? "system" : "assistant";
+      const speaker =
+        typeof entry.speaker === "string" && entry.speaker.trim()
+          ? entry.speaker
+          : role === "user"
+            ? "You"
+            : role === "system"
+              ? "System"
+              : undefined;
+      const idSource = typeof entry.ts === "string" && entry.ts.trim() ? entry.ts : `${index}`;
+      return {
+        id: `${idSource}-${index}`,
+        role,
+        speaker,
+        text: String(entry.text),
+        room: typeof entry.room === "string" && entry.room.trim() ? entry.room : undefined,
+      };
+    });
+  const conversational = mapped.filter((entry) => entry.role !== "system");
+  return conversational.length ? mapped : mapped.slice(-12);
 }

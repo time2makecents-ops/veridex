@@ -43,6 +43,23 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
         return deps.pipeline.snapshot_response(workspace_id)
 
+    def handle_office_transcript_get(args: Dict[str, Any]) -> Dict[str, Any]:
+        workspace_id = args["workspace_id"]
+        limit_value = args.get("limit")
+        try:
+            limit = int(limit_value) if limit_value is not None else 100
+        except (TypeError, ValueError):
+            limit = 100
+        rows = deps.store.load_transcript(workspace_id, limit=max(1, min(limit, 500)))
+        return {
+            "structuredContent": {
+                "workspace_id": workspace_id,
+                "count": len(rows),
+                "entries": rows,
+            },
+            "content": [{"type": "text", "text": f"Loaded {len(rows)} transcript entries."}],
+        }
+
     def handle_commands_list(args: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "structuredContent": deps.pipeline.tools_response(),
@@ -89,6 +106,7 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         "office.workspace_new": handle_workspace_new,
         "office.bootstrap": handle_office_bootstrap,
         "office.state_get": handle_office_state_get,
+        "office.transcript_get": handle_office_transcript_get,
         "office.commands_list": handle_commands_list,
         "office.room_set": handle_office_room_set,
         "office.nancy_route": handle_office_nancy_route,

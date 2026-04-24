@@ -50,6 +50,32 @@ export type FileRecord = {
   [key: string]: unknown;
 };
 
+export type TranscriptEntry = {
+  ts?: string;
+  role?: string;
+  room?: string;
+  text?: string;
+  speaker?: string;
+  [key: string]: unknown;
+};
+
+type FileListEnvelope = {
+  structuredContent?: {
+    workspace_id?: string;
+    count?: number;
+    files?: FileRecord[];
+  };
+  workspace_id?: string;
+  count?: number;
+  files?: FileRecord[];
+  [key: string]: unknown;
+};
+
+type FileRecordEnvelope = {
+  structuredContent?: FileRecord;
+  [key: string]: unknown;
+} & Partial<FileRecord>;
+
 function backendBaseUrl(): string {
   return process.env.NEXT_PUBLIC_VERIDEX_API_BASE_URL ?? "";
 }
@@ -193,6 +219,12 @@ export async function callTool(tool: string, arguments_: Record<string, unknown>
   return (await response.json()) as ToolResponse;
 }
 
+export async function loadTranscript(limit = 100): Promise<TranscriptEntry[]> {
+  const response = await callTool("office.transcript_get", { limit });
+  const structured = response.structuredContent as { entries?: unknown } | undefined;
+  return Array.isArray(structured?.entries) ? (structured.entries as TranscriptEntry[]) : [];
+}
+
 export async function uploadFile(payload: {
   name: string;
   content_text?: string;
@@ -208,10 +240,11 @@ export async function uploadFile(payload: {
   if (!sessionId) {
     throw new Error("Session ID required");
   }
-  return postJson<FileRecord>("/files/upload", {
+  const response = await postJson<FileRecordEnvelope>("/files", {
     ...payload,
     session_id: sessionId,
   });
+  return (response.structuredContent as FileRecord | undefined) ?? (response as FileRecord);
 }
 
 export async function listFiles(scope?: string, scope_ref?: string): Promise<{ workspace_id: string; count: number; files: FileRecord[] }> {
@@ -222,7 +255,13 @@ export async function listFiles(scope?: string, scope_ref?: string): Promise<{ w
   if (scope_ref) {
     query.set("scope_ref", scope_ref);
   }
-  return authorizedGetJson<{ workspace_id: string; count: number; files: FileRecord[] }>(`/files${query.toString() ? `?${query.toString()}` : ""}`);
+  const response = await authorizedGetJson<FileListEnvelope>(`/files${query.toString() ? `?${query.toString()}` : ""}`);
+  const structured = response.structuredContent;
+  return {
+    workspace_id: String(structured?.workspace_id ?? response.workspace_id ?? ""),
+    count: Number(structured?.count ?? response.count ?? 0),
+    files: Array.isArray(structured?.files) ? structured.files : Array.isArray(response.files) ? response.files : [],
+  };
 }
 
 export function fileDownloadUrl(file: FileRecord): string {
