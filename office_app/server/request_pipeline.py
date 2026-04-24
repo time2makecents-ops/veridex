@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import re
 from typing import Any, Dict, List, Optional
 
@@ -8,6 +9,12 @@ from fastapi import HTTPException
 from office_app.server.persona_registry import persona_profile_for_name
 from office_app.server.room_policy_registry import load_room_policies
 from office_app.server.room_router import rooms_payload, validate_room
+
+
+def normalize_room_text(value: str) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 class RequestPipeline:
@@ -68,6 +75,24 @@ class RequestPipeline:
         "enter ",
         "open ",
     )
+    ROOM_NAVIGATION_RE = re.compile(
+        r"\b(?:go|take|move|switch|bring|send|head|route|direct|return)(?:\s+me|\s+us)?\s+to\b|\bback\s+to\b",
+        re.IGNORECASE,
+    )
+    ROOM_NAVIGATION_AMBIGUOUS_CUES = (
+        "can you",
+        "could you",
+        "would you",
+        "please",
+        "i want",
+        "i need",
+        "i'd like",
+        "i would like",
+        "let's",
+        "we should",
+        "help me",
+        "maybe",
+    )
     SEARCH_WEB_HINTS = (
         "search the internet",
         "search the web",
@@ -96,6 +121,15 @@ class RequestPipeline:
         "hotels",
         "place",
         "places",
+    )
+    ROOM_STATUS_HINTS = (
+        "where am i",
+        "what room am i in",
+        "which room am i in",
+        "what room is this",
+        "where are we",
+        "current room",
+        "what room are we in",
     )
 
     def __init__(
@@ -214,6 +248,7 @@ class RequestPipeline:
             return re.search(pattern, text) is not None
 
         rules = [
+            (["my office"], "my_office"),
             (["contract", "legal", "law", "lawsuit", "liability", "agreement", "negotiation"], "law_office"),
             (["payroll", "accounting", "budget", "bank", "banking", "finance", "expense"], "finance_department"),
             (["computer", "it", "network", "wifi", "router", "software", "programming", "phone", "technical"], "it_department"),
@@ -247,6 +282,71 @@ class RequestPipeline:
             "persona": str(room.get("default_persona") or "Nancy"),
             "reason": "No strong department match found. Keeping request in My Office.",
         }
+
+    def extract_navigation_room(self, request_text: str) -> Optional[Dict[str, Any]]:
+        text = request_text.strip()
+        if not self.is_explicit_room_navigation(text):
+            return None
+
+        normalized = text.lower().strip()
+        normalized = re.sub(
+            r"^(?:go|take|move|switch|bring|send|head|route|direct|return)(?:\s+me|\s+us)?\s+to\s+",
+            "",
+            normalized,
+        )
+        normalized = re.sub(r"^back\s+to\s+", "", normalized)
+        normalized = normalized.strip(" .,!?:;")
+        if not normalized:
+            return None
+
+        rooms = rooms_payload()
+        candidates: List[Dict[str, Any]] = []
+        for room in rooms:
+            room_id = str(room.get("id") or "").strip()
+            room_title = str(room.get("title") or room_id).strip()
+            if not room_id or not room_title:
+                continue
+            room_id_norm = normalize_room_text(room_id)
+            room_title_norm = normalize_room_text(room_title)
+            if normalized == room_id_norm or normalized == room_title_norm:
+                return room
+            if normalized in {room_id_norm, room_title_norm}:
+                return room
+            candidates.append(
+                {
+                    "room": room,
+                    "aliases": [room_id_norm, room_title_norm],
+                }
+            )
+
+        alias_map: Dict[str, Dict[str, Any]] = {}
+        alias_keys: List[str] = []
+        for candidate in candidates:
+            room = candidate["room"]
+            for alias in candidate["aliases"]:
+                if alias and alias not in alias_map:
+                    alias_map[alias] = room
+                    alias_keys.append(alias)
+
+        if alias_keys:
+            matches = difflib.get_close_matches(normalized, alias_keys, n=1, cutoff=0.78)
+            if matches:
+                return alias_map[matches[0]]
+
+        return None
+
+    def room_navigation_requires_confirmation(self, request_text: str) -> bool:
+        text = request_text.strip().lower()
+        if not text:
+            return False
+        route = self.recommend_room(request_text)
+        if not route.get("matched"):
+            return False
+        if self.is_explicit_room_navigation(request_text):
+            return False
+        if " to " not in f" {text} ":
+            return False
+        return any(cue in text for cue in self.ROOM_NAVIGATION_AMBIGUOUS_CUES)
 
     def nancy_route(self, workspace_id: str, request_text: str) -> Dict[str, Any]:
         ctx = self.current_context(workspace_id)
@@ -376,6 +476,31 @@ class RequestPipeline:
                 **search_route,
             }
 
+        status_route = self.route_room_status_request(workspace_id, request_text)
+        if status_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **status_route,
+            }
+
+        navigation_room = self.extract_navigation_room(request_text)
+        if navigation_room is not None:
+            return {
+                "route_kind": "nancy",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                "capability": "room.navigate",
+                "tool": "office.room_set",
+                "arguments": {"workspace_id": workspace_id, "room_id": navigation_room["id"]},
+                "reason": f"Explicit room navigation to {navigation_room['title']}.",
+                "room_id": navigation_room["id"],
+                "room_title": navigation_room["title"],
+                "persona": str(navigation_room.get("default_persona") or "Navigator"),
+                "requires_confirmation": False,
+            }
+
         route = self.recommend_room(request_text)
         if route.get("matched") and self.is_explicit_room_navigation(request_text):
             return {
@@ -389,6 +514,21 @@ class RequestPipeline:
                 "room_id": route["room_id"],
                 "room_title": route["room_title"],
                 "persona": route["persona"],
+            }
+
+        if route.get("matched") and self.room_navigation_requires_confirmation(request_text):
+            return {
+                "route_kind": "nancy",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                "capability": "room.navigate",
+                "tool": "office.nancy_route",
+                "arguments": {"workspace_id": workspace_id, "request": request_text},
+                "reason": route["reason"],
+                "room_id": route["room_id"],
+                "room_title": route["room_title"],
+                "persona": route["persona"],
+                "requires_confirmation": True,
             }
 
         ctx = self.current_context(workspace_id)
@@ -474,6 +614,21 @@ class RequestPipeline:
 
         return None
 
+    def route_room_status_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = request_text.lower().strip()
+        if not text:
+            return None
+        if not any(hint in text for hint in self.ROOM_STATUS_HINTS):
+            return None
+        return {
+            "capability": "workspace.state.get",
+            "tool": "office.state_get",
+            "arguments": {
+                "workspace_id": workspace_id,
+            },
+            "reason": "Matched a room status query.",
+        }
+
     def route_ocr_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         text = request_text.lower().strip()
         if not text:
@@ -506,7 +661,7 @@ class RequestPipeline:
         text = request_text.strip().lower()
         if not text:
             return False
-        return any(text.startswith(prefix) for prefix in self.ROOM_NAVIGATION_PREFIXES)
+        return any(text.startswith(prefix) for prefix in self.ROOM_NAVIGATION_PREFIXES) or self.ROOM_NAVIGATION_RE.search(text) is not None
 
     def extract_location(self, request_text: str) -> Optional[str]:
         match = re.search(r"\bin\s+([A-Za-z][A-Za-z0-9 .,'&-]{1,60})", request_text, re.IGNORECASE)

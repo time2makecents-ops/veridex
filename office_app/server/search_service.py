@@ -223,7 +223,12 @@ class SearchService:
         lines = [f"Web results for '{query}':"]
         for index, result in enumerate(results, start=1):
             summary = result.snippet or result.url
-            lines.append(f"{index}. {result.title} [{result.source}] - {summary}")
+            lines.append(f"{index}. {result.title}")
+            lines.append(f"   Source: {result.source}")
+            if summary:
+                lines.append(f"   Snippet: {summary}")
+            if result.url:
+                lines.append(f"   URL: {result.url}")
         return "\n".join(lines)
 
     def _format_review_summary(self, query: str, results: List[Dict[str, Any]]) -> str:
@@ -236,8 +241,15 @@ class SearchService:
                 extras.append(f"rating {result['rating_hint']}")
             if result.get("review_count_hint"):
                 extras.append(f"{result['review_count_hint']} reviews")
-            extra_text = f" ({', '.join(extras)})" if extras else ""
-            lines.append(f"{index}. {result['title']} [{result['source']}] - {result['snippet'] or result['url']}{extra_text}")
+            lines.append(f"{index}. {result['title']}")
+            lines.append(f"   Source: {result.get('source') or 'web'}")
+            if extras:
+                lines.append(f"   Notes: {', '.join(extras)}")
+            summary = result.get("snippet") or result.get("url") or ""
+            if summary:
+                lines.append(f"   Snippet: {summary}")
+            if result.get("url"):
+                lines.append(f"   URL: {result['url']}")
         return "\n".join(lines)
 
     def _format_places_summary(self, query: str, results: List[Dict[str, Any]]) -> str:
@@ -245,5 +257,11 @@ class SearchService:
             return f"No place results found for '{query}'."
         lines = [f"Place results for '{query}':"]
         for index, result in enumerate(results, start=1):
-            lines.append(f"{index}. {result['title']} - {result['address']}")
+            lines.append(f"{index}. {result['title']}")
+            if result.get("address"):
+                lines.append(f"   Address: {result['address']}")
+            if result.get("source"):
+                lines.append(f"   Source: {result['source']}")
+            if result.get("url"):
+                lines.append(f"   URL: {result['url']}")
         return "\n".join(lines)

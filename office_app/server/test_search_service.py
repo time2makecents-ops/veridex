@@ -22,6 +22,8 @@ class SearchServiceTests(unittest.TestCase):
         self.assertEqual(len(result["results"]), 2)
         self.assertEqual(result["results"][0]["title"], "Example One")
         self.assertEqual(result["results"][0]["snippet"], "First snippet")
+        self.assertIn("Source:", result["summary_text"])
+        self.assertIn("URL:", result["summary_text"])
 
     def test_search_reviews_extracts_rating_hints(self) -> None:
         markup = """
@@ -36,6 +38,8 @@ class SearchServiceTests(unittest.TestCase):
         result = service.search_reviews(query="best restaurants in Eugene", limit=1)
         self.assertEqual(result["results"][0]["rating_hint"], "4.7")
         self.assertEqual(result["results"][0]["review_count_hint"], "128")
+        self.assertIn("Notes:", result["summary_text"])
+        self.assertIn("URL:", result["summary_text"])
 
     def test_search_places_formats_nominatim_results(self) -> None:
         payload = [
@@ -53,6 +57,8 @@ class SearchServiceTests(unittest.TestCase):
         result = service.search_places(query="coffee", location="Eugene", limit=1)
         self.assertEqual(result["results"][0]["title"], "Coffee Shop")
         self.assertIn("Eugene", result["results"][0]["address"])
+        self.assertIn("Address:", result["summary_text"])
+        self.assertIn("URL:", result["summary_text"])
 
 
 if __name__ == "__main__":

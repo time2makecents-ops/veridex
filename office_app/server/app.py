@@ -373,6 +373,90 @@ def handle_natural_language_request(
     request_text = str(payload.text or "").strip()
     ensure_artifact_workspace(workspace_id)
     user_profile = _session_user_profile(session_id)
+    current_state = kernel.get_state(workspace_id)
+    pending_navigation = _pending_room_navigation(current_state)
+    if pending_navigation and request_text:
+        if _is_confirmation_yes(request_text):
+            current_state.pop("pending_room_navigation", None)
+            store.save_state(workspace_id, current_state)
+            target_room = str(pending_navigation.get("room_id") or "").strip()
+            if not target_room:
+                raise HTTPException(status_code=400, detail="Pending room navigation target missing.")
+            result = router.dispatch_capability(
+                "room.navigate",
+                {
+                    "workspace_id": workspace_id,
+                    "room_id": target_room,
+                    "session_id": session_id,
+                },
+                preferred_tool="office.room_set",
+            )
+            structured_result = result.get("structuredContent") if isinstance(result, dict) else None
+            receptionist_context_service.record_turn(
+                workspace_id=workspace_id,
+                role="assistant",
+                text=_request_text_from_response(result),
+                room_id=str((structured_result or {}).get("active_room") or target_room),
+                persona_name=str((structured_result or {}).get("active_persona") or ""),
+                user_id=str((user_profile or {}).get("user_id") or "").strip() or None,
+                session_id=session_id,
+            )
+            store.append_transcript(
+                workspace_id,
+                "assistant",
+                str((structured_result or {}).get("active_room") or target_room),
+                _request_text_from_response(result),
+                speaker="System",
+            )
+            response = result
+            if isinstance(response, dict):
+                structured = response.get("structuredContent")
+                if isinstance(structured, dict):
+                    structured["routing"] = {
+                        "route_kind": "nancy",
+                        "capability": "room.navigate",
+                        "tool": "office.room_set",
+                        "reason": "Confirmed pending room navigation.",
+                        "auto_routed": True,
+                    }
+            return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
+
+        if _is_confirmation_no(request_text):
+            current_state.pop("pending_room_navigation", None)
+            store.save_state(workspace_id, current_state)
+            response_text = f"Okay. Staying in {current_state.get('active_room', 'lobby')}."
+            response = {
+                "structuredContent": {
+                    "workspace_id": workspace_id,
+                    "session_id": session_id,
+                    "response_text": response_text,
+                    "routing": {
+                        "route_kind": "model",
+                        "capability": "ai.respond",
+                        "tool": "office.ai_generate",
+                        "reason": "Cleared pending room navigation on negative confirmation.",
+                    },
+                },
+                "content": [{"type": "text", "text": response_text}],
+            }
+            receptionist_context_service.record_turn(
+                workspace_id=workspace_id,
+                role="assistant",
+                text=response_text,
+                room_id=str(current_state.get("active_room") or "lobby"),
+                persona_name=str(current_state.get("active_persona") or "Receptionist"),
+                user_id=str((user_profile or {}).get("user_id") or "").strip() or None,
+                session_id=session_id,
+            )
+            store.append_transcript(
+                workspace_id,
+                "assistant",
+                str(current_state.get("active_room") or "lobby"),
+                response_text,
+                speaker=str(current_state.get("active_persona") or "Receptionist"),
+            )
+            return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
+
     routed = pipeline.route_user_request(workspace_id, request_text)
 
     should_record = routed["route_kind"] in {"model", "nancy", "tool"}
@@ -457,6 +541,52 @@ def handle_natural_language_request(
         return enriched
 
     if routed["route_kind"] == "nancy":
+        if routed.get("requires_confirmation"):
+            current_state = kernel.get_state(workspace_id)
+            current_state["pending_room_navigation"] = {
+                "room_id": routed.get("room_id"),
+                "room_title": routed.get("room_title"),
+                "persona": routed.get("persona"),
+                "request_text": request_text,
+                "ts": utc_now(),
+            }
+            store.save_state(workspace_id, current_state)
+            response_text = f"Did you want me to move you to {routed.get('room_title')} ({routed.get('persona')})?"
+            response = {
+                "structuredContent": {
+                    "workspace_id": workspace_id,
+                    "session_id": session_id,
+                    "response_text": response_text,
+                    "requires_confirmation": True,
+                    "pending_room_navigation": current_state["pending_room_navigation"],
+                    "routing": {
+                        "route_kind": "nancy",
+                        "capability": routed["capability"],
+                        "tool": routed["tool"],
+                        "reason": routed["reason"],
+                        "auto_routed": False,
+                    },
+                },
+                "content": [{"type": "text", "text": response_text}],
+            }
+            receptionist_context_service.record_turn(
+                workspace_id=workspace_id,
+                role="assistant",
+                text=response_text,
+                room_id=str(current_state.get("active_room") or "lobby"),
+                persona_name=str(current_state.get("active_persona") or "Receptionist"),
+                user_id=str((user_profile or {}).get("user_id") or "").strip() or None,
+                session_id=session_id,
+            )
+            store.append_transcript(
+                workspace_id,
+                "assistant",
+                str(current_state.get("active_room") or "lobby"),
+                response_text,
+                speaker=str(current_state.get("active_persona") or "Receptionist"),
+            )
+            return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
+
         target_room = str(routed.get("room_id") or "").strip()
         if not target_room:
             raise HTTPException(status_code=400, detail="Room navigation target missing.")
@@ -1027,6 +1157,20 @@ def _parse_bool(value: Any, default: bool = False) -> bool:
     if text in {"0", "false", "no", "n", "off"}:
         return False
     return default
+
+
+def _is_confirmation_yes(text: str) -> bool:
+    return _parse_bool(text, default=False)
+
+
+def _is_confirmation_no(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    return normalized in {"0", "false", "no", "n", "off"}
+
+
+def _pending_room_navigation(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    pending = state.get("pending_room_navigation")
+    return pending if isinstance(pending, dict) else None
 
 
 def _normalize_artifact_scope(args: Dict[str, Any], workspace_id: str) -> str:

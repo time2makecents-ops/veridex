@@ -98,6 +98,29 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "room.navigate")
         self.assertEqual(routed["room_id"], "it_department")
 
+    def test_go_to_my_office_routes_to_my_office(self) -> None:
+        routed = self.pipeline.route_user_request("default", "go to my office")
+        self.assertEqual(routed["route_kind"], "nancy")
+        self.assertEqual(routed["capability"], "room.navigate")
+        self.assertEqual(routed["room_id"], "my_office")
+        self.assertEqual(routed["room_title"], "My Office")
+        self.assertFalse(routed.get("requires_confirmation", False))
+
+    def test_go_to_conference_room_routes_to_conference_room(self) -> None:
+        routed = self.pipeline.route_user_request("default", "go to conference room")
+        self.assertEqual(routed["route_kind"], "nancy")
+        self.assertEqual(routed["capability"], "room.navigate")
+        self.assertEqual(routed["room_id"], "conference_room")
+        self.assertEqual(routed["room_title"], "Conference Room")
+        self.assertFalse(routed.get("requires_confirmation", False))
+
+    def test_conversational_room_reference_requires_confirmation(self) -> None:
+        routed = self.pipeline.route_user_request("default", "can you talk to my office manager?")
+        self.assertEqual(routed["route_kind"], "nancy")
+        self.assertEqual(routed["capability"], "room.navigate")
+        self.assertEqual(routed["room_id"], "my_office")
+        self.assertTrue(routed.get("requires_confirmation", False))
+
     def test_review_request_routes_to_review_search(self) -> None:
         routed = self.pipeline.route_user_request(
             "default",
@@ -142,6 +165,12 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
     def test_room_name_alone_does_not_switch_rooms(self) -> None:
         routed = self.pipeline.route_user_request("default", "break room")
         self.assertEqual(routed["route_kind"], "model")
+
+    def test_room_status_query_routes_to_state_get(self) -> None:
+        routed = self.pipeline.route_user_request("default", "where am i?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "workspace.state.get")
+        self.assertEqual(routed["tool"], "office.state_get")
 
 
 if __name__ == "__main__":
