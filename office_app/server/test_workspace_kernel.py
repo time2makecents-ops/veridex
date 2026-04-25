@@ -30,6 +30,29 @@ class WorkspaceKernelTranscriptTests(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_session_transcripts_are_isolated_from_workspace_transcript(self) -> None:
+        tmp = Path("C:/Office-App/office_app/runtime/test_workspace_kernel_sessions")
+        if tmp.exists():
+            shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            store = WorkspaceStore(tmp, utc_now_fn=lambda: "2026-04-24T00:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-24T00:00:00Z")
+            kernel.create_workspace("ws_test", "Test")
+            store.append_transcript("ws_test", "user", "lobby", "workspace hello", speaker="You")
+            store.append_transcript("ws_test", "user", "lobby", "session hello", speaker="You", session_id="sess_alpha")
+
+            workspace_rows = store.load_transcript("ws_test", limit=10)
+            session_rows = store.load_transcript("ws_test", limit=10, session_id="sess_alpha")
+
+            self.assertEqual(len(workspace_rows), 2)
+            self.assertEqual(workspace_rows[-1]["text"], "workspace hello")
+            self.assertEqual(len(session_rows), 1)
+            self.assertEqual(session_rows[0]["text"], "session hello")
+            self.assertEqual(session_rows[0]["session_id"], "sess_alpha")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

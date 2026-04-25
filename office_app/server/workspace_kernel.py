@@ -40,7 +40,9 @@ class WorkspaceStore:
     def state_path(self, workspace_id: str) -> Path:
         return self.workspace_dir(workspace_id) / "state.json"
 
-    def transcript_path(self, workspace_id: str) -> Path:
+    def transcript_path(self, workspace_id: str, session_id: Optional[str] = None) -> Path:
+        if session_id:
+            return self.workspace_dir(workspace_id) / "sessions" / session_id / "transcript.ndjson"
         return self.workspace_dir(workspace_id) / "transcript.ndjson"
 
     def memos_dir(self, workspace_id: str) -> Path:
@@ -63,17 +65,20 @@ class WorkspaceStore:
         text: str,
         *,
         speaker: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         entry = {"ts": self.utc_now(), "role": role, "room": room_id, "text": text}
         if speaker:
             entry["speaker"] = speaker
-        tp = self.transcript_path(workspace_id)
+        if session_id:
+            entry["session_id"] = session_id
+        tp = self.transcript_path(workspace_id, session_id=session_id)
         tp.parent.mkdir(parents=True, exist_ok=True)
         with tp.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
 
-    def load_transcript(self, workspace_id: str, limit: int = 100) -> List[Dict[str, Any]]:
-        tp = self.transcript_path(workspace_id)
+    def load_transcript(self, workspace_id: str, limit: int = 100, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        tp = self.transcript_path(workspace_id, session_id=session_id)
         if not tp.exists():
             return []
         rows: List[Dict[str, Any]] = []
@@ -202,7 +207,7 @@ class WorkspaceKernel:
             "active_persona_profile": persona_profile_for_name(active_persona),
         }
 
-    def enter_room(self, workspace_id: str, room_id: str) -> Dict[str, Any]:
+    def enter_room(self, workspace_id: str, room_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         state = self.get_state(workspace_id)
         previous_room = state.get("active_room", "lobby")
 
@@ -221,6 +226,7 @@ class WorkspaceKernel:
             target_external,
             f"Now in {room['title']}. Persona: {state['active_persona']}.",
             speaker="System",
+            session_id=session_id,
         )
 
         return {

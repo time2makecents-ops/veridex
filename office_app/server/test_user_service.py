@@ -106,23 +106,28 @@ class UserServiceTests(unittest.TestCase):
 
             created = service.onboard_user(name="Grace", pin_code="1357")
             workspace_id = created["workspace_id"]
-            second_workspace = "ws_return"
-            kernel.create_workspace(second_workspace, "Grace")
+            second = service.create_session(
+                user_id=created["user"]["user_id"],
+                title="Return Session",
+                description="Return to the project thread.",
+                workspace_id=created["workspace_id"],
+            )
             service.store.update_user(
                 created["user"]["user_id"],
                 {
-                    "last_active_workspace_id": second_workspace,
+                    "last_active_workspace_id": created["workspace_id"],
+                    "last_active_session_id": second["session_id"],
                     "updated_at": "2026-04-17T12:00:00Z",
                 },
             )
 
             restored = service.enter_lobby(pin_code="1357")
-            self.assertEqual(restored["workspace_id"], second_workspace)
-            self.assertEqual(restored["user"]["last_active_workspace_id"], second_workspace)
-            self.assertEqual(restored["session_id"], created["session_id"])
-            self.assertEqual(service.resolve_workspace_for_session(restored["session_id"]), second_workspace)
+            self.assertEqual(restored["workspace_id"], created["workspace_id"])
+            self.assertEqual(restored["user"]["last_active_workspace_id"], created["workspace_id"])
+            self.assertEqual(restored["session_id"], second["session_id"])
+            self.assertEqual(service.resolve_workspace_for_session(restored["session_id"]), created["workspace_id"])
             self.assertTrue((workspaces_dir / workspace_id / "state.json").exists())
-            self.assertTrue((workspaces_dir / second_workspace / "state.json").exists())
+            self.assertTrue((workspaces_dir / created["workspace_id"] / "state.json").exists())
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 
@@ -139,6 +144,65 @@ class UserServiceTests(unittest.TestCase):
 
             with self.assertRaises(HTTPException):
                 service.enter_lobby(pin_code="9999")
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_session_creation_and_activation_updates_last_active_session(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_sessions"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            service = UserService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+
+            created = service.onboard_user(name="Mina", pin_code="1122")
+            first_session_id = created["session_id"]
+            second = service.create_session(
+                user_id=created["user"]["user_id"],
+                title="Event Flier",
+                description="Design the flier for the fundraiser.",
+                workspace_id=created["workspace_id"],
+            )
+
+            sessions = service.list_sessions(created["user"]["user_id"])
+            self.assertEqual(len(sessions), 2)
+            current = next((session for session in sessions if session["session_id"] == second["session_id"]), None)
+            self.assertIsNotNone(current)
+            self.assertEqual(current["title"], "Event Flier")
+            self.assertEqual(current["description"], "Design the flier for the fundraiser.")
+            self.assertEqual(service.store.fetch_user(created["user"]["user_id"])["last_active_session_id"], second["session_id"])
+
+            restored = service.select_session_for_user(first_session_id)
+            self.assertEqual(restored["session_id"], first_session_id)
+            self.assertEqual(service.store.fetch_user(created["user"]["user_id"])["last_active_session_id"], first_session_id)
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_activate_workspace_creates_or_restores_session_in_workspace(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_workspace_activate"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            service = UserService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+
+            created = service.onboard_user(name="Ivy", pin_code="7788")
+            workspace_id = created["workspace_id"]
+
+            activated = service.activate_workspace(user_id=created["user"]["user_id"], workspace_id=workspace_id)
+            self.assertEqual(activated["workspace_id"], workspace_id)
+            self.assertEqual(activated["session"]["active_workspace_id"], workspace_id)
+            self.assertEqual(service.store.fetch_user(created["user"]["user_id"])["last_active_workspace_id"], workspace_id)
+            self.assertEqual(service.store.fetch_user(created["user"]["user_id"])["last_active_session_id"], activated["session"]["session_id"])
+
+            workspaces = service.list_user_workspaces(created["user"]["user_id"])
+            self.assertTrue(any(item["workspace_id"] == workspace_id for item in workspaces))
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 

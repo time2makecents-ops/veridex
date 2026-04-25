@@ -120,7 +120,6 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             )
         context = {
             **context,
-            "receptionist_context": receptionist_context,
             "room_directory_text": receptionist_context.get("room_directory_text", ""),
             "known_user_profile_text": receptionist_context.get("known_user_profile_text", ""),
             "session_summary_text": receptionist_context.get("session_summary_text", ""),

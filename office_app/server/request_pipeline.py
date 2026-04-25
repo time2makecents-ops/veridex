@@ -122,6 +122,33 @@ class RequestPipeline:
         "place",
         "places",
     )
+    SEARCH_DISCOVERY_HINTS = (
+        "find",
+        "show me",
+        "list",
+        "recommend",
+        "nearest",
+        "nearby",
+        "where is",
+        "where are",
+        "what's near",
+        "whats near",
+        "what is near",
+        "give me",
+    )
+    SEARCH_BUSINESS_ADVICE_HINTS = (
+        "increase food sales",
+        "increase sales",
+        "boost sales",
+        "improve sales",
+        "grow sales",
+        "sales strategy",
+        "marketing strategy",
+        "how do you increase",
+        "how can i increase",
+        "revenue strategy",
+        "how do i improve",
+    )
     ROOM_STATUS_HINTS = (
         "where am i",
         "what room am i in",
@@ -130,6 +157,13 @@ class RequestPipeline:
         "where are we",
         "current room",
         "what room are we in",
+    )
+    SESSION_CREATE_HINTS = (
+        "new session",
+        "start new session",
+        "create new session",
+        "start a new session",
+        "create a new session",
     )
 
     def __init__(
@@ -485,6 +519,15 @@ class RequestPipeline:
                 **status_route,
             }
 
+        session_route = self.route_session_request(workspace_id, request_text)
+        if session_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **session_route,
+            }
+
         navigation_room = self.extract_navigation_room(request_text)
         if navigation_room is not None:
             return {
@@ -571,10 +614,19 @@ class RequestPipeline:
         if not text:
             return None
 
+        if any(hint in text for hint in self.SEARCH_BUSINESS_ADVICE_HINTS):
+            if not any(hint in text for hint in self.SEARCH_WEB_HINTS) and not any(
+                hint in text for hint in self.SEARCH_REVIEW_HINTS
+            ):
+                return None
+
         location = self.extract_location(request_text)
         time_window = self.extract_time_window(text)
+        review_signal = any(hint in text for hint in self.SEARCH_REVIEW_HINTS) or any(
+            hint in text for hint in ("top", "best", "highest", "rated")
+        )
 
-        if any(hint in text for hint in self.SEARCH_REVIEW_HINTS) and any(hint in text for hint in self.SEARCH_PLACE_HINTS):
+        if review_signal and any(hint in text for hint in self.SEARCH_PLACE_HINTS):
             return {
                 "capability": "search.reviews",
                 "tool": "office.search_reviews",
@@ -598,7 +650,9 @@ class RequestPipeline:
                 "reason": "Matched explicit web search intent.",
             }
 
-        if any(hint in text for hint in self.SEARCH_PLACE_HINTS) and ("find" in text or location or "near" in text):
+        if any(hint in text for hint in self.SEARCH_PLACE_HINTS) and (
+            any(hint in text for hint in self.SEARCH_DISCOVERY_HINTS) or location is not None or " near " in f" {text} "
+        ):
             category = self.extract_place_category(text)
             return {
                 "capability": "search.places",
@@ -627,6 +681,30 @@ class RequestPipeline:
                 "workspace_id": workspace_id,
             },
             "reason": "Matched a room status query.",
+        }
+
+    def route_session_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = request_text.lower().strip()
+        if not text:
+            return None
+        if not any(hint in text for hint in self.SESSION_CREATE_HINTS):
+            return None
+        title = re.sub(r"^(?:new|start|create)(?:\s+a|\s+an|\s+the)?\s+session", "", request_text, flags=re.IGNORECASE).strip(" .,:;")
+        if title.lower().startswith("for "):
+            title = title[4:].strip(" .,:;")
+        if title.lower().startswith("about "):
+            title = title[6:].strip(" .,:;")
+        if not title:
+            title = "New Session"
+        return {
+            "capability": "session.create",
+            "tool": "office.session_create",
+            "arguments": {
+                "title": title,
+                "description": title,
+                "request_text": request_text,
+            },
+            "reason": "Matched a new session request.",
         }
 
     def route_ocr_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:

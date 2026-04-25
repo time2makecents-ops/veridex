@@ -122,6 +122,7 @@ class UserService:
             "onboarding_complete": bool(record.get("onboarding_complete")),
             "default_workspace_id": record.get("default_workspace_id"),
             "last_active_workspace_id": record.get("last_active_workspace_id"),
+            "last_active_session_id": record.get("last_active_session_id"),
             "created_at": record.get("created_at"),
             "updated_at": record.get("updated_at"),
             "has_face_photo": bool(photo_file_name),
@@ -142,28 +143,128 @@ class UserService:
             self.kernel.create_workspace(workspace_id, label)
             return self.kernel.get_state(workspace_id)
 
-    def _create_or_return_session(self, user_id: str, workspace_id: str) -> Dict[str, Any]:
-        existing = self.sessions.fetch_session_for_user(user_id)
-        now = self.utc_now()
-        if existing is None:
-            session = self.sessions.insert_session(
-                {
-                    "session_id": f"sess_{uuid.uuid4().hex[:12]}",
-                    "user_id": user_id,
-                    "active_workspace_id": workspace_id,
-                    "created_at": now,
-                    "updated_at": now,
-                }
-            )
-            return session
+    def _default_session_title(self, workspace_label: str) -> str:
+        text = self._normalize_text(workspace_label) or "Session"
+        if len(text) > 48:
+            return text[:48].rstrip()
+        return text
 
-        return self.sessions.update_session(
-            existing["session_id"],
+    def _create_session_record(
+        self,
+        *,
+        user_id: str,
+        workspace_id: str,
+        title: str,
+        description: str = "",
+    ) -> Dict[str, Any]:
+        now = self.utc_now()
+        return self.sessions.insert_session(
             {
+                "session_id": f"sess_{uuid.uuid4().hex[:12]}",
+                "user_id": user_id,
+                "title": self._normalize_text(title) or "Session",
+                "description": self._normalize_text(description),
                 "active_workspace_id": workspace_id,
+                "created_at": now,
+                "updated_at": now,
+                "last_active_at": now,
+            }
+        )
+
+    def _activate_session(self, user_id: str, session_id: str) -> Dict[str, Any]:
+        session = self.sessions.fetch_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found.")
+        now = self.utc_now()
+        activated = self.sessions.update_session(
+            session_id,
+            {
+                "last_active_at": now,
                 "updated_at": now,
             },
         )
+        self.store.update_user(
+            user_id,
+            {
+                "last_active_workspace_id": activated["active_workspace_id"],
+                "last_active_session_id": activated["session_id"],
+                "updated_at": now,
+            },
+        )
+        return activated
+
+    def create_session(
+        self,
+        *,
+        user_id: str,
+        title: str,
+        description: str = "",
+        workspace_id: Optional[str] = None,
+        workspace_label: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        workspace_title = self._normalize_text(workspace_label) or self._default_session_title(title)
+        if workspace_id:
+            workspace_id = str(workspace_id).strip()
+            self._ensure_workspace(workspace_id, workspace_title)
+        else:
+            workspace_id = f"ws_{uuid.uuid4().hex[:8]}"
+            self.kernel.create_workspace(workspace_id, workspace_title)
+        session = self._create_session_record(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            title=title or workspace_title,
+            description=description,
+        )
+        self.kernel.store.append_transcript(
+            workspace_id,
+            "system",
+            "lobby",
+            f"Session created: {session['title']}",
+            speaker="System",
+            session_id=session["session_id"],
+        )
+        self.store.update_user(
+            user_id,
+            {
+                "last_active_workspace_id": workspace_id,
+                "last_active_session_id": session["session_id"],
+                "updated_at": self.utc_now(),
+            },
+        )
+        return session
+
+    def list_sessions(self, user_id: str, workspace_id: Optional[str] = None) -> list[Dict[str, Any]]:
+        return self.sessions.list_sessions_for_user(user_id, workspace_id=workspace_id)
+
+    def list_user_workspaces(self, user_id: str) -> list[Dict[str, Any]]:
+        sessions = self.sessions.list_sessions_for_user(user_id)
+        workspaces: Dict[str, Dict[str, Any]] = {}
+        index = self.kernel.list_workspaces()
+        labels = {str(row.get("workspace_id") or ""): str(row.get("label") or "") for row in index.get("workspaces", []) if isinstance(row, dict)}
+        for session in sessions:
+            workspace_id = str(session.get("active_workspace_id") or "").strip()
+            if not workspace_id:
+                continue
+            entry = workspaces.setdefault(
+                workspace_id,
+                {
+                    "workspace_id": workspace_id,
+                    "label": labels.get(workspace_id) or workspace_id,
+                    "session_count": 0,
+                    "last_active_at": "",
+                    "last_session_id": "",
+                },
+            )
+            entry["session_count"] += 1
+            session_active_at = str(session.get("last_active_at") or session.get("updated_at") or "")
+            if session_active_at >= str(entry.get("last_active_at") or ""):
+                entry["last_active_at"] = session_active_at
+                entry["last_session_id"] = str(session.get("session_id") or "")
+        rows = sorted(workspaces.values(), key=lambda item: (str(item.get("last_active_at") or ""), str(item.get("workspace_id") or "")), reverse=True)
+        return rows
+
+    def latest_session_for_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        return self.sessions.fetch_session_for_user(user_id)
 
     def onboard_user(
         self,
@@ -197,12 +298,26 @@ class UserService:
                 "onboarding_complete": True,
                 "default_workspace_id": workspace_id,
                 "last_active_workspace_id": workspace_id,
+                "last_active_session_id": "",
                 "created_at": now,
                 "updated_at": now,
             }
         )
         self._sync_user_folder(record)
-        session = self._create_or_return_session(user_id, workspace_id)
+        session = self._create_session_record(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            title=display_text,
+            description="Initial onboarding session.",
+        )
+        self.store.update_user(
+            user_id,
+            {
+                "last_active_session_id": session["session_id"],
+                "last_active_workspace_id": workspace_id,
+                "updated_at": now,
+            },
+        )
 
         state = self.kernel.get_state(workspace_id)
         return {
@@ -225,15 +340,28 @@ class UserService:
             raise HTTPException(status_code=409, detail="User profile is missing a workspace link.")
 
         workspace_state = self._ensure_workspace(workspace_id, record.get("display_name") or record.get("name") or "Workspace")
+        last_active_session_id = str(record.get("last_active_session_id") or "").strip()
+        session = self.sessions.fetch_session(last_active_session_id) if last_active_session_id else None
+        if session is None:
+            session = self.sessions.fetch_session_for_user(record["user_id"], workspace_id=workspace_id)
+        if session is None:
+            session = self._create_session_record(
+                user_id=record["user_id"],
+                workspace_id=workspace_id,
+                title=str(record.get("display_name") or record.get("name") or "Session"),
+                description="Restored session.",
+            )
+        else:
+            session = self._activate_session(record["user_id"], session["session_id"])
         updated = self.store.update_user(
             record["user_id"],
             {
                 "last_active_workspace_id": workspace_id,
+                "last_active_session_id": session["session_id"],
                 "updated_at": self.utc_now(),
             },
         )
         self._sync_user_folder(updated)
-        session = self._create_or_return_session(record["user_id"], workspace_id)
 
         return {
             "user": self._decorate_user(updated),
@@ -274,3 +402,54 @@ class UserService:
         if record is None:
             raise HTTPException(status_code=404, detail="User not found.")
         return self._decorate_user(record)
+
+    def create_session_from_current(self, session_id: str, *, title: str, description: str = "") -> Dict[str, Any]:
+        current_session = self.get_session(session_id)
+        user_id = str(current_session.get("user_id") or "").strip()
+        if not user_id:
+            raise HTTPException(status_code=404, detail="User not found.")
+        return self.create_session(
+            user_id=user_id,
+            title=title,
+            description=description,
+            workspace_id=str(current_session.get("active_workspace_id") or "").strip() or None,
+            workspace_label=title,
+        )
+
+    def activate_workspace(self, *, user_id: str, workspace_id: str) -> Dict[str, Any]:
+        workspace_id = str(workspace_id or "").strip()
+        if not workspace_id:
+            raise HTTPException(status_code=400, detail="Workspace ID required.")
+        workspace_state = self._ensure_workspace(workspace_id, workspace_id)
+        workspace_label = str(workspace_state.get("workspace_id") or workspace_id)
+        session = self.sessions.fetch_session_for_user(user_id, workspace_id=workspace_id)
+        if session is None:
+            session = self.create_session(
+                user_id=user_id,
+                title=workspace_label,
+                description=f"Workspace session for {workspace_label}.",
+                workspace_id=workspace_id,
+                workspace_label=workspace_label,
+            )
+        else:
+            session = self._activate_session(user_id, str(session["session_id"]))
+        self.store.update_user(
+            user_id,
+            {
+                "last_active_workspace_id": workspace_id,
+                "last_active_session_id": session["session_id"],
+                "updated_at": self.utc_now(),
+            },
+        )
+        return {
+            "workspace_id": workspace_id,
+            "session": session,
+            "workspace_state": self.kernel.get_state(workspace_id),
+        }
+
+    def select_session_for_user(self, session_id: str) -> Dict[str, Any]:
+        session = self.get_session(session_id)
+        user_id = str(session.get("user_id") or "").strip()
+        if not user_id:
+            raise HTTPException(status_code=404, detail="User not found.")
+        return self._activate_session(user_id, session_id)

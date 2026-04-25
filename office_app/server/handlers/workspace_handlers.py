@@ -10,15 +10,67 @@ from .dependencies import HandlerDeps
 
 
 def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
-    def handle_workspaces_list(_: Dict[str, Any]) -> Dict[str, Any]:
-        idx = deps.kernel.list_workspaces()
+    def handle_workspaces_list(args: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = str(args.get("session_id") or "").strip()
+        if session_id:
+            try:
+                user = deps.user_service.get_user_for_session(session_id)
+                current_workspace_id = str(deps.user_service.resolve_workspace_for_session(session_id) or "").strip()
+                workspaces = deps.user_service.list_user_workspaces(str(user["user_id"]))
+                if current_workspace_id:
+                    workspaces = sorted(
+                        workspaces,
+                        key=lambda row: (
+                            0 if str(row.get("workspace_id") or "").strip() == current_workspace_id else 1,
+                            str(row.get("last_active_at") or ""),
+                            str(row.get("workspace_id") or ""),
+                        ),
+                    )
+                idx = {
+                    "workspaces": workspaces,
+                    "current_workspace_id": current_workspace_id,
+                }
+            except Exception:
+                idx = deps.kernel.list_workspaces()
+        else:
+            idx = deps.kernel.list_workspaces()
         return deps.pipeline.workspaces_list_response(idx)
 
     def handle_workspace_new(args: Dict[str, Any]) -> Dict[str, Any]:
-        workspace_id = f"ws_{uuid.uuid4().hex[:8]}"
         label = str(args.get("label") or f"Workspace {deps.utc_now()}")
+        label_key = label.strip().casefold()
+        idx = deps.kernel.list_workspaces()
+        for row in idx.get("workspaces", []):
+            existing_label = str(row.get("label") or "").strip()
+            if existing_label and existing_label.casefold() == label_key:
+                workspace_id = str(row.get("workspace_id") or "").strip()
+                if workspace_id:
+                    return deps.pipeline.workspace_new_response(workspace_id, existing_label)
+        workspace_id = f"ws_{uuid.uuid4().hex[:8]}"
         deps.kernel.create_workspace(workspace_id, label)
         return deps.pipeline.workspace_new_response(workspace_id, label)
+
+    def handle_workspace_activate(args: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = str(args.get("session_id") or "").strip()
+        workspace_id = str(args.get("workspace_id") or "").strip()
+        if not session_id:
+            raise error_missing_required_field("session_id")
+        if not workspace_id:
+            raise error_missing_required_field("workspace_id")
+        user = deps.user_service.get_user_for_session(session_id)
+        result = deps.user_service.activate_workspace(user_id=str(user["user_id"]), workspace_id=workspace_id)
+        workspace_state = result["workspace_state"]
+        session = result["session"]
+        return {
+            "structuredContent": {
+                "workspace_id": result["workspace_id"],
+                "session_id": session["session_id"],
+                "title": session["title"],
+                "description": session["description"],
+                "workspace_state": workspace_state,
+            },
+            "content": [{"type": "text", "text": f"Activated workspace {workspace_id}."}],
+        }
 
     def handle_office_bootstrap(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
@@ -45,15 +97,17 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
 
     def handle_office_transcript_get(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
+        session_id = str(args.get("session_id") or "").strip() or None
         limit_value = args.get("limit")
         try:
             limit = int(limit_value) if limit_value is not None else 100
         except (TypeError, ValueError):
             limit = 100
-        rows = deps.store.load_transcript(workspace_id, limit=max(1, min(limit, 500)))
+        rows = deps.store.load_transcript(workspace_id, limit=max(1, min(limit, 500)), session_id=session_id)
         return {
             "structuredContent": {
                 "workspace_id": workspace_id,
+                "session_id": session_id,
                 "count": len(rows),
                 "entries": rows,
             },
@@ -73,11 +127,12 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
 
     def handle_office_room_set(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
+        session_id = str(args.get("session_id") or "").strip() or None
         room_id = str(args.get("room_id", "")).strip()
         if not room_id:
             raise error_missing_required_field("room_id")
 
-        result = deps.kernel.enter_room(workspace_id, room_id)
+        result = deps.kernel.enter_room(workspace_id, room_id, session_id=session_id)
         state = deps.kernel.get_state(workspace_id)
 
         deps.append_incident(
@@ -104,6 +159,7 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
     return {
         "office.workspaces_list": handle_workspaces_list,
         "office.workspace_new": handle_workspace_new,
+        "office.workspace_activate": handle_workspace_activate,
         "office.bootstrap": handle_office_bootstrap,
         "office.state_get": handle_office_state_get,
         "office.transcript_get": handle_office_transcript_get,

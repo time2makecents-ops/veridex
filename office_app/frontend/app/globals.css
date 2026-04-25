@@ -105,6 +105,37 @@ button {
   white-space: nowrap;
 }
 
+.workspace-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+  justify-content: flex-end;
+  color: var(--text);
+  font-size: 0.88rem;
+}
+
+.workspace-inline-label {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+}
+
+.workspace-inline-value {
+  font-weight: 700;
+}
+
+.session-input,
+.session-description {
+  width: 100%;
+}
+
+.session-description {
+  resize: vertical;
+  min-height: 84px;
+}
+
 .lobby-title-row {
   display: flex;
   align-items: flex-start;
@@ -116,6 +147,12 @@ button {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.toolbar-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .toolbar-button {

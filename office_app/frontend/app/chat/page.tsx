@@ -3,8 +3,27 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { callTool, extractFileText, fileDownloadUrl, listFiles, loadTranscript, request, requestText, uploadFile, type FileRecord, type TranscriptEntry } from "@/lib/api";
-import { clearStoredSessionId, getSessionShortLabel, getStoredSessionId } from "@/lib/session";
+import {
+  activateSession,
+  activateWorkspace,
+  callTool,
+  createSession,
+  createWorkspace,
+  extractFileText,
+  fileDownloadUrl,
+  listFiles,
+  listSessions,
+  listWorkspaces,
+  loadTranscript,
+  request,
+  requestText,
+  uploadFile,
+  type FileRecord,
+  type WorkspaceRecord,
+  type SessionRecord,
+  type TranscriptEntry,
+} from "@/lib/api";
+import { clearStoredSessionId, getSessionShortLabel, getStoredSessionId, setStoredSessionId } from "@/lib/session";
 import { ROOM_GROUPS, ROOMS, type RoomInfo } from "@/lib/rooms";
 
 type LobbyState = {
@@ -19,6 +38,7 @@ type Message = {
   text: string;
   speaker?: string;
   room?: string;
+  sessionId?: string;
 };
 
 type SavedFileNotice = {
@@ -73,11 +93,21 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(false);
   const [switchingRoom, setSwitchingRoom] = useState<string>("");
   const [roomMenuOpen, setRoomMenuOpen] = useState(false);
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [saveMenuOpen, setSaveMenuOpen] = useState(false);
   const [loadMenuOpen, setLoadMenuOpen] = useState(false);
   const [attachmentOpen, setAttachmentOpen] = useState(false);
   const [attachmentMode, setAttachmentMode] = useState<"upload" | "download">("download");
   const [recentRooms, setRecentRooms] = useState<string[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([]);
+  const [workspacesLoading, setWorkspacesLoading] = useState(false);
+  const [workspaceTitleDraft, setWorkspaceTitleDraft] = useState("");
+  const [activeWorkspaceLabel, setActiveWorkspaceLabel] = useState("");
+  const [sessions, setSessions] = useState<SessionRecord[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionTitleDraft, setSessionTitleDraft] = useState("");
+  const [sessionDescriptionDraft, setSessionDescriptionDraft] = useState("");
   const [fileKind, setFileKind] = useState("document");
   const [fileScope, setFileScope] = useState<FileScope>("room");
   const [loadScope, setLoadScope] = useState<FileScope>("room");
@@ -129,7 +159,7 @@ export default function ChatPage() {
       try {
         const [stateResponse, transcriptEntries] = await Promise.all([
           callTool("office.state_get", {}),
-          loadTranscript(120),
+          loadTranscript(120, sessionId),
         ]);
         const structured = stateResponse.structuredContent as LobbyState | undefined;
         if (cancelled || !structured) {
@@ -139,11 +169,14 @@ export default function ChatPage() {
         const nextRoom = String(structured.active_room || "lobby");
         const nextPersona = String(structured.active_persona || "Receptionist");
         setWorkspaceId(nextWorkspace);
+        setActiveWorkspaceLabel(nextWorkspace);
         setActiveRoom(nextRoom);
         setActivePersona(nextPersona);
         setRecentRooms((current) => pushRecentRoom(current, nextRoom));
         applyHydratedMessages(nextRoom, nextPersona, transcriptEntries);
-        } catch (err) {
+        void refreshWorkspaces(nextWorkspace);
+        void refreshSessions();
+      } catch (err) {
           const message = err instanceof Error ? err.message : "Unable to load lobby state.";
           setError(message);
           setBackendBanner(backendDisconnectedMessage(message));
@@ -161,11 +194,32 @@ export default function ChatPage() {
   }, [router, sessionId]);
 
   const sessionLabel = useMemo(() => getSessionShortLabel(sessionId), [sessionId]);
+  const currentWorkspace = useMemo(
+    () => workspaces.find((workspace) => String(workspace.workspace_id) === workspaceId),
+    [workspaceId, workspaces],
+  );
+  const currentWorkspaceLabel = activeWorkspaceLabel || currentWorkspace?.label || workspaceId || "Unassigned";
+  const currentSession = useMemo(
+    () => sessions.find((session) => String(session.session_id) === sessionId),
+    [sessionId, sessions],
+  );
+  const currentSessionTitle = currentSession?.title || sessionLabel;
+  const currentSessionDescription = currentSession?.description || "";
   const currentRoom = useMemo(() => roomById(activeRoom), [activeRoom]);
   const currentTitle = currentRoom?.title || activeRoom;
   const visibleMessages = useMemo(
-    () => (chatScope === "global" ? messages : messages.filter((message) => !message.room || message.room === activeRoom)),
-    [activeRoom, chatScope, messages],
+    () =>
+      messages.filter((message) => {
+        const sessionMatches = !message.sessionId || message.sessionId === sessionId;
+        if (!sessionMatches) {
+          return false;
+        }
+        if (chatScope === "global") {
+          return true;
+        }
+        return !message.room || message.room === activeRoom;
+      }),
+    [activeRoom, chatScope, messages, sessionId],
   );
 
   function applyHydratedMessages(nextRoom: string, nextPersona: string, transcriptEntries: TranscriptEntry[]) {
@@ -178,7 +232,13 @@ export default function ChatPage() {
     } else {
       announcedRoomRef.current = true;
       setMessages([
-        { id: "welcome", role: "assistant", speaker: "Receptionist", text: "Receptionist ready. How may I help you today?" },
+        {
+          id: "welcome",
+          role: "assistant",
+          speaker: "Receptionist",
+          text: "Receptionist ready. How may I help you today?",
+          sessionId: sessionId,
+        },
       ]);
     }
   }
@@ -186,6 +246,29 @@ export default function ChatPage() {
   function pushRecentRoom(existing: string[], roomId: string): string[] {
     const next = [roomId, ...existing.filter((item) => item !== roomId)];
     return next.slice(0, 3);
+  }
+
+  async function refreshWorkspaces(activeWorkspaceId?: string) {
+    if (!sessionId) {
+      return;
+    }
+    setWorkspacesLoading(true);
+    try {
+      const response = await listWorkspaces();
+      setWorkspaces(response);
+      const targetId = activeWorkspaceId || workspaceId;
+      const active = response.find((item) => String(item.workspace_id) === targetId);
+      if (active) {
+        setWorkspaceTitleDraft(String(active.label || ""));
+        setActiveWorkspaceLabel(String(active.label || active.workspace_id || ""));
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to load workspaces.";
+      setError(message);
+      setBackendBanner(backendDisconnectedMessage(message));
+    } finally {
+      setWorkspacesLoading(false);
+    }
   }
 
   function appendRoomTransition(roomId: string, persona: string) {
@@ -260,6 +343,179 @@ export default function ChatPage() {
     }
   }
 
+  async function refreshSessions(activeSessionId?: string) {
+    if (!sessionId) {
+      return;
+    }
+    setSessionsLoading(true);
+    try {
+      const response = await listSessions();
+      setSessions(response);
+      const targetId = activeSessionId || sessionId;
+      const active = response.find((item) => String(item.session_id) === targetId);
+      if (active) {
+        setSessionTitleDraft(String(active.title || ""));
+        setSessionDescriptionDraft(String(active.description || ""));
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to load sessions.";
+      setError(message);
+      setBackendBanner(backendDisconnectedMessage(message));
+    } finally {
+      setSessionsLoading(false);
+    }
+  }
+
+  async function refreshCurrentThread(nextSessionId?: string) {
+    const chosenSessionId = nextSessionId || sessionId;
+    if (!chosenSessionId) {
+      return;
+    }
+    const transcriptEntries = await loadTranscript(120, chosenSessionId);
+    const stateResponse = await callTool("office.state_get", {});
+    const structured = stateResponse.structuredContent as LobbyState | undefined;
+    if (!structured) {
+      return;
+    }
+    const nextWorkspace = String(structured.workspace_id || workspaceId);
+    const nextRoom = String(structured.active_room || "lobby");
+    const nextPersona = String(structured.active_persona || "Receptionist");
+    setWorkspaceId(nextWorkspace);
+    setActiveWorkspaceLabel(workspaces.find((item) => String(item.workspace_id) === nextWorkspace)?.label || nextWorkspace);
+    setSessionId(chosenSessionId);
+    setActiveRoom(nextRoom);
+    setActivePersona(nextPersona);
+    setRecentRooms((current) => pushRecentRoom(current, nextRoom));
+    applyHydratedMessages(nextRoom, nextPersona, transcriptEntries);
+  }
+
+  async function handleWorkspaceSelect(targetWorkspaceId: string) {
+    if (!targetWorkspaceId || targetWorkspaceId === workspaceId) {
+      setWorkspaceMenuOpen(false);
+      return;
+    }
+    setError("");
+    setBackendBanner("");
+    try {
+      const activated = await activateWorkspace(targetWorkspaceId);
+      const nextWorkspaceId = String(activated.workspace_id || targetWorkspaceId);
+      const nextSessionId = String(activated.session_id || sessionId);
+      const workspaceState = activated as { workspace_state?: LobbyState };
+      const nextRoom = String(workspaceState.workspace_state?.active_room || "lobby");
+      const nextPersona = String(workspaceState.workspace_state?.active_persona || "Receptionist");
+      setStoredSessionId(nextSessionId);
+      setSessionId(nextSessionId);
+      setWorkspaceId(nextWorkspaceId);
+      setActiveWorkspaceLabel(workspaces.find((item) => String(item.workspace_id) === nextWorkspaceId)?.label || nextWorkspaceId);
+      setActiveRoom(nextRoom);
+      setActivePersona(nextPersona);
+      setChatScope("room");
+      setRecentRooms((current) => pushRecentRoom(current, nextRoom));
+      const transcriptEntries = await loadTranscript(120, nextSessionId);
+      applyHydratedMessages(nextRoom, nextPersona, transcriptEntries);
+      await refreshWorkspaces(nextWorkspaceId);
+      await refreshSessions(nextSessionId);
+      await refreshFiles();
+      setWorkspaceMenuOpen(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to activate workspace.";
+      setError(message);
+      setBackendBanner(backendDisconnectedMessage(message));
+    }
+  }
+
+  async function handleCreateWorkspace() {
+    const title = workspaceTitleDraft.trim() || "New Workspace";
+    setError("");
+    setBackendBanner("");
+    try {
+      const created = await createWorkspace(title);
+      const nextWorkspaceId = String(created.workspace_id || "");
+      const activated = await activateWorkspace(nextWorkspaceId);
+      const nextSessionId = String(activated.session_id || sessionId);
+      setStoredSessionId(nextSessionId);
+      setSessionId(nextSessionId);
+      setWorkspaceId(nextWorkspaceId);
+      setActiveWorkspaceLabel(String(created.label || title));
+      setActiveRoom("lobby");
+      setActivePersona("Receptionist");
+      setChatScope("room");
+      setRecentRooms((current) => pushRecentRoom(current, "lobby"));
+      setWorkspaceTitleDraft(String(created.label || title));
+      const transcriptEntries = await loadTranscript(120, nextSessionId);
+      applyHydratedMessages("lobby", "Receptionist", transcriptEntries);
+      await refreshWorkspaces(nextWorkspaceId);
+      await refreshSessions(nextSessionId);
+      await refreshFiles();
+      setWorkspaceMenuOpen(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to create workspace.";
+      setError(message);
+      setBackendBanner(backendDisconnectedMessage(message));
+    }
+  }
+
+  async function handleSessionSelect(targetSessionId: string) {
+    if (!targetSessionId || targetSessionId === sessionId) {
+      setSessionMenuOpen(false);
+      return;
+    }
+    setError("");
+    setBackendBanner("");
+    try {
+      const response = await activateSession(targetSessionId);
+      const nextSessionId = String(response.session_id || targetSessionId);
+      const nextWorkspaceId = String(response.active_workspace_id || response.workspace_id || workspaceId);
+      setStoredSessionId(nextSessionId);
+      setSessionId(nextSessionId);
+      setWorkspaceId(nextWorkspaceId);
+      setActiveWorkspaceLabel(workspaces.find((item) => String(item.workspace_id) === nextWorkspaceId)?.label || nextWorkspaceId);
+      setSessionTitleDraft(String(response.title || ""));
+      setSessionDescriptionDraft(String(response.description || ""));
+      await refreshCurrentThread(nextSessionId);
+      await refreshWorkspaces(nextWorkspaceId);
+      await refreshFiles();
+      await refreshSessions(nextSessionId);
+      setChatScope("room");
+      setSessionMenuOpen(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to activate session.";
+      setError(message);
+      setBackendBanner(backendDisconnectedMessage(message));
+    }
+  }
+
+  async function handleCreateSession() {
+    const title = sessionTitleDraft.trim() || "New Session";
+    const description = sessionDescriptionDraft.trim() || title;
+    setError("");
+    setBackendBanner("");
+    try {
+      const created = await createSession(title, description);
+      const nextSessionId = String(created.session_id || "");
+      const nextWorkspaceId = String(created.active_workspace_id || created.workspace_id || workspaceId);
+      setStoredSessionId(nextSessionId);
+      setSessionId(nextSessionId);
+      setWorkspaceId(nextWorkspaceId);
+      setActiveWorkspaceLabel(workspaces.find((item) => String(item.workspace_id) === nextWorkspaceId)?.label || nextWorkspaceId);
+      setSessionTitleDraft(String(created.title || title));
+      setSessionDescriptionDraft(String(created.description || description));
+      setActiveRoom("lobby");
+      setActivePersona("Receptionist");
+      setChatScope("room");
+      setRecentRooms((current) => pushRecentRoom(current, "lobby"));
+      await refreshCurrentThread(nextSessionId);
+      await refreshWorkspaces(nextWorkspaceId);
+      await refreshFiles();
+      await refreshSessions(nextSessionId);
+      setSessionMenuOpen(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to create session.";
+      setError(message);
+      setBackendBanner(backendDisconnectedMessage(message));
+    }
+  }
+
   async function sendText(text: string) {
     const value = text.trim();
     if (!value || loading) {
@@ -269,7 +525,7 @@ export default function ChatPage() {
     setError("");
     setBackendBanner("");
     setLoading(true);
-    setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text: value, room: activeRoom }]);
+      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text: value, room: activeRoom, sessionId }]);
     try {
       const response = await request(value);
       const assistantText = requestText(response);
@@ -284,7 +540,7 @@ export default function ChatPage() {
       setRecentRooms((current) => pushRecentRoom(current, nextRoom));
       setMessages((current) => [
         ...current,
-        { id: crypto.randomUUID(), role: "assistant", speaker: nextPersona, text: assistantText, room: nextRoom },
+        { id: crypto.randomUUID(), role: "assistant", speaker: nextPersona, text: assistantText, room: nextRoom, sessionId: nextSessionId },
       ]);
       if (nextRoom !== activeRoom || nextPersona !== activePersona) {
         appendRoomTransition(nextRoom, nextPersona);
@@ -293,7 +549,7 @@ export default function ChatPage() {
       const message = err instanceof Error ? err.message : "Request failed.";
       setError(message);
       setBackendBanner(backendDisconnectedMessage(message));
-      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message, room: activeRoom }]);
+      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message, room: activeRoom, sessionId }]);
       if (message.toLowerCase().includes("session")) {
         clearStoredSessionId();
         router.replace("/");
@@ -332,7 +588,7 @@ export default function ChatPage() {
       const structured = response.structuredContent as { active_room?: string; active_persona?: string } | undefined;
       const nextRoom = String(structured?.active_room || roomId);
       const nextPersona = String(structured?.active_persona || roomById(nextRoom)?.persona || "Receptionist");
-      const transcriptEntries = await loadTranscript(120);
+      const transcriptEntries = await loadTranscript(120, sessionId);
       setActiveRoom(nextRoom);
       setActivePersona(nextPersona);
       setChatScope("room");
@@ -391,6 +647,7 @@ export default function ChatPage() {
           speaker: "System",
           text: `Saved file ${savedNotice.name} to ${savedNotice.scope}${savedNotice.scopeRef ? ` (${savedNotice.scopeRef})` : ""}.`,
           room: activeRoom,
+          sessionId,
         },
       ]);
       setSaveMenuOpen(false);
@@ -461,9 +718,74 @@ export default function ChatPage() {
             <div className="stack" style={{ gap: 4 }}>
               <div className="terminal-label">Veridex Lobby</div>
               <h1 className="title">{currentTitle}</h1>
+              <div className="muted">{currentSessionDescription || "No session description yet."}</div>
             </div>
-            <div className="session-inline">Session {sessionLabel}</div>
+            <div className="session-inline">
+              <button
+                type="button"
+                className={`ghost workspace-inline ${workspaceMenuOpen ? "toolbar-button-active" : ""}`}
+                onClick={() => {
+                  setWorkspaceMenuOpen((current) => !current);
+                  setRoomMenuOpen(false);
+                  setSessionMenuOpen(false);
+                  setSaveMenuOpen(false);
+                  setLoadMenuOpen(false);
+                  setAttachmentOpen(false);
+                }}
+              >
+                <span className="workspace-inline-label">Workspace</span>
+                <span className="workspace-inline-value">{currentWorkspaceLabel}</span>
+              </button>
+              <div className="workspace-inline">
+                <span className="workspace-inline-label">Session</span>
+                <span className="workspace-inline-value">{currentSessionTitle}</span>
+              </div>
+              <div className="muted">{sessionId}</div>
+            </div>
           </div>
+
+          {workspaceMenuOpen ? (
+            <div className="dropdown-panel">
+              <div className="dropdown-group">
+                <div className="dropdown-group-title">Current Workspaces</div>
+                <div className="dropdown-grid">
+                  {workspacesLoading ? <div className="muted">Loading workspaces...</div> : null}
+                  {workspaces.map((workspace) => (
+                    <button
+                      key={workspace.workspace_id}
+                      type="button"
+                      className={`ghost room-option ${String(workspace.workspace_id) === workspaceId ? "toolbar-button-active" : ""}`}
+                      onClick={() => void handleWorkspaceSelect(workspace.workspace_id)}
+                    >
+                      <span>{workspace.label || workspace.workspace_id}</span>
+                      <span className="room-option-persona">
+                        {workspace.session_count || 0} session(s)
+                        {workspace.last_room ? ` · ${roomById(String(workspace.last_room))?.title || workspace.last_room}` : ""}
+                      </span>
+                    </button>
+                  ))}
+                  {!workspacesLoading && !workspaces.length ? <div className="muted">No workspaces yet.</div> : null}
+                </div>
+              </div>
+              <div className="dropdown-group">
+                <div className="dropdown-group-title">New Workspace</div>
+                <div className="toolbar-stack">
+                  <input
+                    className="session-input"
+                    type="text"
+                    value={workspaceTitleDraft}
+                    placeholder="Resume"
+                    onChange={(event) => setWorkspaceTitleDraft(event.target.value)}
+                  />
+                  <div className="toolbar-row">
+                    <button type="button" className="primary" onClick={() => void handleCreateWorkspace()}>
+                      Create Workspace
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           <div className="toolbar-row">
             <button
@@ -471,12 +793,28 @@ export default function ChatPage() {
               className={`ghost toolbar-button ${roomMenuOpen ? "toolbar-button-active" : ""}`}
               onClick={() => {
                 setRoomMenuOpen((current) => !current);
+                setWorkspaceMenuOpen(false);
+                setSessionMenuOpen(false);
                 setSaveMenuOpen(false);
                 setLoadMenuOpen(false);
                 setAttachmentOpen(false);
               }}
             >
               Directory
+            </button>
+            <button
+              type="button"
+              className={`ghost toolbar-button ${sessionMenuOpen ? "toolbar-button-active" : ""}`}
+              onClick={() => {
+                setSessionMenuOpen((current) => !current);
+                setWorkspaceMenuOpen(false);
+                setRoomMenuOpen(false);
+                setSaveMenuOpen(false);
+                setLoadMenuOpen(false);
+                setAttachmentOpen(false);
+              }}
+            >
+              Sessions
             </button>
             {recentRooms.map((roomId) => {
               const room = roomById(roomId);
@@ -496,7 +834,9 @@ export default function ChatPage() {
               className={`ghost toolbar-button ${saveMenuOpen ? "toolbar-button-active" : ""}`}
               onClick={() => {
                 setSaveMenuOpen((current) => !current);
+                setWorkspaceMenuOpen(false);
                 setRoomMenuOpen(false);
+                setSessionMenuOpen(false);
                 setLoadMenuOpen(false);
                 setAttachmentOpen(false);
               }}
@@ -508,14 +848,66 @@ export default function ChatPage() {
               className={`ghost toolbar-button ${loadMenuOpen ? "toolbar-button-active" : ""}`}
               onClick={() => {
                 setLoadMenuOpen((current) => !current);
+                setWorkspaceMenuOpen(false);
                 setRoomMenuOpen(false);
                 setSaveMenuOpen(false);
+                setSessionMenuOpen(false);
                 setAttachmentOpen(false);
               }}
             >
               Load
             </button>
           </div>
+
+          {sessionMenuOpen ? (
+            <div className="dropdown-panel">
+              <div className="dropdown-group">
+                <div className="dropdown-group-title">Current Sessions</div>
+                <div className="dropdown-grid">
+                  {sessionsLoading ? <div className="muted">Loading sessions...</div> : null}
+                  {sessions.map((session) => (
+                    <button
+                      key={session.session_id}
+                      type="button"
+                      className={`ghost room-option ${String(session.session_id) === sessionId ? "toolbar-button-active" : ""}`}
+                      onClick={() => void handleSessionSelect(session.session_id)}
+                    >
+                      <span>{session.title || session.session_id}</span>
+                      <span className="room-option-persona">
+                        {session.description || "No description"}
+                        {session.active_room ? ` - ${roomById(String(session.active_room))?.title || session.active_room}` : ""}
+                      </span>
+                    </button>
+                  ))}
+                  {!sessionsLoading && !sessions.length ? <div className="muted">No sessions yet.</div> : null}
+                </div>
+              </div>
+              <div className="dropdown-group">
+                <div className="dropdown-group-title">New Session</div>
+                <div className="toolbar-stack">
+                  <input
+                    className="session-input"
+                    type="text"
+                    value={sessionTitleDraft}
+                    placeholder="Event Flier"
+                    onChange={(event) => setSessionTitleDraft(event.target.value)}
+                  />
+                  <textarea
+                    className="session-input session-description"
+                    value={sessionDescriptionDraft}
+                    placeholder="Describe this work thread"
+                    onChange={(event) => setSessionDescriptionDraft(event.target.value)}
+                    rows={3}
+                  />
+                  <div className="toolbar-row">
+                    <button type="button" className="primary" onClick={() => void handleCreateSession()}>
+                      Create Session
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           {roomMenuOpen ? (
             <div className="dropdown-panel">
@@ -728,9 +1120,11 @@ export default function ChatPage() {
             onClick={() => {
               setAttachmentOpen((current) => !current);
               setAttachmentMode("download");
+              setWorkspaceMenuOpen(false);
               setSaveMenuOpen(false);
               setRoomMenuOpen(false);
               setLoadMenuOpen(false);
+              setSessionMenuOpen(false);
             }}
             aria-label="Open file actions"
           >
@@ -879,6 +1273,7 @@ function mapTranscriptEntries(entries: TranscriptEntry[]): Message[] {
         speaker,
         text: String(entry.text),
         room: typeof entry.room === "string" && entry.room.trim() ? entry.room : undefined,
+        sessionId: typeof entry.session_id === "string" && entry.session_id.trim() ? entry.session_id : undefined,
       };
     });
   const conversational = mapped.filter((entry) => entry.role !== "system");

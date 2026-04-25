@@ -29,6 +29,7 @@ from office_app.server.handlers.artifact_handlers import build_artifact_handlers
 from office_app.server.handlers.dependencies import HandlerDeps
 from office_app.server.handlers.file_handlers import build_file_handlers
 from office_app.server.handlers.memo_handlers import build_memo_handlers
+from office_app.server.handlers.session_handlers import build_session_handlers
 from office_app.server.handlers.workspace_handlers import build_workspace_handlers
 from office_app.server.tool_context import ToolContext
 from office_app.server.tool_definitions import VERIDEX_TOOL_DEFINITIONS, ToolDefinition
@@ -181,14 +182,16 @@ def append_incident(
 def resolve_workspace_id(tool: str, args: Dict[str, Any]) -> str:
     workspace_id = str(args.get("workspace_id", "")).strip()
     session_id = str(args.get("session_id", "")).strip()
+    if tool in WORKSPACE_TOOLS_NO_ID:
+        return workspace_id
+    if tool == "office.workspace_activate" and workspace_id:
+        return workspace_id
     if session_id:
         session = user_service.get_session(session_id)
         resolved = str(session.get("active_workspace_id") or "").strip()
         if resolved:
             return resolved
         raise HTTPException(status_code=409, detail="Session is missing an active workspace.")
-    if tool in WORKSPACE_TOOLS_NO_ID:
-        return workspace_id
     if workspace_id:
         return workspace_id
     definition = VERIDEX_TOOL_DEFINITIONS.get(tool)
@@ -407,6 +410,7 @@ def handle_natural_language_request(
                 str((structured_result or {}).get("active_room") or target_room),
                 _request_text_from_response(result),
                 speaker="System",
+                session_id=session_id,
             )
             response = result
             if isinstance(response, dict):
@@ -454,6 +458,7 @@ def handle_natural_language_request(
                 str(current_state.get("active_room") or "lobby"),
                 response_text,
                 speaker=str(current_state.get("active_persona") or "Receptionist"),
+                session_id=session_id,
             )
             return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
 
@@ -478,6 +483,7 @@ def handle_natural_language_request(
             active_room_for_user,
             request_text,
             speaker="You",
+            session_id=session_id,
         )
 
     if routed["route_kind"] == "artifact":
@@ -537,6 +543,7 @@ def handle_natural_language_request(
             str(current_state.get("active_room") or "lobby"),
             _request_text_from_response(enriched),
             speaker=str(current_state.get("active_persona") or "Receptionist"),
+            session_id=session_id,
         )
         return enriched
 
@@ -584,6 +591,7 @@ def handle_natural_language_request(
                 str(current_state.get("active_room") or "lobby"),
                 response_text,
                 speaker=str(current_state.get("active_persona") or "Receptionist"),
+                session_id=session_id,
             )
             return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
 
@@ -615,6 +623,7 @@ def handle_natural_language_request(
             str((structured_result or {}).get("active_room") or target_room),
             _request_text_from_response(result),
             speaker="System",
+            session_id=session_id,
         )
         response = result
         if isinstance(response, dict):
@@ -666,6 +675,7 @@ def handle_natural_language_request(
             str(current_state.get("active_room") or "lobby"),
             _request_text_from_response(enriched),
             speaker=str(current_state.get("active_persona") or "Receptionist"),
+            session_id=session_id,
         )
         return enriched
 
@@ -686,6 +696,7 @@ def handle_natural_language_request(
         str(current_state.get("active_room") or "lobby"),
         _request_text_from_response(response),
         speaker=str(current_state.get("active_persona") or "Receptionist"),
+        session_id=session_id,
     )
     return attach_request_context(
         response,
@@ -746,6 +757,158 @@ def receptionist_context(
     return {
         "structuredContent": context,
         "content": [{"type": "text", "text": f"Loaded receptionist context for {resolved_workspace_id}."}],
+    }
+
+
+@app.get("/sessions")
+def list_sessions(
+    workspace_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    resolved_workspace_id = _resolve_http_workspace_id(workspace_id, session_id)
+    user = _session_user_profile(session_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    rows = user_service.list_sessions(str(user["user_id"]), workspace_id=resolved_workspace_id)
+    current_session_id = str(user.get("last_active_session_id") or "").strip()
+    sessions = []
+    for row in rows:
+        try:
+            session_workspace = kernel.get_state(str(row.get("active_workspace_id") or "").strip())
+            active_room = session_workspace.get("active_room", "lobby")
+            active_persona = session_workspace.get("active_persona", "Receptionist")
+        except Exception:
+            active_room = "lobby"
+            active_persona = "Receptionist"
+        sessions.append(
+            {
+                **row,
+                "active_room": active_room,
+                "active_persona": active_persona,
+                "is_current": row.get("session_id") == current_session_id,
+            }
+        )
+    sessions.sort(
+        key=lambda item: (
+            1 if item.get("is_current") else 0,
+            str(item.get("last_active_at") or ""),
+            str(item.get("updated_at") or ""),
+            str(item.get("created_at") or ""),
+            str(item.get("session_id") or ""),
+        ),
+        reverse=True,
+    )
+    return {
+        "structuredContent": {
+            "workspace_id": resolved_workspace_id,
+            "current_session_id": current_session_id,
+            "count": len(sessions),
+            "sessions": sessions,
+        },
+        "content": [{"type": "text", "text": f"Loaded {len(sessions)} session(s)."}],
+    }
+
+
+@app.get("/workspaces")
+def list_workspaces(
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    idx = kernel.list_workspaces()
+    if session_id:
+        try:
+            user = user_service.get_user_for_session(session_id)
+            current_workspace_id = str(user_service.resolve_workspace_for_session(session_id) or "").strip()
+            workspaces = user_service.list_user_workspaces(str(user["user_id"]))
+            if current_workspace_id:
+                workspaces = sorted(
+                    workspaces,
+                    key=lambda row: (
+                        0 if str(row.get("workspace_id") or "").strip() == current_workspace_id else 1,
+                        str(row.get("last_active_at") or ""),
+                        str(row.get("workspace_id") or ""),
+                    ),
+                )
+            idx = {"workspaces": workspaces, "current_workspace_id": current_workspace_id}
+        except Exception:
+            pass
+    return {
+        "structuredContent": idx,
+        "content": [{"type": "text", "text": f"Loaded {len(idx.get('workspaces', []))} workspace(s)."}],
+    }
+
+
+@app.post("/sessions")
+def create_session(payload: dict[str, Any]) -> Dict[str, Any]:
+    session_id = str(payload.get("session_id") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Session ID required")
+    title = str(payload.get("title") or "").strip() or "New Session"
+    description = str(payload.get("description") or "").strip() or title
+    user = _session_user_profile(session_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    session = user_service.create_session(
+        user_id=str(user["user_id"]),
+        title=title,
+        description=description,
+        workspace_id=resolved_workspace_id,
+        workspace_label=title,
+    )
+    workspace_state = kernel.get_state(session["active_workspace_id"])
+    return {
+        "structuredContent": {
+            "session_id": session["session_id"],
+            "workspace_id": session["active_workspace_id"],
+            "title": session["title"],
+            "description": session["description"],
+            "workspace_state": workspace_state,
+        },
+        "content": [{"type": "text", "text": f"Started new session {session['title']}."}],
+    }
+
+
+@app.post("/sessions/select")
+def select_session(payload: dict[str, Any]) -> Dict[str, Any]:
+    session_id = str(payload.get("session_id") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Session ID required")
+    session = user_service.select_session_for_user(session_id)
+    workspace_state = kernel.get_state(session["active_workspace_id"])
+    return {
+        "structuredContent": {
+            "session_id": session["session_id"],
+            "workspace_id": session["active_workspace_id"],
+            "title": session["title"],
+            "description": session["description"],
+            "workspace_state": workspace_state,
+        },
+        "content": [{"type": "text", "text": f"Activated session {session['title']}."}],
+    }
+
+
+@app.post("/workspaces/select")
+def select_workspace(payload: dict[str, Any]) -> Dict[str, Any]:
+    session_id = str(payload.get("session_id") or "").strip()
+    workspace_id = str(payload.get("workspace_id") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Session ID required")
+    if not workspace_id:
+        raise HTTPException(status_code=400, detail="Workspace ID required")
+    user = _session_user_profile(session_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    result = user_service.activate_workspace(user_id=str(user["user_id"]), workspace_id=workspace_id)
+    session = result["session"]
+    workspace_state = result["workspace_state"]
+    return {
+        "structuredContent": {
+            "workspace_id": result["workspace_id"],
+            "session_id": session["session_id"],
+            "title": session["title"],
+            "description": session["description"],
+            "workspace_state": workspace_state,
+        },
+        "content": [{"type": "text", "text": f"Activated workspace {workspace_id}."}],
     }
 
 
@@ -901,14 +1064,40 @@ def reset_test_data() -> Dict[str, Any]:
     return {"ok": True}
 
 
-def handle_workspaces_list(_: Dict[str, Any]) -> Dict[str, Any]:
+def handle_workspaces_list(args: Dict[str, Any]) -> Dict[str, Any]:
+    session_id = str(args.get("session_id") or "").strip()
     idx = kernel.list_workspaces()
+    if session_id:
+        try:
+            user = user_service.get_user_for_session(session_id)
+            current_workspace_id = str(user_service.resolve_workspace_for_session(session_id) or "").strip()
+            workspaces = user_service.list_user_workspaces(str(user["user_id"]))
+            if current_workspace_id:
+                workspaces = sorted(
+                    workspaces,
+                    key=lambda row: (
+                        0 if str(row.get("workspace_id") or "").strip() == current_workspace_id else 1,
+                        str(row.get("last_active_at") or ""),
+                        str(row.get("workspace_id") or ""),
+                    ),
+                )
+            idx = {"workspaces": workspaces, "current_workspace_id": current_workspace_id}
+        except Exception:
+            pass
     return pipeline.workspaces_list_response(idx)
 
 
 def handle_workspace_new(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = f"ws_{uuid.uuid4().hex[:8]}"
     label = str(args.get("label") or f"Workspace {utc_now()}")
+    label_key = label.strip().casefold()
+    idx = kernel.list_workspaces()
+    for row in idx.get("workspaces", []):
+        existing_label = str(row.get("label") or "").strip()
+        if existing_label and existing_label.casefold() == label_key:
+            workspace_id = str(row.get("workspace_id") or "").strip()
+            if workspace_id:
+                return pipeline.workspace_new_response(workspace_id, existing_label)
+    workspace_id = f"ws_{uuid.uuid4().hex[:8]}"
     kernel.create_workspace(workspace_id, label)
     return pipeline.workspace_new_response(workspace_id, label)
 
@@ -956,7 +1145,7 @@ def handle_office_room_set(args: Dict[str, Any]) -> Dict[str, Any]:
     if not room_id:
         raise error_missing_required_field("room_id")
 
-    result = kernel.enter_room(workspace_id, room_id)
+        result = kernel.enter_room(workspace_id, room_id, session_id=session_id)
     state = kernel.get_state(workspace_id)
 
     append_incident(
@@ -1628,10 +1817,14 @@ def handle_receptionist_context_update(args: Dict[str, Any]) -> Dict[str, Any]:
 def refresh_handler_bindings() -> None:
     global handle_workspaces_list
     global handle_workspace_new
+    global handle_workspace_activate
     global handle_office_bootstrap
     global handle_office_state_get
     global handle_office_transcript_get
     global handle_commands_list
+    global handle_sessions_list
+    global handle_session_create
+    global handle_session_activate
     global handle_office_room_set
     global handle_office_nancy_route
     global handle_mailroom_dispatch
@@ -1687,16 +1880,21 @@ def refresh_handler_bindings() -> None:
 
     workspace_handlers = build_workspace_handlers(handler_deps)
     memo_handlers = build_memo_handlers(handler_deps)
+    session_handlers = build_session_handlers(handler_deps)
     artifact_handlers = build_artifact_handlers(handler_deps)
     file_handlers = build_file_handlers(handler_deps)
     ai_handlers = build_ai_handlers(handler_deps)
 
     handle_workspaces_list = workspace_handlers["office.workspaces_list"]
     handle_workspace_new = workspace_handlers["office.workspace_new"]
+    handle_workspace_activate = workspace_handlers["office.workspace_activate"]
     handle_office_bootstrap = workspace_handlers["office.bootstrap"]
     handle_office_state_get = workspace_handlers["office.state_get"]
     handle_office_transcript_get = workspace_handlers["office.transcript_get"]
     handle_commands_list = workspace_handlers["office.commands_list"]
+    handle_sessions_list = session_handlers["office.sessions_list"]
+    handle_session_create = session_handlers["office.session_create"]
+    handle_session_activate = session_handlers["office.session_activate"]
     handle_office_room_set = workspace_handlers["office.room_set"]
     handle_office_nancy_route = workspace_handlers["office.nancy_route"]
 
@@ -1742,10 +1940,14 @@ register_tools(
     {
         "office.workspaces_list": handle_workspaces_list,
         "office.workspace_new": handle_workspace_new,
+        "office.workspace_activate": handle_workspace_activate,
         "office.bootstrap": handle_office_bootstrap,
         "office.state_get": handle_office_state_get,
         "office.transcript_get": handle_office_transcript_get,
         "office.commands_list": handle_commands_list,
+        "office.sessions_list": handle_sessions_list,
+        "office.session_create": handle_session_create,
+        "office.session_activate": handle_session_activate,
         "office.room_set": handle_office_room_set,
         "office.nancy_route": handle_office_nancy_route,
         "office.ai_generate": handle_ai_generate,

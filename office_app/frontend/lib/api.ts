@@ -59,6 +59,33 @@ export type TranscriptEntry = {
   [key: string]: unknown;
 };
 
+export type SessionRecord = {
+  session_id: string;
+  user_id?: string;
+  title?: string;
+  description?: string;
+  active_workspace_id?: string;
+  created_at?: string;
+  updated_at?: string;
+  last_active_at?: string;
+  active_room?: string;
+  active_persona?: string;
+  is_current?: boolean;
+  [key: string]: unknown;
+};
+
+export type WorkspaceRecord = {
+  workspace_id: string;
+  label?: string;
+  created_utc?: string;
+  last_seen_utc?: string;
+  last_room?: string;
+  session_count?: number;
+  last_active_at?: string;
+  last_session_id?: string;
+  [key: string]: unknown;
+};
+
 type FileListEnvelope = {
   structuredContent?: {
     workspace_id?: string;
@@ -196,6 +223,7 @@ export async function callTool(tool: string, arguments_: Record<string, unknown>
   if (!sessionId) {
     throw new Error("Session ID required");
   }
+  const explicitSessionId = typeof arguments_.session_id === "string" ? String(arguments_.session_id) : "";
 
   const response = await fetchJsonWithTimeout("/call", {
     method: "POST",
@@ -207,7 +235,7 @@ export async function callTool(tool: string, arguments_: Record<string, unknown>
       tool,
       arguments: {
         ...arguments_,
-        session_id: sessionId,
+        session_id: explicitSessionId || sessionId,
       },
     }),
   });
@@ -219,10 +247,76 @@ export async function callTool(tool: string, arguments_: Record<string, unknown>
   return (await response.json()) as ToolResponse;
 }
 
-export async function loadTranscript(limit = 100): Promise<TranscriptEntry[]> {
-  const response = await callTool("office.transcript_get", { limit });
+export async function loadTranscript(limit = 100, sessionId?: string): Promise<TranscriptEntry[]> {
+  const response = await callTool("office.transcript_get", { limit, session_id: sessionId });
   const structured = response.structuredContent as { entries?: unknown } | undefined;
   return Array.isArray(structured?.entries) ? (structured.entries as TranscriptEntry[]) : [];
+}
+
+export async function listSessions(): Promise<SessionRecord[]> {
+  const response = await callTool("office.sessions_list", {});
+  const structured = response.structuredContent as { sessions?: unknown } | undefined;
+  return Array.isArray(structured?.sessions) ? (structured.sessions as SessionRecord[]) : [];
+}
+
+export async function listWorkspaces(): Promise<WorkspaceRecord[]> {
+  const response = await callTool("office.workspaces_list", {});
+  const structured = response.structuredContent as { workspaces?: unknown } | undefined;
+  return Array.isArray(structured?.workspaces) ? (structured.workspaces as WorkspaceRecord[]) : [];
+}
+
+export async function createSession(title: string, description: string): Promise<SessionRecord> {
+  const response = await callTool("office.session_create", { title, description });
+  const structured = response.structuredContent as SessionRecord | undefined;
+  if (structured && typeof structured.session_id === "string") {
+    return structured;
+  }
+  return {
+    session_id: String(response.session_id || ""),
+    title,
+    description,
+    active_workspace_id: String(response.workspace_id || ""),
+  };
+}
+
+export async function createWorkspace(label: string): Promise<WorkspaceRecord> {
+  const response = await callTool("office.workspace_new", { label });
+  const structured = response.structuredContent as WorkspaceRecord | undefined;
+  if (structured && typeof structured.workspace_id === "string") {
+    return structured;
+  }
+  return {
+    workspace_id: String(response.workspace_id || ""),
+    label,
+  };
+}
+
+export async function activateWorkspace(workspace_id: string): Promise<{ workspace_id: string; session_id?: string; title?: string; description?: string }> {
+  const response = await callTool("office.workspace_activate", { workspace_id });
+  const structured = response.structuredContent as {
+    workspace_id?: string;
+    session_id?: string;
+    title?: string;
+    description?: string;
+  } | undefined;
+  return {
+    workspace_id: String(structured?.workspace_id || response.workspace_id || workspace_id),
+    session_id: structured?.session_id || String(response.session_id || ""),
+    title: structured?.title || String(response.title || ""),
+    description: structured?.description || String(response.description || ""),
+  };
+}
+
+export async function activateSession(session_id: string): Promise<SessionRecord> {
+  const response = await callTool("office.session_activate", { session_id });
+  const structured = response.structuredContent as SessionRecord | undefined;
+  if (structured && typeof structured.session_id === "string") {
+    return structured;
+  }
+  return {
+    session_id,
+    active_workspace_id: String(response.workspace_id || ""),
+  };
 }
 
 export async function uploadFile(payload: {

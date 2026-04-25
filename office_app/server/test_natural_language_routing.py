@@ -131,6 +131,17 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["tool"], "office.search_reviews")
         self.assertEqual(routed["arguments"]["location"], "Eugene")
 
+    def test_top_bars_request_routes_to_review_search(self) -> None:
+        routed = self.pipeline.route_user_request("default", "what are the top 5 bars in Eugene? check reviews")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.reviews")
+        self.assertEqual(routed["tool"], "office.search_reviews")
+
+    def test_business_advice_question_stays_in_model_route(self) -> None:
+        routed = self.pipeline.route_user_request("default", "how do you increase food sales in a bar")
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["capability"], "ai.respond")
+
     def test_explicit_web_search_routes_to_web_search(self) -> None:
         routed = self.pipeline.route_user_request("default", "search the internet for Eugene networking events")
         self.assertEqual(routed["route_kind"], "tool")
@@ -171,6 +182,13 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["route_kind"], "tool")
         self.assertEqual(routed["capability"], "workspace.state.get")
         self.assertEqual(routed["tool"], "office.state_get")
+
+    def test_new_session_routes_to_session_create(self) -> None:
+        routed = self.pipeline.route_user_request("default", "new session for event flier")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "session.create")
+        self.assertEqual(routed["tool"], "office.session_create")
+        self.assertEqual(routed["arguments"]["title"], "event flier")
 
 
 if __name__ == "__main__":
