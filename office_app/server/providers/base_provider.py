@@ -76,6 +76,48 @@ class BaseProvider(ABC):
     def _merge_context_prompt(user_prompt: str, context: Optional[Dict[str, Any]]) -> str:
         if not context:
             return user_prompt.strip()
-        context_block = json.dumps(context, indent=2, sort_keys=True)
-        return f"{user_prompt.strip()}\n\nContext:\n{context_block}"
+        def _scalar_text(value: Any) -> str:
+            if value is None:
+                return ""
+            if isinstance(value, bool):
+                return "true" if value else "false"
+            if isinstance(value, (int, float)):
+                return str(value)
+            if isinstance(value, str):
+                return value.strip()
+            return str(value).strip()
 
+        def _list_text(values: list[Any], depth: int) -> str:
+            items: list[str] = []
+            for value in values[:5]:
+                text = _value_text(value, depth + 1)
+                if text:
+                    items.append(text)
+            return ", ".join(items)
+
+        def _dict_text(mapping: Dict[str, Any], depth: int) -> str:
+            lines: list[str] = []
+            for key in sorted(mapping.keys()):
+                text = _value_text(mapping[key], depth + 1)
+                if text:
+                    lines.append(f"{key}: {text}")
+            return "; ".join(lines)
+
+        def _value_text(value: Any, depth: int = 0) -> str:
+            if depth > 1:
+                return ""
+            if isinstance(value, dict):
+                return _dict_text(value, depth)
+            if isinstance(value, list):
+                return _list_text(value, depth)
+            return _scalar_text(value)
+
+        lines: list[str] = []
+        for key in sorted(context.keys()):
+            value_text = _value_text(context[key]).strip()
+            if value_text:
+                lines.append(f"{key}: {value_text[:300]}")
+        if not lines:
+            return user_prompt.strip()
+        context_block = "\n".join(lines[:12])
+        return f"{user_prompt.strip()}\n\nContext summary:\n{context_block}"

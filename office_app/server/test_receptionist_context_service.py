@@ -9,7 +9,7 @@ from office_app.server.workspace_kernel import WorkspaceKernel, WorkspaceStore
 
 
 class ReceptionistContextServiceTests(unittest.TestCase):
-    def test_context_defaults_and_turns(self) -> None:
+    def test_context_is_derived_from_session_transcript_only(self) -> None:
         runtime_dir = Path.cwd() / "office_app" / "runtime" / "_receptionist_context_test"
         workspaces_dir = runtime_dir / "workspaces"
         shutil.rmtree(runtime_dir, ignore_errors=True)
@@ -21,34 +21,42 @@ class ReceptionistContextServiceTests(unittest.TestCase):
             kernel.create_workspace("ws_test", "Test")
             service = ReceptionistContextService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-21T12:00:00Z")
 
-            context = service.get_context("ws_test")
-            self.assertGreater(len(context["room_directory"]), 0)
-            self.assertGreater(len(context["persona_directory"]), 0)
-            self.assertIn("greeting", context["receptionist_script"])
-
-            service.record_turn(
-                workspace_id="ws_test",
-                role="user",
-                text="how many rooms are here?",
-                room_id="lobby",
-                persona_name="Receptionist",
-                session_id="sess_test",
-            )
-            updated = service.get_context("ws_test")
-            self.assertEqual(len(updated["recent_turns"]), 1)
-            self.assertIn("Latest user request", updated["session_summary_text"])
+            store.append_transcript("ws_test", "user", "lobby", "session alpha first user turn", speaker="You", session_id="sess_alpha")
+            store.append_transcript("ws_test", "assistant", "lobby", "session alpha first assistant turn", speaker="Receptionist", session_id="sess_alpha")
+            store.append_transcript("ws_test", "user", "lobby", "session beta only turn", speaker="You", session_id="sess_beta")
 
             model_context = service.build_model_context(
                 workspace_id="ws_test",
-                user_profile={"display_name": "Mira", "user_id": "usr_123"},
-                session_id="sess_test",
+                session_id="sess_alpha",
             )
             self.assertEqual(model_context["active_room"], "lobby")
-            self.assertIn("Lobby", model_context["room_directory_text"])
-            self.assertIn("display_name: Mira", model_context["known_user_profile_text"])
-            self.assertEqual(model_context["session_id"], "sess_test")
-            self.assertNotIn("persona_directory", model_context)
-            self.assertNotIn("file_tools", model_context)
+            self.assertEqual(model_context["session_id"], "sess_alpha")
+            self.assertLessEqual(len(model_context["recent_turns_text"]), 4)
+            for item in model_context["recent_turns_text"]:
+                self.assertLessEqual(len(item), 340)
+            self.assertTrue(any("session alpha first user turn" in item for item in model_context["recent_turns_text"]))
+            self.assertFalse(any("session beta only turn" in item for item in model_context["recent_turns_text"]))
+            self.assertLessEqual(len(model_context["session_summary_text"]), 600)
+            self.assertNotIn("room_directory_text", model_context)
+            self.assertNotIn("known_user_profile_text", model_context)
+            self.assertNotIn("prompt_state_text", model_context)
+            self.assertNotIn("behavior_rules", model_context)
+
+            before = dict(model_context)
+            service.record_turn(
+                workspace_id="ws_test",
+                role="assistant",
+                text="this should not become durable receptionist memory",
+                room_id="lobby",
+                persona_name="Receptionist",
+                session_id="sess_alpha",
+            )
+            after = service.build_model_context(
+                workspace_id="ws_test",
+                session_id="sess_alpha",
+            )
+            self.assertEqual(before["session_summary_text"], after["session_summary_text"])
+            self.assertEqual(before["recent_turns_text"], after["recent_turns_text"])
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 

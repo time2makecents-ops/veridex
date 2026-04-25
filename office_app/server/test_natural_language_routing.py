@@ -137,6 +137,11 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "search.reviews")
         self.assertEqual(routed["tool"], "office.search_reviews")
 
+    def test_unqualified_bar_question_stays_in_model_route(self) -> None:
+        routed = self.pipeline.route_user_request("default", "how do you increase food sales in a bar")
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["capability"], "ai.respond")
+
     def test_business_advice_question_stays_in_model_route(self) -> None:
         routed = self.pipeline.route_user_request("default", "how do you increase food sales in a bar")
         self.assertEqual(routed["route_kind"], "model")
@@ -168,6 +173,16 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "document.ocr")
         self.assertEqual(routed["tool"], "office.ocr_extract")
         self.assertEqual(routed["arguments"]["file_name"], "JW_Cover.rtf")
+
+    def test_show_me_alone_stays_in_model_route(self) -> None:
+        routed = self.pipeline.route_user_request("default", "show me")
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["capability"], "ai.respond")
+
+    def test_read_file_alone_stays_in_model_route(self) -> None:
+        routed = self.pipeline.route_user_request("default", "read file")
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["capability"], "ai.respond")
 
     def test_non_navigation_break_phrase_does_not_switch_rooms(self) -> None:
         routed = self.pipeline.route_user_request("default", "did i break the thread?")

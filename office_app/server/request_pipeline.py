@@ -69,11 +69,12 @@ class RequestPipeline:
     )
     ROOM_NAVIGATION_PREFIXES = (
         "go to ",
+        "go back to ",
         "take me to ",
+        "take us to ",
         "move to ",
         "switch to ",
-        "enter ",
-        "open ",
+        "return to ",
     )
     ROOM_NAVIGATION_RE = re.compile(
         r"\b(?:go|take|move|switch|bring|send|head|route|direct|return)(?:\s+me|\s+us)?\s+to\b|\bback\s+to\b",
@@ -100,6 +101,7 @@ class RequestPipeline:
         "look it up",
         "search online",
         "web search",
+        "check online",
     )
     SEARCH_REVIEW_HINTS = (
         "reviews",
@@ -122,19 +124,18 @@ class RequestPipeline:
         "place",
         "places",
     )
-    SEARCH_DISCOVERY_HINTS = (
+    SEARCH_PLACE_DISCOVERY_HINTS = (
         "find",
-        "show me",
-        "list",
         "recommend",
         "nearest",
         "nearby",
+        "near me",
         "where is",
         "where are",
         "what's near",
         "whats near",
         "what is near",
-        "give me",
+        "closest",
     )
     SEARCH_BUSINESS_ADVICE_HINTS = (
         "increase food sales",
@@ -157,6 +158,15 @@ class RequestPipeline:
         "where are we",
         "current room",
         "what room are we in",
+    )
+    OCR_EXPLICIT_HINTS = (
+        "ocr",
+        "extract text",
+        "extract the text",
+        "read the text from",
+        "show the extracted text from",
+        "show me the extracted text from",
+        "transcribe",
     )
     SESSION_CREATE_HINTS = (
         "new session",
@@ -623,7 +633,7 @@ class RequestPipeline:
         location = self.extract_location(request_text)
         time_window = self.extract_time_window(text)
         review_signal = any(hint in text for hint in self.SEARCH_REVIEW_HINTS) or any(
-            hint in text for hint in ("top", "best", "highest", "rated")
+            hint in text for hint in ("top rated", "best rated", "highest rated", "top 5", "top 10")
         )
 
         if review_signal and any(hint in text for hint in self.SEARCH_PLACE_HINTS):
@@ -651,7 +661,7 @@ class RequestPipeline:
             }
 
         if any(hint in text for hint in self.SEARCH_PLACE_HINTS) and (
-            any(hint in text for hint in self.SEARCH_DISCOVERY_HINTS) or location is not None or " near " in f" {text} "
+            any(hint in text for hint in self.SEARCH_PLACE_DISCOVERY_HINTS) or location is not None or " near " in f" {text} "
         ):
             category = self.extract_place_category(text)
             return {
@@ -711,7 +721,7 @@ class RequestPipeline:
         text = request_text.lower().strip()
         if not text:
             return None
-        if "ocr" not in text and "extract text" not in text and "extracted text" not in text and "read file" not in text and "show me" not in text:
+        if not any(hint in text for hint in self.OCR_EXPLICIT_HINTS):
             return None
         match = self.FILE_ID_RE.search(request_text)
         if match:

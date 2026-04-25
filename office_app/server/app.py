@@ -1206,23 +1206,16 @@ def handle_ai_generate(args: Dict[str, Any]) -> Dict[str, Any]:
         }
     receptionist_context = receptionist_context_service.build_model_context(
         workspace_id=workspace_id,
-        user_profile=args.get("user_profile") if isinstance(args.get("user_profile"), dict) else None,
         session_id=str(args.get("session_id") or "").strip() or None,
     )
-    if isinstance(args.get("user_profile"), dict):
-        receptionist_context_service.update_context(
-            workspace_id,
-            {"known_user_profile": args.get("user_profile")},
-        )
     context = {
         **context,
-        "receptionist_context": receptionist_context,
-        "room_directory_text": receptionist_context.get("room_directory_text", ""),
-        "known_user_profile_text": receptionist_context.get("known_user_profile_text", ""),
+        "workspace_id": workspace_id,
+        "active_room": receptionist_context.get("active_room", state.get("active_room", "lobby")),
+        "active_persona": receptionist_context.get("active_persona", state.get("active_persona", "Receptionist")),
+        "session_id": receptionist_context.get("session_id"),
         "session_summary_text": receptionist_context.get("session_summary_text", ""),
         "recent_turns_text": receptionist_context.get("recent_turns_text", []),
-        "prompt_state_text": receptionist_context.get("prompt_state_text", ""),
-        "behavior_rules": receptionist_context.get("behavior_rules", []),
     }
 
     settings = args.get("settings")

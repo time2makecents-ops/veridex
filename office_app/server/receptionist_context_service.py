@@ -146,16 +146,26 @@ class ReceptionistContextStore:
         return fetched
 
     def _row_to_context(self, row: sqlite3.Row) -> Dict[str, Any]:
+        workspace_id = row["workspace_id"]
+        try:
+            state = self.kernel.get_state(workspace_id)
+        except Exception:
+            state = {}
         return {
-            "workspace_id": row["workspace_id"],
+            "workspace_id": workspace_id,
             "room_directory": self._load_json(row["room_directory_json"], []),
             "persona_directory": self._load_json(row["persona_directory_json"], []),
             "receptionist_script": self._load_json(row["receptionist_script_json"], {}),
             "policy_summary": self._load_json(row["policy_summary_json"], {}),
             "known_user_profile": self._load_json(row["known_user_profile_json"], {}),
-            "session_summary_text": row["session_summary_text"] or "",
-            "recent_turns": self._load_json(row["recent_turns_json"], []),
-            "current_prompt_state": self._load_json(row["current_prompt_state_json"], {}),
+            "session_summary_text": "",
+            "recent_turns": [],
+            "current_prompt_state": {
+                "mode": "lobby",
+                "awaiting": "text",
+                "active_room": state.get("active_room", "lobby"),
+                "active_persona": state.get("active_persona", "Receptionist"),
+            },
             "updated_at": row["updated_at"],
         }
 
@@ -247,10 +257,8 @@ class ReceptionistContextService:
         current = self._ensure_context(workspace_id)
         merged = dict(current)
         for key, value in updates.items():
-            if key in {"room_directory", "persona_directory", "receptionist_script", "policy_summary", "known_user_profile", "recent_turns", "current_prompt_state"}:
+            if key in {"room_directory", "persona_directory", "receptionist_script", "policy_summary", "known_user_profile"}:
                 merged[key] = value
-            elif key == "session_summary_text":
-                merged[key] = str(value or "")
         payload = {
             "workspace_id": workspace_id,
             "room_directory_json": merged.get("room_directory", []),
@@ -258,18 +266,25 @@ class ReceptionistContextService:
             "receptionist_script_json": merged.get("receptionist_script", {}),
             "policy_summary_json": merged.get("policy_summary", {}),
             "known_user_profile_json": merged.get("known_user_profile", {}),
-            "session_summary_text": merged.get("session_summary_text", ""),
-            "recent_turns_json": merged.get("recent_turns", []),
-            "current_prompt_state_json": merged.get("current_prompt_state", self._default_prompt_state(workspace_id)),
+            "session_summary_text": current.get("session_summary_text", ""),
+            "recent_turns_json": current.get("recent_turns", []),
+            "current_prompt_state_json": current.get("current_prompt_state", self._default_prompt_state(workspace_id)),
             "updated_at": self.utc_now(),
         }
         return self.store.upsert_context(payload)
 
     @staticmethod
-    def _trim_turns(turns: List[Dict[str, Any]], max_turns: int = 12) -> List[Dict[str, Any]]:
+    def _trim_turns(turns: List[Dict[str, Any]], max_turns: int = 4) -> List[Dict[str, Any]]:
         if len(turns) <= max_turns:
             return turns
         return turns[-max_turns:]
+
+    @staticmethod
+    def _truncate_text(value: Any, max_chars: int) -> str:
+        text = str(value or "").strip()
+        if len(text) <= max_chars:
+            return text
+        return text[: max(0, max_chars - 1)].rstrip() + "…"
 
     def record_turn(
         self,
@@ -282,44 +297,11 @@ class ReceptionistContextService:
         user_id: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        context = self._ensure_context(workspace_id)
-        turns = list(context.get("recent_turns") or [])
-        turns.append(
-            {
-                "role": role,
-                "text": text,
-                "room_id": room_id,
-                "persona_name": persona_name,
-                "user_id": user_id,
-                "session_id": session_id,
-                "ts": self.utc_now(),
-            }
+        self._ensure_context(workspace_id)
+        return self.build_model_context(
+            workspace_id=workspace_id,
+            session_id=session_id,
         )
-        session_summary_text = context.get("session_summary_text") or ""
-        if role == "user":
-            session_summary_text = f"Latest user request: {text[:240]}"
-        elif role == "assistant":
-            session_summary_text = f"Latest assistant response: {text[:240]}"
-
-        current_prompt_state = dict(context.get("current_prompt_state") or {})
-        if room_id:
-            current_prompt_state["active_room"] = room_id
-        if persona_name:
-            current_prompt_state["active_persona"] = persona_name
-        if role == "user":
-            current_prompt_state["awaiting"] = "text"
-        elif role == "assistant":
-            current_prompt_state["awaiting"] = "text"
-
-        updated = self.update_context(
-            workspace_id,
-            {
-                "recent_turns": self._trim_turns(turns),
-                "session_summary_text": session_summary_text,
-                "current_prompt_state": current_prompt_state,
-            },
-        )
-        return updated
 
     def build_model_context(
         self,
@@ -328,53 +310,26 @@ class ReceptionistContextService:
         user_profile: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        context = self._ensure_context(workspace_id)
+        self._ensure_context(workspace_id)
         state = self.kernel.get_state(workspace_id)
-        room_directory = context.get("room_directory", [])
-        profile = user_profile or context.get("known_user_profile", {})
-        profile_fields = []
-        for key in ("display_name", "name", "user_id"):
-            value = str(profile.get(key) or "").strip()
-            if value:
-                profile_fields.append(f"{key}: {value}")
-        room_summaries = []
-        for room in room_directory:
-            room_id = str(room.get("id") or "").strip()
-            title = str(room.get("title") or room_id).strip()
-            persona = str(room.get("default_persona") or "").strip()
-            if not title:
-                continue
-            summary = title
-            if persona:
-                summary = f"{summary} ({persona})"
-            room_summaries.append(summary)
+        transcript_rows: List[Dict[str, Any]] = []
+        if session_id:
+            transcript_rows = self.kernel.store.load_transcript(workspace_id, limit=8, session_id=session_id)
         recent_turns = []
-        for turn in context.get("recent_turns", [])[-8:]:
+        for turn in transcript_rows[-4:]:
             role = str(turn.get("role") or "assistant").strip()
             speaker = str(turn.get("persona_name") or role.title()).strip()
-            text = str(turn.get("text") or "").strip()
+            text = self._truncate_text(turn.get("text") or "", 300)
             if not text:
                 continue
-            recent_turns.append(f"{speaker} [{role}]: {text[:240]}")
-
-        prompt_state = context.get("current_prompt_state", {})
-        awaiting = str(prompt_state.get("awaiting") or "text").strip()
-        prompt_mode = str(prompt_state.get("mode") or "lobby").strip()
+            recent_turns.append(f"{speaker} [{role}]: {text[:300]}")
+        session_summary_text = self._truncate_text(" | ".join(recent_turns[-4:]), 600)
         merged = {
             "workspace_id": workspace_id,
             "active_room": state.get("active_room", "lobby"),
             "active_persona": state.get("active_persona", "Receptionist"),
-            "room_directory_text": "; ".join(room_summaries),
-            "known_user_profile_text": "; ".join(profile_fields),
-            "session_summary_text": context.get("session_summary_text", ""),
+            "session_summary_text": session_summary_text,
             "recent_turns_text": recent_turns,
-            "prompt_state_text": f"mode={prompt_mode}; awaiting={awaiting}",
-            "behavior_rules": [
-                "Stay in the active room and persona unless the backend changes it.",
-                "Never expose internal JSON, hidden tool names, or backend schema.",
-                "Answer file upload and download questions in user-facing language.",
-                "Use recent turns to resolve follow-up questions.",
-            ],
             "session_id": session_id,
         }
         return merged
