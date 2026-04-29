@@ -37,12 +37,12 @@ class OpenRouterProvider(BaseProvider):
         if not self.available():
             raise ProviderUnavailableError("OpenRouter API key is not configured.")
 
-        merged_user_prompt = self._merge_context_prompt(user_prompt, context)
+        merged_system_prompt = self._merge_system_context(system_prompt, context)
         payload = {
             "model": self.model_name,
             "messages": [
-                {"role": "system", "content": system_prompt.strip()},
-                {"role": "user", "content": merged_user_prompt},
+                {"role": "system", "content": merged_system_prompt},
+                {"role": "user", "content": user_prompt.strip()},
             ],
             "temperature": float((settings or {}).get("temperature", 0.3)),
             "max_tokens": int((settings or {}).get("max_output_tokens", 512)),

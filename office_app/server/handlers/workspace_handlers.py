@@ -133,6 +133,11 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             raise error_missing_required_field("room_id")
 
         result = deps.kernel.enter_room(workspace_id, room_id, session_id=session_id)
+        deps.user_service.remember_session_room(
+            session_id,
+            active_room=str(result["active_room"]),
+            active_persona=str(result["active_persona"]),
+        )
         state = deps.kernel.get_state(workspace_id)
 
         deps.append_incident(

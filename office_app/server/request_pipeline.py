@@ -115,6 +115,16 @@ class RequestPipeline:
     SEARCH_PLACE_HINTS = (
         "restaurant",
         "restaurants",
+        "resaurnat",
+        "resaurnats",
+        "restaurnat",
+        "restaurnats",
+        "resteraunt",
+        "resteraunts",
+        "restaraunt",
+        "restaraunts",
+        "resturant",
+        "resturants",
         "bar",
         "bars",
         "coffee",
@@ -150,6 +160,77 @@ class RequestPipeline:
         "revenue strategy",
         "how do i improve",
     )
+    INTENT_META_HINTS = (
+        "why did you respond that way",
+        "what criteria did you use",
+        "explain your reasoning",
+        "read your last response",
+        "how are you deciding",
+        "how did you decide",
+        "why did you say that",
+        "what did you mean",
+        "what are you doing",
+    )
+    INTENT_ADVICE_HINTS = (
+        "what are the best restaurants to model mine after",
+        "how should i improve",
+        "how can i improve",
+        "how do i improve",
+        "improve my restaurant marketing",
+        "what makes a restaurant successful",
+        "what makes restaurants successful",
+        "model mine after",
+        "best practices",
+        "restaurant marketing",
+        "sales strategy",
+        "marketing strategy",
+    )
+    MODEL_NO_BACKGROUND_RULE = (
+        "Do not claim you are searching, processing, working in the background, or that you will send results later. "
+        "You can only answer with information available in this response. If a tool or missing detail is needed, say so directly."
+    )
+    MODEL_CONTEXT_RULE = (
+        "Use recent turns to resolve pronouns, short follow-ups, implied topics, and references like 'what about that one'. "
+        "Do not ask for details already present in recent context."
+    )
+    CORRECTION_VOCABULARY = (
+        "artifact",
+        "artifacts",
+        "bar",
+        "bars",
+        "break",
+        "cafe",
+        "coffee",
+        "conference",
+        "directory",
+        "document",
+        "download",
+        "extract",
+        "file",
+        "files",
+        "finance",
+        "hotel",
+        "hotels",
+        "internet",
+        "italian",
+        "lobby",
+        "load",
+        "marketing",
+        "office",
+        "open",
+        "read",
+        "restaurant",
+        "restaurants",
+        "reviews",
+        "room",
+        "sales",
+        "save",
+        "search",
+        "session",
+        "thai",
+        "upload",
+        "workspace",
+    )
     ROOM_STATUS_HINTS = (
         "where am i",
         "what room am i in",
@@ -164,6 +245,9 @@ class RequestPipeline:
         "extract text",
         "extract the text",
         "read the text from",
+        "read file",
+        "read the file",
+        "read document",
         "show the extracted text from",
         "show me the extracted text from",
         "transcribe",
@@ -493,6 +577,44 @@ class RequestPipeline:
         return None
 
     def route_user_request(self, workspace_id: str, request_text: str) -> Dict[str, Any]:
+        intent = self.classify_intent(request_text)
+        if intent in {"meta", "advice"}:
+            ctx = self.current_context(workspace_id)
+            active_room = str(ctx["active_room"])
+            active_persona = str(ctx["active_persona"])
+            system_prompt = (
+                f"You are Veridex. The active workspace is {workspace_id}. "
+                f"The active room is {active_room}. The active persona is {active_persona}. "
+                "Respond clearly, concisely, and in a way that fits the current office context. "
+                f"{self.MODEL_CONTEXT_RULE} {self.MODEL_NO_BACKGROUND_RULE}"
+            )
+            return {
+                "route_kind": "model",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                "capability": "ai.respond",
+                "tool": "office.ai_generate",
+                "arguments": {
+                    "workspace_id": workspace_id,
+                    "task_type": "conversation",
+                    "system_prompt": system_prompt,
+                    "user_prompt": request_text,
+                    "context": {
+                        "workspace_id": workspace_id,
+                        "active_room": active_room,
+                        "active_persona": active_persona,
+                    },
+                    "settings": {
+                        "temperature": 0.4,
+                        "max_output_tokens": 512,
+                        "provider_by_task_type": {
+                            "conversation": "gemini",
+                        },
+                    },
+                },
+                "reason": "Matched meta or advice intent before tool routing.",
+            }
+
         artifact_route = self.route_artifact_request(workspace_id, request_text)
         if artifact_route is not None:
             return {
@@ -584,13 +706,26 @@ class RequestPipeline:
                 "requires_confirmation": True,
             }
 
+        correction = self.suggest_correction(request_text)
+        if correction is not None:
+            return {
+                "route_kind": "clarify",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                "capability": "clarification.spelling",
+                "tool": "office.clarify_spelling",
+                "arguments": correction,
+                "reason": f"Possible misspelling: {correction['word']} -> {correction['suggestion']}.",
+            }
+
         ctx = self.current_context(workspace_id)
         active_room = str(ctx["active_room"])
         active_persona = str(ctx["active_persona"])
         system_prompt = (
             f"You are Veridex. The active workspace is {workspace_id}. "
             f"The active room is {active_room}. The active persona is {active_persona}. "
-            "Respond clearly, concisely, and in a way that fits the current office context."
+            "Respond clearly, concisely, and in a way that fits the current office context. "
+            f"{self.MODEL_CONTEXT_RULE} {self.MODEL_NO_BACKGROUND_RULE}"
         )
         return {
             "route_kind": "model",
@@ -619,6 +754,16 @@ class RequestPipeline:
             "reason": "No strong department match found. Using the model route.",
         }
 
+    def classify_intent(self, request_text: str) -> str:
+        text = request_text.lower().strip()
+        if not text:
+            return "task"
+        if any(hint in text for hint in self.INTENT_META_HINTS):
+            return "meta"
+        if any(hint in text for hint in self.INTENT_ADVICE_HINTS):
+            return "advice"
+        return "task"
+
     def route_search_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         text = request_text.lower().strip()
         if not text:
@@ -630,19 +775,37 @@ class RequestPipeline:
             ):
                 return None
 
-        location = self.extract_location(request_text)
+        place_query = self.normalize_place_query(request_text)
         time_window = self.extract_time_window(text)
         review_signal = any(hint in text for hint in self.SEARCH_REVIEW_HINTS) or any(
             hint in text for hint in ("top rated", "best rated", "highest rated", "top 5", "top 10")
+        ) or bool(
+            re.search(r"\bbest\b", text)
+            and any(hint in text for hint in self.SEARCH_PLACE_HINTS)
+            and not any(hint in text for hint in self.INTENT_ADVICE_HINTS)
         )
+
+        if review_signal and any(hint in text for hint in self.SEARCH_PLACE_HINTS) and place_query["needs_location"]:
+            return {
+                "capability": "search.places",
+                "tool": "office.search_places",
+                "arguments": {
+                    "query": place_query["normalized_query"] or request_text,
+                    "location": place_query["location"],
+                    "category": place_query["category"],
+                    "needs_location": True,
+                    "limit": 5,
+                },
+                "reason": "Matched place lookup intent but needs a location.",
+            }
 
         if review_signal and any(hint in text for hint in self.SEARCH_PLACE_HINTS):
             return {
                 "capability": "search.reviews",
                 "tool": "office.search_reviews",
                 "arguments": {
-                    "query": request_text,
-                    "location": location,
+                    "query": place_query["normalized_query"] or request_text,
+                    "location": place_query["location"],
                     "time_window": time_window,
                     "limit": 5,
                 },
@@ -661,16 +824,16 @@ class RequestPipeline:
             }
 
         if any(hint in text for hint in self.SEARCH_PLACE_HINTS) and (
-            any(hint in text for hint in self.SEARCH_PLACE_DISCOVERY_HINTS) or location is not None or " near " in f" {text} "
+            place_query["is_explicit"] or place_query["location"] is not None or place_query["needs_location"]
         ):
-            category = self.extract_place_category(text)
             return {
                 "capability": "search.places",
                 "tool": "office.search_places",
                 "arguments": {
-                    "query": request_text,
-                    "location": location,
-                    "category": category,
+                    "query": place_query["normalized_query"] or request_text,
+                    "location": place_query["location"],
+                    "category": place_query["category"],
+                    "needs_location": place_query["needs_location"],
                     "limit": 5,
                 },
                 "reason": "Matched place lookup intent.",
@@ -691,6 +854,54 @@ class RequestPipeline:
                 "workspace_id": workspace_id,
             },
             "reason": "Matched a room status query.",
+        }
+
+    def route_contextual_followup(
+        self,
+        workspace_id: str,
+        request_text: str,
+        recent_turns: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        text = request_text.strip()
+        match = re.match(r"^(?:what|how)\s+about\s+(.+?)\??$", text, re.IGNORECASE)
+        if not match:
+            return None
+        subject = re.sub(r"\s+", " ", match.group(1).strip(" .?!")).strip()
+        if len(subject) < 3:
+            return None
+
+        recent_text = "\n".join(str(turn.get("text") or "") for turn in recent_turns[-8:])
+        recent_lower = recent_text.lower()
+        if not any(marker in recent_lower for marker in ("restaurant", "restaurants", "review-oriented results", "place results")):
+            return None
+
+        location = None
+        for turn in reversed(recent_turns[-8:]):
+            location = self.extract_location(str(turn.get("text") or ""))
+            if location:
+                break
+        if not location:
+            return None
+
+        category = "restaurant"
+        if "italian" in recent_lower:
+            category = "italian restaurant"
+        elif "thai" in recent_lower:
+            category = "thai restaurant"
+
+        return {
+            "route_kind": "tool",
+            "workspace_id": workspace_id,
+            "request": request_text,
+            "capability": "search.reviews",
+            "tool": "office.search_reviews",
+            "arguments": {
+                "query": f"{subject} {category}",
+                "location": location,
+                "time_window": None,
+                "limit": 5,
+            },
+            "reason": "Resolved a short follow-up against the recent restaurant search context.",
         }
 
     def route_session_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
@@ -735,7 +946,22 @@ class RequestPipeline:
             }
         file_name_match = self.FILE_NAME_RE.search(request_text)
         if not file_name_match:
-            return None
+            read_file_match = re.search(
+                r"\bread(?:\s+the)?\s+file\s+(?P<name>[A-Za-z0-9_().-]{1,120})\b",
+                request_text,
+                re.IGNORECASE,
+            )
+            if not read_file_match:
+                return None
+            file_name = read_file_match.group("name").strip()
+            return {
+                "capability": "document.ocr",
+                "tool": "office.ocr_extract",
+                "arguments": {
+                    "file_name": file_name,
+                },
+                "reason": "Matched OCR request with a file reference.",
+            }
         return {
             "capability": "document.ocr",
             "tool": "office.ocr_extract",
@@ -767,10 +993,114 @@ class RequestPipeline:
         return None
 
     def extract_place_category(self, text: str) -> Optional[str]:
-        for candidate in ("restaurant", "bar", "bars", "coffee", "cafe", "hotel", "hotels"):
+        for candidate in (
+            "restaurant",
+            "restaurants",
+            "resaurnat",
+            "resaurnats",
+            "restaurnat",
+            "restaurnats",
+            "resteraunt",
+            "resteraunts",
+            "restaraunt",
+            "restaraunts",
+            "resturant",
+            "resturants",
+            "bar",
+            "bars",
+            "coffee",
+            "cafe",
+            "hotel",
+            "hotels",
+            "thai",
+        ):
             if candidate in text:
                 return candidate
         return None
+
+    def suggest_correction(self, request_text: str) -> Optional[Dict[str, str]]:
+        words = re.findall(r"[A-Za-z]{4,}", request_text.lower())
+        if not words:
+            return None
+        vocabulary = list(dict.fromkeys(self.CORRECTION_VOCABULARY + tuple(normalize_room_text(room.get("title", "")) for room in rooms_payload())))
+        vocabulary = [word for phrase in vocabulary for word in phrase.split() if len(word) >= 4]
+        for word in words:
+            if word in vocabulary:
+                continue
+            matches = difflib.get_close_matches(word, vocabulary, n=1, cutoff=0.84)
+            if matches:
+                suggestion = matches[0]
+                if suggestion.startswith(word) or word.startswith(suggestion):
+                    continue
+                return {
+                    "word": word,
+                    "suggestion": suggestion,
+                    "response_text": f"Did you mean \"{suggestion}\" when you wrote \"{word}\"?",
+                }
+        return None
+
+    def normalize_place_query(self, request_text: str) -> Dict[str, Any]:
+        text = request_text.strip()
+        lowered = text.lower().strip()
+        lowered = re.sub(r"\b(?:resaurnats|restaurnats|resteraunts|restaraunts|resturants)\b", "restaurants", lowered)
+        lowered = re.sub(r"\b(?:resaurnat|restaurnat|resteraunt|restaraunt|resturant)\b", "restaurant", lowered)
+        lowered = re.sub(r"^[\s,]*(?:find|show me|list|recommend|give me)\s+", "", lowered).strip()
+        lowered = re.sub(r"\b(?:near me|nearby|around me)\b", "", lowered).strip()
+        location = self.extract_location(text)
+        lowered = re.sub(r"\bin\s+[A-Za-z][A-Za-z0-9 .,'&-]{1,60}", "", lowered, flags=re.IGNORECASE).strip()
+        lowered = lowered.strip(" .,!?:;")
+        if lowered.startswith("the "):
+            lowered = lowered[4:].strip()
+        cuisine_match = re.search(r"\b([A-Za-z][A-Za-z0-9&'-]{1,40})\s+restaurants?\b", lowered or text, re.IGNORECASE)
+        if cuisine_match and cuisine_match.group(1).lower() not in {"best", "top", "local", "good", "great"}:
+            cuisine = cuisine_match.group(1).strip().lower()
+            category = cuisine
+            normalized_query = f"{cuisine} restaurants"
+        else:
+            category = self.extract_place_category(lowered or text)
+            category_map = {
+                "restaurant": "restaurants",
+                "restaurants": "restaurants",
+                "resaurnat": "restaurants",
+                "resaurnats": "restaurants",
+                "restaurnat": "restaurants",
+                "restaurnats": "restaurants",
+                "resteraunt": "restaurants",
+                "resteraunts": "restaurants",
+                "restaraunt": "restaurants",
+                "restaraunts": "restaurants",
+                "resturant": "restaurants",
+                "resturants": "restaurants",
+                "bar": "bars",
+                "bars": "bars",
+                "coffee": "coffee",
+                "cafe": "cafe",
+                "hotel": "hotels",
+                "hotels": "hotels",
+            }
+            category = category_map.get(category or "", category)
+            if category in {"restaurants", "bars", "hotels"} and (
+                lowered == category or any(marker in lowered for marker in ("best", "top", "local"))
+            ):
+                normalized_query = category
+            else:
+                normalized_query = lowered or category or ""
+        normalized_query = re.sub(r"\s+", " ", normalized_query).strip()
+        needs_location = bool(
+            not location and any(marker in text.lower() for marker in ("near me", "nearby", "around me", "best ", "top ", "local"))
+        )
+        is_explicit = bool(
+            re.match(r"^(find|show me|list|recommend|give me)\b", text.strip(), re.IGNORECASE)
+            or location is not None
+            or " near " in f" {text.lower()} "
+        )
+        return {
+            "normalized_query": normalized_query,
+            "category": category,
+            "location": location,
+            "needs_location": needs_location,
+            "is_explicit": is_explicit,
+        }
 
     def mailroom_header(self, to_persona: str, dest_room_title: str, subject: str) -> str:
         return f"Memo filed to: {to_persona} ({dest_room_title})\\nSubject: {subject}\\n"

@@ -210,7 +210,7 @@ export default function ChatPage() {
   const visibleMessages = useMemo(
     () =>
       messages.filter((message) => {
-        const sessionMatches = !message.sessionId || message.sessionId === sessionId;
+        const sessionMatches = message.sessionId === sessionId;
         if (!sessionMatches) {
           return false;
         }

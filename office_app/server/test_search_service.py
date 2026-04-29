@@ -60,6 +60,13 @@ class SearchServiceTests(unittest.TestCase):
         self.assertIn("Address:", result["summary_text"])
         self.assertIn("URL:", result["summary_text"])
 
+    def test_search_places_requests_location_for_nearby_queries(self) -> None:
+        service = SearchService(fetch_json=lambda url, headers: self.fail("provider should not be called"))
+        result = service.search_places(query="restaurants", category="restaurants", needs_location=True)
+        self.assertTrue(result["needs_location"])
+        self.assertEqual(result["results"], [])
+        self.assertIn("I need your location", result["summary_text"])
+
 
 if __name__ == "__main__":
     unittest.main()

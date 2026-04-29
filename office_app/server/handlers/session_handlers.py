@@ -47,19 +47,11 @@ def build_session_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         current_workspace = deps.kernel.get_state(workspace_id)
         sessions = []
         for row in rows:
-            session_workspace_id = str(row.get("active_workspace_id") or "").strip()
-            try:
-                session_workspace = deps.kernel.get_state(session_workspace_id)
-                active_room = session_workspace.get("active_room", "lobby")
-                active_persona = session_workspace.get("active_persona", "Receptionist")
-            except Exception:
-                active_room = "lobby"
-                active_persona = "Receptionist"
             sessions.append(
                 {
                     **row,
-                    "active_room": active_room,
-                    "active_persona": active_persona,
+                    "active_room": row.get("active_room") or "lobby",
+                    "active_persona": row.get("active_persona") or "Receptionist",
                     "is_current": row.get("session_id") == current_session_id,
                 }
             )

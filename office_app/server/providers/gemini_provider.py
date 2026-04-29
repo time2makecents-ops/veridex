@@ -38,15 +38,15 @@ class GeminiProvider(BaseProvider):
         if not self.available():
             raise ProviderUnavailableError("Gemini API key is not configured.")
 
-        merged_user_prompt = self._merge_context_prompt(user_prompt, context)
+        merged_system_prompt = self._merge_system_context(system_prompt, context)
         payload = {
             "systemInstruction": {
-                "parts": [{"text": system_prompt.strip()}],
+                "parts": [{"text": merged_system_prompt}],
             },
             "contents": [
                 {
                     "role": "user",
-                    "parts": [{"text": merged_user_prompt}],
+                    "parts": [{"text": user_prompt.strip()}],
                 }
             ],
             "generationConfig": {

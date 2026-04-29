@@ -73,9 +73,9 @@ class BaseProvider(ABC):
             raise ProviderRequestError(f"{self.provider_name} request failed: {exc.reason}") from exc
 
     @staticmethod
-    def _merge_context_prompt(user_prompt: str, context: Optional[Dict[str, Any]]) -> str:
+    def _context_summary(context: Optional[Dict[str, Any]]) -> str:
         if not context:
-            return user_prompt.strip()
+            return ""
         def _scalar_text(value: Any) -> str:
             if value is None:
                 return ""
@@ -118,6 +118,16 @@ class BaseProvider(ABC):
             if value_text:
                 lines.append(f"{key}: {value_text[:300]}")
         if not lines:
-            return user_prompt.strip()
-        context_block = "\n".join(lines[:12])
-        return f"{user_prompt.strip()}\n\nContext summary:\n{context_block}"
+            return ""
+        return "\n".join(lines[:12])
+
+    @classmethod
+    def _merge_system_context(cls, system_prompt: str, context: Optional[Dict[str, Any]]) -> str:
+        summary = cls._context_summary(context)
+        if not summary:
+            return system_prompt.strip()
+        return f"{system_prompt.strip()}\n\nContext summary:\n{summary}"
+
+    @staticmethod
+    def _merge_context_prompt(user_prompt: str, context: Optional[Dict[str, Any]]) -> str:
+        return user_prompt.strip()

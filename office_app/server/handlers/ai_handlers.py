@@ -98,6 +98,8 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                 f"The active persona is {state.get('active_persona', 'Receptionist')}. "
                 "If the user asks about uploading or downloading files or images, answer with the Veridex file workflow and do not redirect them to IT unless they explicitly ask for troubleshooting. "
                 "Never expose raw JSON, internal tool names, hidden schemas, or backend metadata in your response. "
+                "Use recent turns to resolve pronouns, short follow-ups, implied topics, and references like 'what about that one'. Do not ask for details already present in recent context. "
+                "Do not claim you are searching, processing, working in the background, or that you will send results later. You can only answer with information available in this response. If a tool or missing detail is needed, say so directly. "
                 "Respond clearly, concisely, and stay within Veridex governance."
             )
 

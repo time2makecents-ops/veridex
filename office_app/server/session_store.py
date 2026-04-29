@@ -12,6 +12,8 @@ SESSION_COLUMNS = (
     "title",
     "description",
     "active_workspace_id",
+    "active_room",
+    "active_persona",
     "created_at",
     "updated_at",
     "last_active_at",
@@ -50,6 +52,8 @@ class SessionStore:
                     title TEXT NOT NULL,
                     description TEXT NOT NULL DEFAULT '',
                     active_workspace_id TEXT NOT NULL,
+                    active_room TEXT NOT NULL DEFAULT 'lobby',
+                    active_persona TEXT NOT NULL DEFAULT 'Receptionist',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     last_active_at TEXT NOT NULL,
@@ -57,6 +61,11 @@ class SessionStore:
                 )
                 """
             )
+            existing_columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({self.table_name})").fetchall()}
+            if "active_room" not in existing_columns:
+                conn.execute(f"ALTER TABLE {self.table_name} ADD COLUMN active_room TEXT NOT NULL DEFAULT 'lobby'")
+            if "active_persona" not in existing_columns:
+                conn.execute(f"ALTER TABLE {self.table_name} ADD COLUMN active_persona TEXT NOT NULL DEFAULT 'Receptionist'")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_sessions_v2_user "
                 "ON sessions_v2(user_id, last_active_at DESC, updated_at DESC)"
@@ -92,8 +101,8 @@ class SessionStore:
             conn.execute(
                 """
                 INSERT OR IGNORE INTO sessions_v2 (
-                    session_id, user_id, title, description, active_workspace_id, created_at, updated_at, last_active_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    session_id, user_id, title, description, active_workspace_id, active_room, active_persona, created_at, updated_at, last_active_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -101,6 +110,8 @@ class SessionStore:
                     title,
                     "",
                     active_workspace_id,
+                    "lobby",
+                    "Receptionist",
                     created_at,
                     updated_at,
                     updated_at,
@@ -115,6 +126,8 @@ class SessionStore:
         payload = dict(record)
         payload.setdefault("title", f"Session {str(payload.get('session_id') or '')[-4:]}")
         payload.setdefault("description", "")
+        payload.setdefault("active_room", "lobby")
+        payload.setdefault("active_persona", "Receptionist")
         payload.setdefault("last_active_at", payload.get("updated_at"))
         if not payload.get("last_active_at"):
             payload["last_active_at"] = payload["updated_at"]

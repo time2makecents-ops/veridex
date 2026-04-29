@@ -158,6 +158,13 @@ class UserService:
         description: str = "",
     ) -> Dict[str, Any]:
         now = self.utc_now()
+        try:
+            workspace_state = self.kernel.get_state(workspace_id)
+            active_room = str(workspace_state.get("active_room") or "lobby")
+            active_persona = str(workspace_state.get("active_persona") or "Receptionist")
+        except Exception:
+            active_room = "lobby"
+            active_persona = "Receptionist"
         return self.sessions.insert_session(
             {
                 "session_id": f"sess_{uuid.uuid4().hex[:12]}",
@@ -165,6 +172,8 @@ class UserService:
                 "title": self._normalize_text(title) or "Session",
                 "description": self._normalize_text(description),
                 "active_workspace_id": workspace_id,
+                "active_room": active_room,
+                "active_persona": active_persona,
                 "created_at": now,
                 "updated_at": now,
                 "last_active_at": now,
@@ -191,7 +200,40 @@ class UserService:
                 "updated_at": now,
             },
         )
+        self._restore_session_room(activated)
         return activated
+
+    def _restore_session_room(self, session: Dict[str, Any]) -> None:
+        workspace_id = str(session.get("active_workspace_id") or "").strip()
+        if not workspace_id:
+            return
+        try:
+            state = self.kernel.get_state(workspace_id)
+        except HTTPException:
+            return
+        active_room = str(session.get("active_room") or state.get("active_room") or "lobby")
+        active_persona = str(session.get("active_persona") or state.get("active_persona") or "Receptionist")
+        state["active_room"] = active_room
+        state["active_persona"] = active_persona
+        self.kernel.store.save_state(workspace_id, state)
+        self.kernel.store.touch_workspace(workspace_id, active_room)
+
+    def remember_session_room(self, session_id: Optional[str], *, active_room: str, active_persona: str) -> None:
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            return
+        try:
+            self.sessions.update_session(
+                session_id,
+                {
+                    "active_room": self._normalize_text(active_room) or "lobby",
+                    "active_persona": self._normalize_text(active_persona) or "Receptionist",
+                    "updated_at": self.utc_now(),
+                    "last_active_at": self.utc_now(),
+                },
+            )
+        except LookupError:
+            return
 
     def create_session(
         self,

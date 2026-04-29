@@ -321,6 +321,116 @@ def _request_text_from_response(response: Dict[str, Any]) -> str:
     return ""
 
 
+def _make_tool_text_conversational(response: Dict[str, Any], capability: str) -> Dict[str, Any]:
+    text = _request_text_from_response(response)
+    if not text or not capability.startswith(("search.", "document.")):
+        return response
+    if text.startswith(("I need ", "No ", "Web results", "Review-oriented results", "Place results")):
+        next_text = text
+    elif capability == "document.ocr":
+        next_text = f"Here is the extracted text:\n\n{text}"
+    else:
+        next_text = f"Here is what I found:\n\n{text}"
+    updated = dict(response)
+    structured = dict(updated.get("structuredContent") or {})
+    structured["response_text"] = next_text
+    updated["structuredContent"] = structured
+    updated["content"] = [{"type": "text", "text": next_text}]
+    return updated
+
+
+def _tool_result_brief(response: Dict[str, Any]) -> str:
+    structured = response.get("structuredContent")
+    if not isinstance(structured, dict):
+        return _request_text_from_response(response)[:2500]
+    summary = str(structured.get("summary_text") or _request_text_from_response(response) or "").strip()
+    results = structured.get("results")
+    lines = [summary] if summary else []
+    if isinstance(results, list):
+        for index, item in enumerate(results[:5], start=1):
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            source = str(item.get("source") or "").strip()
+            snippet = str(item.get("snippet") or item.get("address") or "").strip()
+            url = str(item.get("url") or "").strip()
+            row = f"{index}. {title}".strip()
+            if source:
+                row += f" ({source})"
+            if snippet:
+                row += f": {snippet[:350]}"
+            if url:
+                row += f" URL: {url}"
+            lines.append(row)
+    return "\n".join(line for line in lines if line).strip()[:3500]
+
+
+def _synthesize_search_response(
+    *,
+    routed: Dict[str, Any],
+    result: Dict[str, Any],
+    workspace_id: str,
+    session_id: str,
+    user_profile: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not str(routed.get("capability") or "").startswith("search."):
+        return result
+    brief = _tool_result_brief(result)
+    if not brief or brief.startswith(("I need ", "No ")):
+        return result
+    state = kernel.get_state(workspace_id)
+    system_prompt = (
+        f"You are Veridex. The active room is {state.get('active_room', 'lobby')}. "
+        f"The active persona is {state.get('active_persona', 'Receptionist')}. "
+        "Answer like a helpful conversational assistant. Use the search results below as evidence, not as raw output. "
+        "Answer the user's question directly in the first sentence. "
+        "For recommendation searches, name the best options you can infer from the results instead of describing Tripadvisor, Yelp, or other sources as resources. "
+        "Do not lead with source names unless the source itself is the answer. "
+        "If results are list pages, extract the named places from titles/snippets and say that the ranking is based on available search snippets. "
+        "Mention important uncertainty briefly and include links when useful. "
+        "Use recent turns to resolve follow-ups. Do not claim background work or future messages."
+    )
+    user_prompt = (
+        f"User request: {routed.get('request', '')}\n\n"
+        f"Search results:\n{brief}\n\n"
+        "Write the response the user should see."
+    )
+    args: Dict[str, Any] = {
+        "workspace_id": workspace_id,
+        "session_id": session_id,
+        "task_type": "conversation",
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+        "context": {
+            "workspace_id": workspace_id,
+            "active_room": state.get("active_room", "lobby"),
+            "active_persona": state.get("active_persona", "Receptionist"),
+            "tool_result": brief,
+        },
+        "settings": {
+            "temperature": 0.3,
+            "max_output_tokens": 700,
+            "provider_by_task_type": {"conversation": "gemini"},
+        },
+    }
+    if user_profile:
+        args["user_profile"] = user_profile
+    try:
+        synthesized = router.dispatch_capability("ai.respond", args, preferred_tool="office.ai_generate")
+    except Exception:
+        return result
+    text = _request_text_from_response(synthesized)
+    if not text:
+        return result
+    updated = dict(result)
+    structured = dict(updated.get("structuredContent") or {})
+    structured["raw_tool_summary"] = structured.get("summary_text") or _request_text_from_response(result)
+    structured["response_text"] = text
+    updated["structuredContent"] = structured
+    updated["content"] = [{"type": "text", "text": text}]
+    return updated
+
+
 def _session_user_profile(session_id: Optional[str]) -> Optional[Dict[str, Any]]:
     if not session_id:
         return None
@@ -463,8 +573,16 @@ def handle_natural_language_request(
             return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
 
     routed = pipeline.route_user_request(workspace_id, request_text)
+    if routed["route_kind"] == "model":
+        followup_route = pipeline.route_contextual_followup(
+            workspace_id,
+            request_text,
+            store.load_transcript(workspace_id, limit=8, session_id=session_id),
+        )
+        if followup_route is not None:
+            routed = followup_route
 
-    should_record = routed["route_kind"] in {"model", "nancy", "tool"}
+    should_record = routed["route_kind"] in {"model", "nancy", "tool", "clarify"}
     if should_record:
         current_state = kernel.get_state(workspace_id)
         active_room_for_user = str(current_state.get("active_room") or "lobby")
@@ -496,6 +614,7 @@ def handle_natural_language_request(
             args,
             preferred_tool=routed.get("tool"),
         )
+        result = _make_tool_text_conversational(result, str(routed.get("capability") or ""))
         if isinstance(result, dict):
             structured = result.get("structuredContent")
             if isinstance(structured, dict):
@@ -516,6 +635,13 @@ def handle_natural_language_request(
             routed["capability"],
             args,
             preferred_tool=routed.get("tool"),
+        )
+        result = _synthesize_search_response(
+            routed=routed,
+            result=result,
+            workspace_id=workspace_id,
+            session_id=session_id,
+            user_profile=user_profile,
         )
         if isinstance(result, dict):
             structured = result.get("structuredContent")
@@ -636,6 +762,42 @@ def handle_natural_language_request(
                     "reason": routed["reason"],
                     "auto_routed": True,
                 }
+        return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
+
+    if routed["route_kind"] == "clarify":
+        response_text = str(routed.get("arguments", {}).get("response_text") or "Did you mean something else?")
+        response = {
+            "structuredContent": {
+                "workspace_id": workspace_id,
+                "session_id": session_id,
+                "response_text": response_text,
+                "routing": {
+                    "route_kind": "clarify",
+                    "capability": routed["capability"],
+                    "tool": routed["tool"],
+                    "reason": routed["reason"],
+                },
+            },
+            "content": [{"type": "text", "text": response_text}],
+        }
+        receptionist_context_service.record_turn(
+            workspace_id=workspace_id,
+            role="assistant",
+            text=response_text,
+            room_id=kernel.get_state(workspace_id).get("active_room", "lobby"),
+            persona_name=kernel.get_state(workspace_id).get("active_persona", "Receptionist"),
+            user_id=str((user_profile or {}).get("user_id") or "").strip() or None,
+            session_id=session_id,
+        )
+        current_state = kernel.get_state(workspace_id)
+        store.append_transcript(
+            workspace_id,
+            "assistant",
+            str(current_state.get("active_room") or "lobby"),
+            response_text,
+            speaker=str(current_state.get("active_persona") or "Receptionist"),
+            session_id=session_id,
+        )
         return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
 
     if routed["route_kind"] == "model":
@@ -773,18 +935,11 @@ def list_sessions(
     current_session_id = str(user.get("last_active_session_id") or "").strip()
     sessions = []
     for row in rows:
-        try:
-            session_workspace = kernel.get_state(str(row.get("active_workspace_id") or "").strip())
-            active_room = session_workspace.get("active_room", "lobby")
-            active_persona = session_workspace.get("active_persona", "Receptionist")
-        except Exception:
-            active_room = "lobby"
-            active_persona = "Receptionist"
         sessions.append(
             {
                 **row,
-                "active_room": active_room,
-                "active_persona": active_persona,
+                "active_room": row.get("active_room") or "lobby",
+                "active_persona": row.get("active_persona") or "Receptionist",
                 "is_current": row.get("session_id") == current_session_id,
             }
         )
@@ -1141,11 +1296,17 @@ def handle_commands_list(args: Dict[str, Any]) -> Dict[str, Any]:
 
 def handle_office_room_set(args: Dict[str, Any]) -> Dict[str, Any]:
     workspace_id = args["workspace_id"]
+    session_id = str(args.get("session_id") or "").strip() or None
     room_id = str(args.get("room_id", "")).strip()
     if not room_id:
         raise error_missing_required_field("room_id")
 
-        result = kernel.enter_room(workspace_id, room_id, session_id=session_id)
+    result = kernel.enter_room(workspace_id, room_id, session_id=session_id)
+    user_service.remember_session_room(
+        session_id,
+        active_room=str(result["active_room"]),
+        active_persona=str(result["active_persona"]),
+    )
     state = kernel.get_state(workspace_id)
 
     append_incident(
@@ -1194,6 +1355,8 @@ def handle_ai_generate(args: Dict[str, Any]) -> Dict[str, Any]:
             f"The active persona is {state.get('active_persona', 'Receptionist')}. "
             "If the user asks about uploading or downloading files or images, answer with the Veridex file workflow and do not redirect them to IT unless they explicitly ask for troubleshooting. "
             "Never expose raw JSON, internal tool names, hidden schemas, or backend metadata in your response. "
+            "Use recent turns to resolve pronouns, short follow-ups, implied topics, and references like 'what about that one'. Do not ask for details already present in recent context. "
+            "Do not claim you are searching, processing, working in the background, or that you will send results later. You can only answer with information available in this response. If a tool or missing detail is needed, say so directly. "
             "Respond clearly, concisely, and stay within Veridex governance."
         )
 

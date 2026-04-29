@@ -107,12 +107,25 @@ class SearchService:
         query: str,
         location: Optional[str] = None,
         category: Optional[str] = None,
+        needs_location: bool = False,
         limit: int = 5,
     ) -> Dict[str, Any]:
         cleaned_query = query.strip()
         if not cleaned_query:
             raise SearchServiceError("Place query required.")
         inferred_location = location or self._extract_location(cleaned_query)
+        if needs_location and not inferred_location:
+            category_text = category or cleaned_query or "places"
+            clarification = f"I need your location or a city/area to search nearby {category_text}."
+            return {
+                "query": cleaned_query,
+                "location": None,
+                "category": category,
+                "limit": limit,
+                "needs_location": True,
+                "results": [],
+                "summary_text": clarification,
+            }
         full_query = " ".join(part for part in [category, cleaned_query, inferred_location] if part).strip()
         url = f"https://nominatim.openstreetmap.org/search?format=jsonv2&limit={max(1, min(limit, 10))}&q={quote_plus(full_query)}"
         payload = self._fetch_json(url, {"Accept": "application/json"})
@@ -136,6 +149,7 @@ class SearchService:
             "location": inferred_location,
             "category": category,
             "limit": limit,
+            "needs_location": needs_location,
             "results": results,
             "summary_text": self._format_places_summary(query, results),
         }

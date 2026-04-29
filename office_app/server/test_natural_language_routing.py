@@ -114,6 +114,21 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["room_title"], "Conference Room")
         self.assertFalse(routed.get("requires_confirmation", False))
 
+    def test_meta_question_stays_in_model_route(self) -> None:
+        routed = self.pipeline.route_user_request("default", "why did you respond that way")
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["capability"], "ai.respond")
+
+    def test_advice_question_stays_in_model_route(self) -> None:
+        routed = self.pipeline.route_user_request("default", "what are the best restaurants to model mine after")
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["capability"], "ai.respond")
+
+    def test_read_last_response_stays_in_model_route(self) -> None:
+        routed = self.pipeline.route_user_request("default", "read your last response")
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["capability"], "ai.respond")
+
     def test_conversational_room_reference_requires_confirmation(self) -> None:
         routed = self.pipeline.route_user_request("default", "can you talk to my office manager?")
         self.assertEqual(routed["route_kind"], "nancy")
@@ -136,6 +151,83 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["route_kind"], "tool")
         self.assertEqual(routed["capability"], "search.reviews")
         self.assertEqual(routed["tool"], "office.search_reviews")
+
+    def test_best_restaurants_with_location_routes_to_review_search(self) -> None:
+        routed = self.pipeline.route_user_request("default", "what are the best italian restaurants in eugene?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.reviews")
+        self.assertEqual(routed["tool"], "office.search_reviews")
+        self.assertEqual(routed["arguments"]["query"], "italian restaurants")
+        self.assertEqual(routed["arguments"]["location"], "eugene")
+
+    def test_restaurant_followup_uses_recent_search_context(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "what about ambrosia?",
+            [
+                {
+                    "role": "user",
+                    "text": "what are the best italian restaurants in eugene?",
+                },
+                {
+                    "role": "assistant",
+                    "text": "Review-oriented results for 'italian restaurants':",
+                },
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.reviews")
+        self.assertEqual(routed["tool"], "office.search_reviews")
+        self.assertEqual(routed["arguments"]["query"], "ambrosia italian restaurant")
+        self.assertEqual(routed["arguments"]["location"], "eugene")
+
+    def test_find_restaurants_near_me_routes_to_places_with_missing_location(self) -> None:
+        routed = self.pipeline.route_user_request("default", "Find restaurants near me")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.places")
+        self.assertEqual(routed["tool"], "office.search_places")
+        self.assertEqual(routed["arguments"]["query"], "restaurants")
+        self.assertEqual(routed["arguments"]["category"], "restaurants")
+        self.assertIsNone(routed["arguments"]["location"])
+        self.assertTrue(routed["arguments"]["needs_location"])
+
+    def test_misspelled_local_restaurants_routes_to_places_with_missing_location(self) -> None:
+        routed = self.pipeline.route_user_request("default", "what local resaurnats are the best")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.places")
+        self.assertEqual(routed["tool"], "office.search_places")
+        self.assertEqual(routed["arguments"]["query"], "restaurants")
+        self.assertEqual(routed["arguments"]["category"], "restaurants")
+        self.assertIsNone(routed["arguments"]["location"])
+        self.assertTrue(routed["arguments"]["needs_location"])
+
+    def test_unknown_misspelling_asks_for_clarification(self) -> None:
+        routed = self.pipeline.route_user_request("default", "uplod my document")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "clarification.spelling")
+        self.assertEqual(routed["arguments"]["word"], "uplod")
+        self.assertEqual(routed["arguments"]["suggestion"], "upload")
+
+    def test_find_restaurants_in_portland_routes_to_places_with_location(self) -> None:
+        routed = self.pipeline.route_user_request("default", "Find restaurants in Portland")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.places")
+        self.assertEqual(routed["tool"], "office.search_places")
+        self.assertEqual(routed["arguments"]["query"], "restaurants")
+        self.assertEqual(routed["arguments"]["category"], "restaurants")
+        self.assertEqual(routed["arguments"]["location"], "Portland")
+        self.assertFalse(routed["arguments"]["needs_location"])
+
+    def test_find_thai_restaurants_near_me_routes_to_places_with_normalized_query(self) -> None:
+        routed = self.pipeline.route_user_request("default", "Find Thai restaurants near me")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.places")
+        self.assertEqual(routed["tool"], "office.search_places")
+        self.assertEqual(routed["arguments"]["query"], "thai restaurants")
+        self.assertEqual(routed["arguments"]["category"], "thai")
+        self.assertTrue(routed["arguments"]["needs_location"])
 
     def test_unqualified_bar_question_stays_in_model_route(self) -> None:
         routed = self.pipeline.route_user_request("default", "how do you increase food sales in a bar")
@@ -160,6 +252,12 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["tool"], "office.ocr_extract")
         self.assertEqual(routed["arguments"]["file_id"], "file_abc123")
 
+    def test_read_file_request_routes_to_document_ocr(self) -> None:
+        routed = self.pipeline.route_user_request("default", "read file test_file_4")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "document.ocr")
+        self.assertEqual(routed["tool"], "office.ocr_extract")
+
     def test_ocr_request_routes_to_document_ocr_by_filename(self) -> None:
         routed = self.pipeline.route_user_request("default", "extract text from JW_Cover.rtf")
         self.assertEqual(routed["route_kind"], "tool")
@@ -178,6 +276,12 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         routed = self.pipeline.route_user_request("default", "show me")
         self.assertEqual(routed["route_kind"], "model")
         self.assertEqual(routed["capability"], "ai.respond")
+
+    def test_model_route_forbids_fake_background_work(self) -> None:
+        routed = self.pipeline.route_user_request("default", "help me think through a menu idea")
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertIn("Do not claim you are searching", routed["arguments"]["system_prompt"])
+        self.assertIn("Use recent turns to resolve", routed["arguments"]["system_prompt"])
 
     def test_read_file_alone_stays_in_model_route(self) -> None:
         routed = self.pipeline.route_user_request("default", "read file")

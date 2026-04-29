@@ -181,6 +181,37 @@ class UserServiceTests(unittest.TestCase):
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 
+    def test_session_activation_restores_session_room(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_session_room"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            service = UserService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+
+            created = service.onboard_user(name="Mina", pin_code="1133")
+            first_session_id = created["session_id"]
+            workspace_id = created["workspace_id"]
+            service.remember_session_room(first_session_id, active_room="sales_department", active_persona="Sales Director")
+            second = service.create_session(
+                user_id=created["user"]["user_id"],
+                title="Second",
+                description="Second thread.",
+                workspace_id=workspace_id,
+            )
+            service.remember_session_room(second["session_id"], active_room="it_department", active_persona="IT Administrator")
+
+            service.select_session_for_user(second["session_id"])
+            self.assertEqual(kernel.get_state(workspace_id)["active_room"], "it_department")
+            service.select_session_for_user(first_session_id)
+            self.assertEqual(kernel.get_state(workspace_id)["active_room"], "sales_department")
+            self.assertEqual(kernel.get_state(workspace_id)["active_persona"], "Sales Director")
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
     def test_activate_workspace_creates_or_restores_session_in_workspace(self) -> None:
         runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_workspace_activate"
         workspaces_dir = runtime_dir / "workspaces"
