@@ -19,6 +19,8 @@ ENV/
 .env
 .env.*
 !.env.example
+office_app/frontend/localhost+*.pem
+office_app/frontend/localhost+*-key.pem
 
 # =========================
 # IDE / editor
