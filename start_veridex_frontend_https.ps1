@@ -3,5 +3,4 @@ param(
 )
 
 $nodePath = (Get-Command node -ErrorAction Stop).Source
-$command = "cd /d `"$WorkingDirectory`" && `"$nodePath`" server.cjs"
-Start-Process -FilePath "cmd.exe" -ArgumentList "/k", $command -WorkingDirectory $WorkingDirectory
+Start-Process -FilePath "cmd.exe" -ArgumentList "/k", "`"$nodePath`" server.cjs" -WorkingDirectory $WorkingDirectory

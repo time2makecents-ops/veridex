@@ -6,8 +6,9 @@ param(
 $backendPort = 8078
 $frontendPort = 3078
 $root = "C:\Office-App"
-$backendScript = Join-Path $root "start_veridex_backend.ps1"
-$frontendScript = Join-Path $root "start_veridex_frontend_https.ps1"
+$backendCommand = Join-Path $root "run_server.cmd"
+$frontendDir = Join-Path $root "office_app\frontend"
+$smokeScript = Join-Path $root "office_app\smoke_test.ps1"
 
 function Get-ListeningPids {
   param([int[]]$Ports)
@@ -38,13 +39,13 @@ function Stop-Veridex {
     Write-Host "Veridex is not listening on $backendPort or $frontendPort."
     return
   }
-  foreach ($pid in $pids) {
-    if ($pid -and $pid -ne 0) {
+  foreach ($processId in $pids) {
+    if ($processId -and $processId -ne 0) {
       try {
-        Stop-Process -Id $pid -Force -ErrorAction Stop
-        Write-Host "Stopped PID $pid"
+        Stop-Process -Id $processId -Force -ErrorAction Stop
+        Write-Host "Stopped PID $processId"
       } catch {
-        Write-Host "Could not stop PID ${pid}: $($_.Exception.Message)"
+        Write-Host "Could not stop PID ${processId}: $($_.Exception.Message)"
       }
     }
   }
@@ -67,6 +68,32 @@ function Wait-Port {
   return $false
 }
 
+function Show-StartupHelp {
+  Write-Host ""
+  Write-Host "Recommended start command:" -ForegroundColor Yellow
+  Write-Host "  C:\Office-App\veridex.cmd"
+  Write-Host ""
+  Write-Host "Manual backend command:" -ForegroundColor Yellow
+  Write-Host "  cd /d C:\Office-App"
+  Write-Host "  run_server.cmd"
+  Write-Host ""
+  Write-Host "Manual frontend command:" -ForegroundColor Yellow
+  Write-Host "  cd /d C:\Office-App\office_app\frontend"
+  Write-Host "  node server.cjs"
+  Write-Host ""
+  Write-Host "Validation command:" -ForegroundColor Yellow
+  Write-Host "  powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Office-App\office_app\smoke_test.ps1"
+}
+
+function Start-Backend {
+  Start-Process -FilePath "cmd.exe" -ArgumentList "/k", "`"$backendCommand`"" -WorkingDirectory $root
+}
+
+function Start-Frontend {
+  $nodePath = (Get-Command node -ErrorAction Stop).Source
+  Start-Process -FilePath "cmd.exe" -ArgumentList "/k", "`"$nodePath`" server.cjs" -WorkingDirectory $frontendDir
+}
+
 switch ($Action) {
   "stop" {
     Stop-Veridex
@@ -76,19 +103,31 @@ switch ($Action) {
     $frontendUp = Test-NetConnection 127.0.0.1 -Port $frontendPort -InformationLevel Quiet
     Write-Host "Backend ($backendPort): $backendUp"
     Write-Host "Frontend ($frontendPort): $frontendUp"
+    if ($backendUp -and $frontendUp -and (Test-Path $smokeScript)) {
+      Write-Host "Run smoke test:" -ForegroundColor Green
+      Write-Host "  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $smokeScript"
+    } elseif (-not $backendUp -or -not $frontendUp) {
+      Show-StartupHelp
+    }
   }
   "restart" {
     Stop-Veridex
     Start-Sleep -Seconds 2
-    Start-Process powershell.exe -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $backendScript
+    Start-Backend
     if (-not (Wait-Port -Port $backendPort -TimeoutSeconds 30)) {
+      Show-StartupHelp
       throw "Backend failed to start on port $backendPort."
     }
-    Start-Process powershell.exe -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $frontendScript
+    Start-Frontend
     if (-not (Wait-Port -Port $frontendPort -TimeoutSeconds 30)) {
+      Show-StartupHelp
       throw "Frontend failed to start on port $frontendPort."
     }
     Write-Host "Veridex restarted."
+    if (Test-Path $smokeScript) {
+      Write-Host "Run smoke test:" -ForegroundColor Green
+      Write-Host "  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $smokeScript"
+    }
   }
   default {
     $backendUp = Test-NetConnection 127.0.0.1 -Port $backendPort -InformationLevel Quiet
@@ -98,17 +137,23 @@ switch ($Action) {
       return
     }
     if (-not $backendUp) {
-      Start-Process powershell.exe -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $backendScript
+      Start-Backend
       if (-not (Wait-Port -Port $backendPort -TimeoutSeconds 30)) {
+        Show-StartupHelp
         throw "Backend failed to start on port $backendPort."
       }
     }
     if (-not $frontendUp) {
-      Start-Process powershell.exe -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $frontendScript
+      Start-Frontend
       if (-not (Wait-Port -Port $frontendPort -TimeoutSeconds 30)) {
+        Show-StartupHelp
         throw "Frontend failed to start on port $frontendPort."
       }
     }
     Write-Host "Veridex started."
+    if (Test-Path $smokeScript) {
+      Write-Host "Run smoke test:" -ForegroundColor Green
+      Write-Host "  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $smokeScript"
+    }
   }
 }
