@@ -190,7 +190,8 @@ class RequestPipeline:
         "You can only answer with information available in this response. If a tool or missing detail is needed, say so directly."
     )
     MODEL_CONTEXT_RULE = (
-        "Use recent turns to resolve pronouns, short follow-ups, implied topics, and references like 'what about that one'. "
+        "Use recent turns only when the user is clearly asking a follow-up, using pronouns, or referring to a prior topic. "
+        "For broad help or capability questions like 'what can you help me with here?', answer from the active room and persona instead of continuing the previous topic. "
         "Do not ask for details already present in recent context."
     )
     CORRECTION_VOCABULARY = (

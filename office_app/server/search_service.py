@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import parse_qs, quote_plus, unquote, urlparse
+from urllib.parse import parse_qs, quote_plus, urlencode, unquote, urlparse
 from urllib.request import Request, urlopen
+
+from office_app.server.env_loader import load_env_files
 
 
 class SearchServiceError(RuntimeError):
@@ -43,9 +47,41 @@ class SearchService:
     REVIEW_COUNT_RE = re.compile(r"\b(\d[\d,]*)\s+reviews?\b", re.IGNORECASE)
     LOCATION_RE = re.compile(r"\bin\s+([A-Za-z][A-Za-z0-9 .,'&-]{1,60})", re.IGNORECASE)
 
-    def __init__(self, *, fetch_text: Optional[Callable[[str, Dict[str, str]], str]] = None, fetch_json: Optional[Callable[[str, Dict[str, str]], Any]] = None) -> None:
+    def __init__(
+        self,
+        *,
+        fetch_text: Optional[Callable[[str, Dict[str, str]], str]] = None,
+        fetch_json: Optional[Callable[[str, Dict[str, str]], Any]] = None,
+        serpapi_api_key: Optional[str] = None,
+        google_api_key: Optional[str] = None,
+        google_search_engine_id: Optional[str] = None,
+    ) -> None:
+        server_dir = Path(__file__).resolve().parent
+        pkg_dir = server_dir.parent
+        root_dir = pkg_dir.parent
+        load_env_files(
+            (
+                root_dir / ".env",
+                root_dir / ".env.local",
+                pkg_dir / ".env",
+                pkg_dir / ".env.local",
+            )
+        )
         self._fetch_text = fetch_text or self._default_fetch_text
         self._fetch_json = fetch_json or self._default_fetch_json
+        self.serpapi_api_key = (
+            serpapi_api_key if serpapi_api_key is not None else os.getenv("SERPAPI_API_KEY", "")
+        ).strip()
+        self.google_api_key = (
+            google_api_key
+            if google_api_key is not None
+            else os.getenv("GOOGLE_SEARCH_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
+        ).strip()
+        self.google_search_engine_id = (
+            google_search_engine_id
+            if google_search_engine_id is not None
+            else os.getenv("GOOGLE_SEARCH_ENGINE_ID", "") or os.getenv("GOOGLE_CSE_ID", "")
+        ).strip()
 
     def search_web(self, *, query: str, limit: int = 5, recency_days: Optional[int] = None) -> Dict[str, Any]:
         search_query = query.strip()
@@ -53,13 +89,17 @@ class SearchService:
             raise SearchServiceError("Search query required.")
         if recency_days:
             search_query = f"{search_query} past {int(recency_days)} days"
-        results = self._duckduckgo_search(search_query, limit=limit)
-        return {
+        results, provider, fallback_reason = self._web_search(search_query, limit=limit, recency_days=recency_days)
+        response: Dict[str, Any] = {
             "query": query,
             "limit": limit,
+            "provider": provider,
             "results": [result.as_dict() for result in results],
             "summary_text": self._format_web_summary(query, results),
         }
+        if fallback_reason:
+            response["fallback_reason"] = fallback_reason
+        return response
 
     def search_reviews(
         self,
@@ -79,7 +119,7 @@ class SearchService:
         if time_window:
             review_query_parts.append(time_window)
         review_query_parts.extend(["reviews", "yelp", "tripadvisor"])
-        results = self._duckduckgo_search(" ".join(review_query_parts), limit=limit)
+        results, provider, fallback_reason = self._web_search(" ".join(review_query_parts), limit=limit)
         normalized = []
         for result in results:
             snippet = result.snippet
@@ -92,14 +132,122 @@ class SearchService:
                     "review_count_hint": count_match.group(1) if count_match else None,
                 }
             )
-        return {
+        response = {
             "query": query,
             "location": inferred_location,
             "time_window": time_window,
             "limit": limit,
+            "provider": provider,
             "results": normalized,
             "summary_text": self._format_review_summary(query, normalized),
         }
+        if fallback_reason:
+            response["fallback_reason"] = fallback_reason
+        return response
+
+    def _web_search(
+        self,
+        query: str,
+        *,
+        limit: int,
+        recency_days: Optional[int] = None,
+    ) -> tuple[List[SearchResult], str, Optional[str]]:
+        fallback_reasons: List[str] = []
+        if self.serpapi_api_key:
+            try:
+                return self._serpapi_search(query, limit=limit, recency_days=recency_days), "serpapi", None
+            except Exception as exc:
+                fallback_reasons.append(f"SerpAPI search failed: {exc}")
+        if self.google_api_key and self.google_search_engine_id:
+            try:
+                return self._google_search(query, limit=limit, recency_days=recency_days), "google", None
+            except Exception as exc:
+                fallback_reasons.append(f"Google search failed: {exc}")
+        reason = "; ".join(fallback_reasons) if fallback_reasons else None
+        return self._duckduckgo_search(query, limit=limit), "duckduckgo", reason
+
+    def _serpapi_search(
+        self,
+        query: str,
+        *,
+        limit: int,
+        recency_days: Optional[int] = None,
+    ) -> List[SearchResult]:
+        params: Dict[str, Any] = {
+            "engine": "google",
+            "q": query,
+            "api_key": self.serpapi_api_key,
+            "num": max(1, min(limit, 10)),
+            "hl": "en",
+            "gl": "us",
+        }
+        if recency_days:
+            params["tbs"] = f"qdr:d{max(1, int(recency_days))}"
+        url = f"https://serpapi.com/search.json?{urlencode(params)}"
+        payload = self._fetch_json(url, {"Accept": "application/json"})
+        if isinstance(payload, dict) and payload.get("error"):
+            raise SearchServiceError(str(payload["error"]))
+        items = payload.get("organic_results") if isinstance(payload, dict) else None
+        results: List[SearchResult] = []
+        for item in items or []:
+            if len(results) >= limit:
+                break
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            link = str(item.get("link") or "").strip()
+            snippet = str(item.get("snippet") or "").strip()
+            source = str(item.get("source") or "").strip() or self._source_from_url(link)
+            if not title or not link:
+                continue
+            results.append(
+                SearchResult(
+                    title=title,
+                    url=link,
+                    snippet=snippet,
+                    source=source,
+                )
+            )
+        return results
+
+    def _google_search(
+        self,
+        query: str,
+        *,
+        limit: int,
+        recency_days: Optional[int] = None,
+    ) -> List[SearchResult]:
+        params: Dict[str, Any] = {
+            "key": self.google_api_key,
+            "cx": self.google_search_engine_id,
+            "q": query,
+            "num": max(1, min(limit, 10)),
+        }
+        if recency_days:
+            params["dateRestrict"] = f"d{max(1, int(recency_days))}"
+        url = f"https://www.googleapis.com/customsearch/v1?{urlencode(params)}"
+        payload = self._fetch_json(url, {"Accept": "application/json"})
+        items = payload.get("items") if isinstance(payload, dict) else None
+        results: List[SearchResult] = []
+        for item in items or []:
+            if len(results) >= limit:
+                break
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            link = str(item.get("link") or "").strip()
+            snippet = str(item.get("snippet") or "").strip()
+            if not title or not link:
+                continue
+            results.append(
+                SearchResult(
+                    title=title,
+                    url=link,
+                    snippet=snippet,
+                    source=self._source_from_url(link),
+                )
+            )
+        return results
 
     def search_places(
         self,

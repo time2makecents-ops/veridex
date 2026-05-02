@@ -388,7 +388,7 @@ def _synthesize_search_response(
         "Do not lead with source names unless the source itself is the answer. "
         "If results are list pages, extract the named places from titles/snippets and say that the ranking is based on available search snippets. "
         "Mention important uncertainty briefly and include links when useful. "
-        "Use recent turns to resolve follow-ups. Do not claim background work or future messages."
+        "Use recent turns only for clear follow-ups. Do not claim background work or future messages."
     )
     user_prompt = (
         f"User request: {routed.get('request', '')}\n\n"
@@ -1355,7 +1355,7 @@ def handle_ai_generate(args: Dict[str, Any]) -> Dict[str, Any]:
             f"The active persona is {state.get('active_persona', 'Receptionist')}. "
             "If the user asks about uploading or downloading files or images, answer with the Veridex file workflow and do not redirect them to IT unless they explicitly ask for troubleshooting. "
             "Never expose raw JSON, internal tool names, hidden schemas, or backend metadata in your response. "
-            "Use recent turns to resolve pronouns, short follow-ups, implied topics, and references like 'what about that one'. Do not ask for details already present in recent context. "
+            "Use recent turns only when the user is clearly asking a follow-up, using pronouns, or referring to a prior topic. For broad help or capability questions like 'what can you help me with here?', answer from the active room and persona instead of continuing the previous topic. Do not ask for details already present in recent context. "
             "Do not claim you are searching, processing, working in the background, or that you will send results later. You can only answer with information available in this response. If a tool or missing detail is needed, say so directly. "
             "Respond clearly, concisely, and stay within Veridex governance."
         )

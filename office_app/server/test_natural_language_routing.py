@@ -281,7 +281,13 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         routed = self.pipeline.route_user_request("default", "help me think through a menu idea")
         self.assertEqual(routed["route_kind"], "model")
         self.assertIn("Do not claim you are searching", routed["arguments"]["system_prompt"])
-        self.assertIn("Use recent turns to resolve", routed["arguments"]["system_prompt"])
+        self.assertIn("Use recent turns only", routed["arguments"]["system_prompt"])
+
+    def test_broad_room_help_stays_model_with_room_context_instruction(self) -> None:
+        routed = self.pipeline.route_user_request("default", "what can you help me with here?")
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["capability"], "ai.respond")
+        self.assertIn("answer from the active room and persona", routed["arguments"]["system_prompt"])
 
     def test_read_file_alone_stays_in_model_route(self) -> None:
         routed = self.pipeline.route_user_request("default", "read file")
