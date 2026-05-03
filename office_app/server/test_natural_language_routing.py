@@ -129,6 +129,11 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["route_kind"], "model")
         self.assertEqual(routed["capability"], "ai.respond")
 
+    def test_meta_question_with_tool_keyword_stays_model_route(self) -> None:
+        routed = self.pipeline.route_user_request("default", "why did you use reviews in that answer?")
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["capability"], "ai.respond")
+
     def test_conversational_room_reference_requires_confirmation(self) -> None:
         routed = self.pipeline.route_user_request("default", "can you talk to my office manager?")
         self.assertEqual(routed["route_kind"], "nancy")
@@ -239,6 +244,65 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["route_kind"], "model")
         self.assertEqual(routed["capability"], "ai.respond")
 
+    def test_conceptual_restaurant_question_stays_in_model_route(self) -> None:
+        routed = self.pipeline.route_user_request("default", "what makes a restaurant successful?")
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["capability"], "ai.respond")
+
+    def test_explicit_search_of_advice_topic_routes_to_web_search(self) -> None:
+        routed = self.pipeline.route_user_request("default", "search the web for restaurant marketing strategy")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.web")
+        self.assertEqual(routed["tool"], "office.search_web")
+
+    def test_search_capability_question_gets_deterministic_answer(self) -> None:
+        routed = self.pipeline.route_user_request("default", "can you search the internet?")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "capability.search.info")
+        self.assertIn("Yes. I can search the internet", routed["arguments"]["response_text"])
+
+    def test_upload_capability_question_gets_deterministic_answer(self) -> None:
+        routed = self.pipeline.route_user_request("default", "can you upload files?")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "capability.upload.info")
+        self.assertIn("Use the Save/Upload controls", routed["arguments"]["response_text"])
+
+    def test_download_help_gets_deterministic_answer(self) -> None:
+        routed = self.pipeline.route_user_request("default", "how do i download files here?")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "capability.download.info")
+        self.assertIn("Open Load", routed["arguments"]["response_text"])
+
+    def test_document_read_capability_question_gets_deterministic_answer(self) -> None:
+        routed = self.pipeline.route_user_request("default", "can you read uploaded documents?")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "capability.document_read.info")
+        self.assertIn("extract text", routed["arguments"]["response_text"])
+
+    def test_room_capability_question_gets_deterministic_answer(self) -> None:
+        routed = self.pipeline.route_user_request("default", "can you switch rooms?")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "capability.rooms.info")
+        self.assertIn("go to Sales Department", routed["arguments"]["response_text"])
+
+    def test_session_capability_question_gets_deterministic_answer(self) -> None:
+        routed = self.pipeline.route_user_request("default", "can you create sessions?")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "capability.sessions.info")
+        self.assertIn("new session for", routed["arguments"]["response_text"])
+
+    def test_general_capability_question_gets_overview(self) -> None:
+        routed = self.pipeline.route_user_request("default", "what can you do?")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "capability.overview.info")
+        self.assertIn("search the web", routed["arguments"]["response_text"])
+
+    def test_search_capability_with_query_routes_to_web_search(self) -> None:
+        routed = self.pipeline.route_user_request("default", "can you search the internet for Eugene events?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.web")
+        self.assertEqual(routed["tool"], "office.search_web")
+
     def test_explicit_web_search_routes_to_web_search(self) -> None:
         routed = self.pipeline.route_user_request("default", "search the internet for Eugene networking events")
         self.assertEqual(routed["route_kind"], "tool")
@@ -265,6 +329,12 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["tool"], "office.ocr_extract")
         self.assertEqual(routed["arguments"]["file_name"], "JW_Cover.rtf")
 
+    def test_read_named_file_is_not_intercepted_as_capability_question(self) -> None:
+        routed = self.pipeline.route_user_request("default", "can you read file JW_Cover.rtf?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "document.ocr")
+        self.assertEqual(routed["tool"], "office.ocr_extract")
+
     def test_ocr_request_routes_from_show_me_followup(self) -> None:
         routed = self.pipeline.route_user_request("default", "show me the extracted text from JW_Cover.rtf")
         self.assertEqual(routed["route_kind"], "tool")
@@ -282,12 +352,14 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["route_kind"], "model")
         self.assertIn("Do not claim you are searching", routed["arguments"]["system_prompt"])
         self.assertIn("Use recent turns only", routed["arguments"]["system_prompt"])
+        self.assertIn("Answer normal advice", routed["arguments"]["system_prompt"])
 
     def test_broad_room_help_stays_model_with_room_context_instruction(self) -> None:
         routed = self.pipeline.route_user_request("default", "what can you help me with here?")
         self.assertEqual(routed["route_kind"], "model")
         self.assertEqual(routed["capability"], "ai.respond")
         self.assertIn("answer from the active room and persona", routed["arguments"]["system_prompt"])
+        self.assertIn("Do not deny these Veridex capabilities", routed["arguments"]["system_prompt"])
 
     def test_read_file_alone_stays_in_model_route(self) -> None:
         routed = self.pipeline.route_user_request("default", "read file")

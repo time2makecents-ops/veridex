@@ -49,8 +49,41 @@ class FakeOcrService:
         }
 
 
+class FakeSearchService:
+    def __init__(self) -> None:
+        self.place_calls: List[Dict[str, Any]] = []
+
+    def search_places(
+        self,
+        *,
+        query: str,
+        location: Optional[str] = None,
+        category: Optional[str] = None,
+        needs_location: bool = False,
+        limit: int = 5,
+    ) -> Dict[str, Any]:
+        self.place_calls.append(
+            {
+                "query": query,
+                "location": location,
+                "category": category,
+                "needs_location": needs_location,
+                "limit": limit,
+            }
+        )
+        return {
+            "query": query,
+            "location": location,
+            "category": category,
+            "needs_location": needs_location,
+            "limit": limit,
+            "results": [],
+            "summary_text": "I need your location or a city/area to search nearby restaurants.",
+        }
+
+
 class AiHandlerTests(unittest.TestCase):
-    def _deps(self, workspace_rows: List[Dict[str, Any]]) -> HandlerDeps:
+    def _deps(self, workspace_rows: List[Dict[str, Any]], search_service: Optional[Any] = None) -> HandlerDeps:
         workspace_service = FakeFileService(
             rows=workspace_rows,
             content_by_id={row["file_id"]: b"Extracted contents" for row in workspace_rows},
@@ -66,7 +99,7 @@ class AiHandlerTests(unittest.TestCase):
             receptionist_context_service=None,
             workspace_file_service=workspace_service,
             private_file_service=private_service,
-            search_service=None,
+            search_service=search_service,
             ocr_service=FakeOcrService(),
             model_router=None,
             user_service=None,
@@ -101,6 +134,21 @@ class AiHandlerTests(unittest.TestCase):
         self.assertEqual(result["structuredContent"]["file_id"], "file_123")
         self.assertEqual(result["structuredContent"]["original_name"], "JW_Cover.rtf")
         self.assertEqual(result["content"][0]["text"], "Extracted contents")
+
+    def test_search_places_passes_needs_location_to_service(self) -> None:
+        search_service = FakeSearchService()
+        handlers = build_ai_handlers(self._deps([], search_service=search_service))
+        result = handlers["office.search_places"](
+            {
+                "workspace_id": "ws_1",
+                "query": "restaurants",
+                "category": "restaurants",
+                "needs_location": True,
+            }
+        )
+        self.assertEqual(result["content"][0]["text"], "I need your location or a city/area to search nearby restaurants.")
+        self.assertEqual(search_service.place_calls[0]["query"], "restaurants")
+        self.assertTrue(search_service.place_calls[0]["needs_location"])
 
 
 if __name__ == "__main__":

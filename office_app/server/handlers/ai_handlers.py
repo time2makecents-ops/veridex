@@ -218,10 +218,13 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         if not query:
             raise deps.error_missing_required_field("query")
         try:
+            needs_location_raw = args.get("needs_location")
+            needs_location = needs_location_raw is True or str(needs_location_raw).strip().lower() in {"1", "true", "yes"}
             result = deps.search_service.search_places(
                 query=query,
                 location=str(args.get("location") or "").strip() or None,
                 category=str(args.get("category") or "").strip() or None,
+                needs_location=needs_location,
                 limit=max(1, min(int(args.get("limit") or 5), 8)),
             )
         except SearchServiceError as exc:

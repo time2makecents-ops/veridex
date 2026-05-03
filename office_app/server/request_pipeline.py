@@ -194,6 +194,15 @@ class RequestPipeline:
         "For broad help or capability questions like 'what can you help me with here?', answer from the active room and persona instead of continuing the previous topic. "
         "Do not ask for details already present in recent context."
     )
+    MODEL_DIRECT_ANSWER_RULE = (
+        "Answer normal advice, strategy, explanation, and meta questions directly. "
+        "Do not convert them into file, search, place, or room actions unless the user explicitly asks for that action."
+    )
+    MODEL_CAPABILITY_RULE = (
+        "Veridex can search the web when explicitly asked, upload/download/list/read files, extract text from uploaded documents, "
+        "switch rooms, create/switch sessions, create/select workspaces, and save artifacts/files. "
+        "Do not deny these Veridex capabilities. If the user asks how to use one, explain the app workflow."
+    )
     CORRECTION_VOCABULARY = (
         "artifact",
         "artifacts",
@@ -578,43 +587,17 @@ class RequestPipeline:
         return None
 
     def route_user_request(self, workspace_id: str, request_text: str) -> Dict[str, Any]:
+        capability_route = self.route_capability_question(workspace_id, request_text)
+        if capability_route is not None:
+            return capability_route
+
         intent = self.classify_intent(request_text)
         if intent in {"meta", "advice"}:
-            ctx = self.current_context(workspace_id)
-            active_room = str(ctx["active_room"])
-            active_persona = str(ctx["active_persona"])
-            system_prompt = (
-                f"You are Veridex. The active workspace is {workspace_id}. "
-                f"The active room is {active_room}. The active persona is {active_persona}. "
-                "Respond clearly, concisely, and in a way that fits the current office context. "
-                f"{self.MODEL_CONTEXT_RULE} {self.MODEL_NO_BACKGROUND_RULE}"
+            return self.model_route(
+                workspace_id,
+                request_text,
+                reason=f"Classified as {intent} intent before tool routing.",
             )
-            return {
-                "route_kind": "model",
-                "workspace_id": workspace_id,
-                "request": request_text,
-                "capability": "ai.respond",
-                "tool": "office.ai_generate",
-                "arguments": {
-                    "workspace_id": workspace_id,
-                    "task_type": "conversation",
-                    "system_prompt": system_prompt,
-                    "user_prompt": request_text,
-                    "context": {
-                        "workspace_id": workspace_id,
-                        "active_room": active_room,
-                        "active_persona": active_persona,
-                    },
-                    "settings": {
-                        "temperature": 0.4,
-                        "max_output_tokens": 512,
-                        "provider_by_task_type": {
-                            "conversation": "gemini",
-                        },
-                    },
-                },
-                "reason": "Matched meta or advice intent before tool routing.",
-            }
 
         artifact_route = self.route_artifact_request(workspace_id, request_text)
         if artifact_route is not None:
@@ -719,6 +702,13 @@ class RequestPipeline:
                 "reason": f"Possible misspelling: {correction['word']} -> {correction['suggestion']}.",
             }
 
+        return self.model_route(
+            workspace_id,
+            request_text,
+            reason="No explicit tool or room command found. Using the model route.",
+        )
+
+    def model_route(self, workspace_id: str, request_text: str, *, reason: str) -> Dict[str, Any]:
         ctx = self.current_context(workspace_id)
         active_room = str(ctx["active_room"])
         active_persona = str(ctx["active_persona"])
@@ -726,7 +716,7 @@ class RequestPipeline:
             f"You are Veridex. The active workspace is {workspace_id}. "
             f"The active room is {active_room}. The active persona is {active_persona}. "
             "Respond clearly, concisely, and in a way that fits the current office context. "
-            f"{self.MODEL_CONTEXT_RULE} {self.MODEL_NO_BACKGROUND_RULE}"
+            f"{self.MODEL_CONTEXT_RULE} {self.MODEL_NO_BACKGROUND_RULE} {self.MODEL_DIRECT_ANSWER_RULE} {self.MODEL_CAPABILITY_RULE}"
         )
         return {
             "route_kind": "model",
@@ -752,22 +742,198 @@ class RequestPipeline:
                     },
                 },
             },
-            "reason": "No strong department match found. Using the model route.",
+            "reason": reason,
         }
+
+    def route_capability_question(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        capability = self.capability_question_kind(request_text)
+        if capability is None:
+            return None
+        response_text = self.capability_response_text(capability)
+        return {
+            "route_kind": "clarify",
+            "workspace_id": workspace_id,
+            "request": request_text,
+            "capability": f"capability.{capability}.info",
+            "tool": "office.capability_info",
+            "arguments": {
+                "response_text": response_text,
+            },
+            "reason": f"Answered a {capability} capability question without running a tool.",
+        }
+
+    def capability_question_kind(self, request_text: str) -> Optional[str]:
+        text = request_text.lower().strip()
+        if not text:
+            return None
+        if self.is_explicit_room_navigation(text) or self.FILE_ID_RE.search(request_text) or self.FILE_NAME_RE.search(request_text):
+            return None
+        if self.is_search_capability_question(text):
+            return "search"
+        if not self.is_capability_question(text):
+            return None
+        if re.search(r"\b(upload|attach|add file|choose file|submit file|send file)\b", text):
+            return "upload"
+        if re.search(r"\b(download|export|get files?|save.*to my computer)\b", text):
+            return "download"
+        if re.search(r"\b(load|open files?|view files?|reader|file list)\b", text):
+            return "load"
+        if re.search(r"\b(ocr|extract text|read documents?|read files?|read uploaded|transcribe|text from)\b", text):
+            return "document_read"
+        if re.search(r"\b(save|store|artifact|artifacts|note|notes)\b", text):
+            return "save"
+        if re.search(r"\b(room|rooms|department|departments|persona|personas|switch rooms?|change rooms?)\b", text):
+            return "rooms"
+        if re.search(r"\b(session|sessions|thread|threads)\b", text):
+            return "sessions"
+        if re.search(r"\b(workspace|workspaces|project folder|project folders|projects)\b", text):
+            return "workspaces"
+        if re.search(r"\b(memory|remember|recall|stored info|saved info)\b", text):
+            return "memory"
+        if re.match(r"^(?:what can you do|what are your capabilities|what tools do you have|what can veridex do)\??$", text):
+            return "overview"
+        return None
+
+    def is_capability_question(self, text: str) -> bool:
+        return bool(
+            re.match(
+                r"^(?:can|could|do|does|are|will|would)\s+(?:you|veridex)\b|"
+                r"^(?:how\s+(?:do|can)\s+i|how\s+does\s+veridex|do\s+you\s+know\s+how|"
+                r"what\s+can\s+you\s+do|what\s+are\s+your\s+capabilities|what\s+tools\s+do\s+you\s+have)",
+                text,
+            )
+        )
+
+    def capability_response_text(self, capability: str) -> str:
+        responses = {
+            "search": (
+                "Yes. I can search the internet when you explicitly ask me to search, look something up, "
+                "or check online. What would you like me to search for?"
+            ),
+            "upload": (
+                "Yes. Use the Save/Upload controls, choose a file, pick its type and scope, then upload it. "
+                "After it is saved, you can ask me to read or use that file."
+            ),
+            "download": (
+                "Yes. Open Load, select the saved file, then use Download from the reader/file view."
+            ),
+            "load": (
+                "Yes. Use Load to list saved files by scope, select one, and it will open in the reader window."
+            ),
+            "document_read": (
+                "Yes. I can read or extract text from uploaded documents. Upload or select the file, then ask "
+                "for example: 'extract text from filename.rtf'."
+            ),
+            "save": (
+                "Yes. I can save notes/artifacts from chat, and the app can save files by scope: room, session, public, or private."
+            ),
+            "rooms": (
+                "Yes. Use the Directory button or say something explicit like 'go to Sales Department'. "
+                "Room changes are backend-controlled so the active persona and room state stay consistent."
+            ),
+            "sessions": (
+                "Yes. Sessions are individual chat threads inside a workspace. Say 'new session for ...' or select a session from the lobby/session controls."
+            ),
+            "workspaces": (
+                "Yes. Workspaces act like project folders. You can create/select them from the lobby, and sessions live inside the active workspace."
+            ),
+            "memory": (
+                "Yes, within Veridex boundaries. Workspace data holds project files/artifacts; session data holds the chat thread and summary; rooms do not keep separate durable memory."
+            ),
+            "overview": (
+                "I can chat, search the web when explicitly asked, switch rooms, manage sessions/workspaces, upload/download/list files, "
+                "read uploaded documents, and save artifacts or notes."
+            ),
+        }
+        return responses.get(capability, responses["overview"])
 
     def classify_intent(self, request_text: str) -> str:
         text = request_text.lower().strip()
         if not text:
             return "task"
-        if any(hint in text for hint in self.INTENT_META_HINTS):
+        if self.is_meta_intent(text):
             return "meta"
-        if any(hint in text for hint in self.INTENT_ADVICE_HINTS):
+        if self.is_explicit_task_intent(request_text):
+            return "task"
+        if self.is_advice_intent(text):
             return "advice"
         return "task"
+
+    def is_meta_intent(self, text: str) -> bool:
+        if any(hint in text for hint in self.INTENT_META_HINTS):
+            return True
+        return bool(
+            re.search(
+                r"\b(?:why|how|what)\s+(?:did|do|are)\s+you\s+(?:respond|answer|decide|choos|think|reason)",
+                text,
+            )
+        )
+
+    def is_advice_intent(self, text: str) -> bool:
+        if any(hint in text for hint in self.INTENT_ADVICE_HINTS):
+            return True
+        if re.search(r"\bwhat\s+makes\b", text):
+            return True
+        if re.match(r"^(?:how|why)\s+(?:do|does|can|could|should|would|is|are)\b", text):
+            return True
+        if re.match(r"^(?:what|which)\s+is\s+the\s+best\s+way\b", text):
+            return True
+        advice_terms = (
+            "advice",
+            "approach",
+            "best practice",
+            "criteria",
+            "explain",
+            "idea",
+            "improve",
+            "increase",
+            "marketing",
+            "model",
+            "plan",
+            "strategy",
+            "successful",
+            "tip",
+        )
+        question_starter = re.match(r"^(?:what|which|tell me|can you explain|help me)\b", text)
+        return bool(question_starter and any(term in text for term in advice_terms))
+
+    def is_explicit_task_intent(self, request_text: str) -> bool:
+        text = request_text.lower().strip()
+        if not text:
+            return False
+        if self.is_explicit_room_navigation(text):
+            return True
+        if any(hint in text for hint in self.ROOM_STATUS_HINTS):
+            return True
+        if any(hint in text for hint in self.SESSION_CREATE_HINTS):
+            return True
+        if any(trigger in text for trigger in self.ARTIFACT_CREATE_TRIGGERS + self.ARTIFACT_LIST_TRIGGERS + self.ARTIFACT_OPEN_TRIGGERS):
+            return True
+        if any(hint in text for hint in self.OCR_EXPLICIT_HINTS):
+            return True
+        if any(hint in text for hint in self.SEARCH_WEB_HINTS):
+            return True
+
+        starts_with_discovery = re.match(r"^(?:find|show me|list|recommend|give me)\b", text) is not None
+        has_place_hint = any(hint in text for hint in self.SEARCH_PLACE_HINTS)
+        if has_place_hint:
+            place_query = self.normalize_place_query(request_text)
+            review_signal = any(hint in text for hint in self.SEARCH_REVIEW_HINTS) or bool(
+                re.search(r"\b(?:best|top|highest rated|top rated|best rated)\b", text)
+            )
+            has_location_or_nearby = bool(place_query["location"] or place_query["needs_location"])
+            if starts_with_discovery or review_signal or has_location_or_nearby:
+                if self.is_advice_intent(text) and not starts_with_discovery and not place_query["location"]:
+                    return False
+                return True
+
+        return False
 
     def route_search_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         text = request_text.lower().strip()
         if not text:
+            return None
+        if self.is_search_capability_question(text):
             return None
 
         if any(hint in text for hint in self.SEARCH_BUSINESS_ADVICE_HINTS):
@@ -841,6 +1007,16 @@ class RequestPipeline:
             }
 
         return None
+
+    def is_search_capability_question(self, text: str) -> bool:
+        return bool(
+            re.match(
+                r"^(?:can|could|do)\s+you\s+(?:actually\s+|really\s+)?"
+                r"(?:search(?:\s+the)?\s+(?:internet|web)|search\s+online|look\s+things\s+up|check\s+online|"
+                r"use(?:\s+the)?\s+(?:internet|web)|access(?:\s+the)?\s+(?:internet|web)|browse(?:\s+the)?\s+web)\??$",
+                text,
+            )
+        )
 
     def route_room_status_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         text = request_text.lower().strip()
