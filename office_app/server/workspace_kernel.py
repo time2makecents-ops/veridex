@@ -84,7 +84,7 @@ class WorkspaceStore:
         rows: List[Dict[str, Any]] = []
         with tp.open("r", encoding="utf-8") as f:
             raw = f.read()
-        for line in raw.replace("\\n", "\n").splitlines():
+        for line in raw.splitlines():
             text = line.strip()
             if not text:
                 continue
@@ -94,6 +94,17 @@ class WorkspaceStore:
                 continue
             if isinstance(obj, dict):
                 rows.append(obj)
+        if not rows and "\\n" in raw:
+            for line in raw.replace("\\n", "\n").splitlines():
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    obj = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict):
+                    rows.append(obj)
         if limit > 0:
             rows = rows[-limit:]
         return rows

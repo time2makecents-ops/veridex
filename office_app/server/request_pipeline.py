@@ -749,7 +749,14 @@ class RequestPipeline:
         capability = self.capability_question_kind(request_text)
         if capability is None:
             return None
-        response_text = self.capability_response_text(capability)
+        ctx = self.current_context(workspace_id)
+        active_room = str(ctx.get("active_room") or "lobby")
+        active_persona = str(ctx.get("active_persona") or "Receptionist")
+        response_text = self.capability_response_text(
+            capability,
+            active_room=active_room,
+            active_persona=active_persona,
+        )
         return {
             "route_kind": "clarify",
             "workspace_id": workspace_id,
@@ -758,6 +765,8 @@ class RequestPipeline:
             "tool": "office.capability_info",
             "arguments": {
                 "response_text": response_text,
+                "active_room": active_room,
+                "active_persona": active_persona,
             },
             "reason": f"Answered a {capability} capability question without running a tool.",
         }
@@ -804,48 +813,85 @@ class RequestPipeline:
             )
         )
 
-    def capability_response_text(self, capability: str) -> str:
+    def capability_response_text(self, capability: str, *, active_room: str, active_persona: str) -> str:
+        room_title = self.room_title_for_id(active_room)
+        profile = persona_profile_for_name(active_persona)
+        persona_purpose = str(profile.get("purpose") or "").strip()
+        persona_style = str(profile.get("style") or "").strip()
+        room_line = f"Here in {room_title}, I am the {active_persona}."
+        if persona_purpose:
+            room_line += f" My room-specific role is: {persona_purpose}"
+        if persona_style:
+            room_line += f" My style here is {persona_style}."
+        coordination_line = (
+            "When a task needs another department, I can help coordinate with other rooms through the memo system "
+            "instead of pretending this room owns every specialty."
+        )
+
         responses = {
             "search": (
+                f"{room_line}\n\n"
                 "Yes. I can search the internet when you explicitly ask me to search, look something up, "
-                "or check online. What would you like me to search for?"
+                "or check online. I will apply this room's role to how I interpret the results. "
+                f"{coordination_line} What would you like me to search for?"
             ),
             "upload": (
+                f"{room_line}\n\n"
                 "Yes. Use the Save/Upload controls, choose a file, pick its type and scope, then upload it. "
-                "After it is saved, you can ask me to read or use that file."
+                f"After it is saved, you can ask me to read or use that file. {coordination_line}"
             ),
             "download": (
-                "Yes. Open Load, select the saved file, then use Download from the reader/file view."
+                f"{room_line}\n\n"
+                f"Yes. Open Load, select the saved file, then use Download from the reader/file view. {coordination_line}"
             ),
             "load": (
-                "Yes. Use Load to list saved files by scope, select one, and it will open in the reader window."
+                f"{room_line}\n\n"
+                f"Yes. Use Load to list saved files by scope, select one, and it will open in the reader window. {coordination_line}"
             ),
             "document_read": (
+                f"{room_line}\n\n"
                 "Yes. I can read or extract text from uploaded documents. Upload or select the file, then ask "
-                "for example: 'extract text from filename.rtf'."
+                f"for example: 'extract text from filename.rtf'. {coordination_line}"
             ),
             "save": (
-                "Yes. I can save notes/artifacts from chat, and the app can save files by scope: room, session, public, or private."
+                f"{room_line}\n\n"
+                "Yes. I can save notes/artifacts from chat, and the app can save files by scope: room, session, public, or private. "
+                f"{coordination_line}"
             ),
             "rooms": (
+                f"{room_line}\n\n"
                 "Yes. Use the Directory button or say something explicit like 'go to Sales Department'. "
-                "Room changes are backend-controlled so the active persona and room state stay consistent."
+                f"Room changes are backend-controlled so the active persona and room state stay consistent. {coordination_line}"
             ),
             "sessions": (
-                "Yes. Sessions are individual chat threads inside a workspace. Say 'new session for ...' or select a session from the lobby/session controls."
+                f"{room_line}\n\n"
+                "Yes. Sessions are individual chat threads inside a workspace. Say 'new session for ...' or select a session from the lobby/session controls. "
+                f"{coordination_line}"
             ),
             "workspaces": (
-                "Yes. Workspaces act like project folders. You can create/select them from the lobby, and sessions live inside the active workspace."
+                f"{room_line}\n\n"
+                "Yes. Workspaces act like project folders. You can create/select them from the lobby, and sessions live inside the active workspace. "
+                f"{coordination_line}"
             ),
             "memory": (
-                "Yes, within Veridex boundaries. Workspace data holds project files/artifacts; session data holds the chat thread and summary; rooms do not keep separate durable memory."
+                f"{room_line}\n\n"
+                "Yes, within Veridex boundaries. Workspace data holds project files/artifacts; session data holds the chat thread and summary; rooms do not keep separate durable memory. "
+                f"{coordination_line}"
             ),
             "overview": (
-                "I can chat, search the web when explicitly asked, switch rooms, manage sessions/workspaces, upload/download/list files, "
-                "read uploaded documents, and save artifacts or notes."
+                f"{room_line}\n\n"
+                "Across Veridex, I can chat, search the web when explicitly asked, switch rooms, manage sessions/workspaces, "
+                "upload/download/list files, read uploaded documents, save artifacts or notes, and coordinate with other departments through the memo system. "
+                "What makes this room different is the role and judgment I apply to those tools."
             ),
         }
         return responses.get(capability, responses["overview"])
+
+    def room_title_for_id(self, room_id: str) -> str:
+        for room in rooms_payload():
+            if str(room.get("id") or "").strip() == room_id:
+                return str(room.get("title") or room_id).strip()
+        return room_id or "Lobby"
 
     def classify_intent(self, request_text: str) -> str:
         text = request_text.lower().strip()

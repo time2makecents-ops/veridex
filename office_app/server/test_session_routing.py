@@ -42,6 +42,7 @@ class SessionRoutingTests(unittest.TestCase):
             "memo_service": app_module.memo_service,
             "archive_service": app_module.archive_service,
             "user_service": app_module.user_service,
+            "receptionist_context_service": app_module.receptionist_context_service,
             "nancy_service": app_module.nancy_service,
             "router": app_module.router,
             "pipeline": app_module.pipeline,
@@ -52,6 +53,7 @@ class SessionRoutingTests(unittest.TestCase):
             temp_kernel = WorkspaceKernel(store=temp_store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
             temp_archive = ArchiveService(workspaces_dir=workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
             temp_user = app_module.UserService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_receptionist_context = app_module.ReceptionistContextService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
             temp_memo = MemoService(store=temp_store, legacy_memos_dir=legacy_memos_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
             temp_nancy = NancyService(
                 kernel=temp_kernel,
@@ -73,6 +75,7 @@ class SessionRoutingTests(unittest.TestCase):
             app_module.memo_service = temp_memo
             app_module.archive_service = temp_archive
             app_module.user_service = temp_user
+            app_module.receptionist_context_service = temp_receptionist_context
             app_module.nancy_service = temp_nancy
             app_module.router = temp_router
             app_module.pipeline = temp_pipeline
@@ -94,6 +97,7 @@ class SessionRoutingTests(unittest.TestCase):
             app_module.memo_service = original["memo_service"]
             app_module.archive_service = original["archive_service"]
             app_module.user_service = original["user_service"]
+            app_module.receptionist_context_service = original["receptionist_context_service"]
             app_module.nancy_service = original["nancy_service"]
             app_module.router = original["router"]
             app_module.pipeline = original["pipeline"]
@@ -113,6 +117,7 @@ class SessionRoutingTests(unittest.TestCase):
             "memo_service": app_module.memo_service,
             "archive_service": app_module.archive_service,
             "user_service": app_module.user_service,
+            "receptionist_context_service": app_module.receptionist_context_service,
             "nancy_service": app_module.nancy_service,
             "router": app_module.router,
             "pipeline": app_module.pipeline,
@@ -123,6 +128,7 @@ class SessionRoutingTests(unittest.TestCase):
             temp_kernel = WorkspaceKernel(store=temp_store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
             temp_archive = ArchiveService(workspaces_dir=workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
             temp_user = app_module.UserService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_receptionist_context = app_module.ReceptionistContextService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
             temp_memo = MemoService(store=temp_store, legacy_memos_dir=legacy_memos_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
             temp_nancy = NancyService(
                 kernel=temp_kernel,
@@ -144,6 +150,7 @@ class SessionRoutingTests(unittest.TestCase):
             app_module.memo_service = temp_memo
             app_module.archive_service = temp_archive
             app_module.user_service = temp_user
+            app_module.receptionist_context_service = temp_receptionist_context
             app_module.nancy_service = temp_nancy
             app_module.router = temp_router
             app_module.pipeline = temp_pipeline
@@ -169,6 +176,7 @@ class SessionRoutingTests(unittest.TestCase):
             app_module.memo_service = original["memo_service"]
             app_module.archive_service = original["archive_service"]
             app_module.user_service = original["user_service"]
+            app_module.receptionist_context_service = original["receptionist_context_service"]
             app_module.nancy_service = original["nancy_service"]
             app_module.router = original["router"]
             app_module.pipeline = original["pipeline"]
@@ -188,6 +196,7 @@ class SessionRoutingTests(unittest.TestCase):
             "memo_service": app_module.memo_service,
             "archive_service": app_module.archive_service,
             "user_service": app_module.user_service,
+            "receptionist_context_service": app_module.receptionist_context_service,
             "nancy_service": app_module.nancy_service,
             "router": app_module.router,
             "pipeline": app_module.pipeline,
@@ -198,6 +207,7 @@ class SessionRoutingTests(unittest.TestCase):
             temp_kernel = WorkspaceKernel(store=temp_store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
             temp_archive = ArchiveService(workspaces_dir=workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
             temp_user = app_module.UserService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_receptionist_context = app_module.ReceptionistContextService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
             temp_memo = MemoService(store=temp_store, legacy_memos_dir=legacy_memos_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
             temp_nancy = NancyService(
                 kernel=temp_kernel,
@@ -219,6 +229,7 @@ class SessionRoutingTests(unittest.TestCase):
             app_module.memo_service = temp_memo
             app_module.archive_service = temp_archive
             app_module.user_service = temp_user
+            app_module.receptionist_context_service = temp_receptionist_context
             app_module.nancy_service = temp_nancy
             app_module.router = temp_router
             app_module.pipeline = temp_pipeline
@@ -275,12 +286,30 @@ class SessionRoutingTests(unittest.TestCase):
             payload = response["structuredContent"]
             self.assertEqual(payload["workspace_id"], workspace_id)
             self.assertEqual(payload["retrieval_scope"], "workspace")
+            transcript = temp_store.load_transcript(workspace_id, limit=10, session_id=session_id)
+            user_rows = [row for row in transcript if row.get("role") == "user" and row.get("text") == "show artifacts"]
+            assistant_rows = [row for row in transcript if row.get("role") == "assistant" and "artifact" in str(row.get("text") or "").lower()]
+            self.assertTrue(user_rows)
+            self.assertTrue(assistant_rows)
+
+            handle_natural_language_request(
+                NaturalLanguageRequest(text="what can you do?", session_id=session_id)
+            )
+            updated_transcript = temp_store.load_transcript(workspace_id, limit=10, session_id=session_id)
+            self.assertTrue(
+                [
+                    row
+                    for row in updated_transcript
+                    if row.get("role") == "assistant" and "Across Veridex" in str(row.get("text") or "")
+                ]
+            )
         finally:
             app_module.store = original["store"]
             app_module.kernel = original["kernel"]
             app_module.memo_service = original["memo_service"]
             app_module.archive_service = original["archive_service"]
             app_module.user_service = original["user_service"]
+            app_module.receptionist_context_service = original["receptionist_context_service"]
             app_module.nancy_service = original["nancy_service"]
             app_module.router = original["router"]
             app_module.pipeline = original["pipeline"]

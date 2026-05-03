@@ -6,14 +6,15 @@ from office_app.server.request_pipeline import RequestPipeline
 
 
 class DummyKernel:
-    def __init__(self, active_room: str = "lobby"):
+    def __init__(self, active_room: str = "lobby", active_persona: str = "Receptionist"):
         self.active_room = active_room
+        self.active_persona = active_persona
 
     def current_context(self, workspace_id: str):
         return {
             "active_room": self.active_room,
-            "active_persona": "Receptionist",
-            "active_persona_profile": {"name": "Receptionist"},
+            "active_persona": self.active_persona,
+            "active_persona_profile": {"name": self.active_persona},
         }
 
     def list_workspaces(self):
@@ -260,6 +261,8 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["route_kind"], "clarify")
         self.assertEqual(routed["capability"], "capability.search.info")
         self.assertIn("Yes. I can search the internet", routed["arguments"]["response_text"])
+        self.assertIn("Here in Lobby", routed["arguments"]["response_text"])
+        self.assertIn("memo system", routed["arguments"]["response_text"])
 
     def test_upload_capability_question_gets_deterministic_answer(self) -> None:
         routed = self.pipeline.route_user_request("default", "can you upload files?")
@@ -296,6 +299,38 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["route_kind"], "clarify")
         self.assertEqual(routed["capability"], "capability.overview.info")
         self.assertIn("search the web", routed["arguments"]["response_text"])
+        self.assertIn("Greets users", routed["arguments"]["response_text"])
+        self.assertIn("coordinate with other departments through the memo system", routed["arguments"]["response_text"])
+
+    def test_general_capability_question_in_marketing_includes_room_role(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="marketing_room", active_persona="Marketing Director"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "what can you do?")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "capability.overview.info")
+        self.assertIn("Here in Marketing & Advertising", routed["arguments"]["response_text"])
+        self.assertIn("Market research, campaign planning", routed["arguments"]["response_text"])
+        self.assertIn("memo system", routed["arguments"]["response_text"])
+
+    def test_general_capability_question_in_it_includes_room_role(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="it_department", active_persona="IT Administrator"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "what can you do?")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "capability.overview.info")
+        self.assertIn("Here in IT Department", routed["arguments"]["response_text"])
+        self.assertIn("Technical support", routed["arguments"]["response_text"])
+        self.assertIn("memo system", routed["arguments"]["response_text"])
 
     def test_search_capability_with_query_routes_to_web_search(self) -> None:
         routed = self.pipeline.route_user_request("default", "can you search the internet for Eugene events?")

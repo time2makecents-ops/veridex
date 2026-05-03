@@ -582,7 +582,7 @@ def handle_natural_language_request(
         if followup_route is not None:
             routed = followup_route
 
-    should_record = routed["route_kind"] in {"model", "nancy", "tool", "clarify"}
+    should_record = routed["route_kind"] in {"artifact", "model", "nancy", "tool", "clarify"}
     if should_record:
         current_state = kernel.get_state(workspace_id)
         active_room_for_user = str(current_state.get("active_room") or "lobby")
@@ -624,7 +624,27 @@ def handle_natural_language_request(
                     "tool": routed["tool"],
                     "reason": routed["reason"],
                 }
-            return attach_request_context(result, workspace_id=workspace_id, session_id=session_id)
+            enriched = attach_request_context(result, workspace_id=workspace_id, session_id=session_id)
+            response_text = _request_text_from_response(enriched)
+            current_state = kernel.get_state(workspace_id)
+            receptionist_context_service.record_turn(
+                workspace_id=workspace_id,
+                role="assistant",
+                text=response_text,
+                room_id=str(current_state.get("active_room") or "lobby"),
+                persona_name=str(current_state.get("active_persona") or "Receptionist"),
+                user_id=str((user_profile or {}).get("user_id") or "").strip() or None,
+                session_id=session_id,
+            )
+            store.append_transcript(
+                workspace_id,
+                "assistant",
+                str(current_state.get("active_room") or "lobby"),
+                response_text,
+                speaker=str(current_state.get("active_persona") or "Receptionist"),
+                session_id=session_id,
+            )
+            return enriched
 
     if routed["route_kind"] == "tool":
         args = dict(routed["arguments"])
