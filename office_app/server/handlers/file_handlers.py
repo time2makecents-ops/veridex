@@ -4,22 +4,14 @@ from typing import Any, Dict
 
 from fastapi.responses import FileResponse
 
+from office_app.server.artifact_request_helpers import resolve_file_workspace
+
 from .dependencies import HandlerDeps
 
 
 def build_file_handlers(deps: HandlerDeps) -> Dict[str, Any]:
-    def _resolve_file_workspace(args: Dict[str, Any]) -> str:
-        tool = "office.file_upload"
-        workspace_id = str(args.get("workspace_id", "")).strip()
-        session_id = str(args.get("session_id", "")).strip()
-        if session_id:
-            return deps.resolve_workspace_id(tool, {"session_id": session_id, "workspace_id": workspace_id})
-        if workspace_id:
-            return workspace_id
-        return deps.resolve_workspace_id(tool, args)
-
     def handle_file_upload(args: Dict[str, Any]) -> Dict[str, Any]:
-        workspace_id = _resolve_file_workspace(args)
+        workspace_id = resolve_file_workspace(args=args, resolve_workspace_id=deps.resolve_workspace_id)
         original_name = str(args.get("name") or args.get("filename") or args.get("file_name") or "").strip()
         if not original_name:
             raise deps.error_missing_required_field("name")
@@ -47,7 +39,7 @@ def build_file_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         }
 
     def handle_file_list(args: Dict[str, Any]) -> Dict[str, Any]:
-        workspace_id = _resolve_file_workspace(args)
+        workspace_id = resolve_file_workspace(args=args, resolve_workspace_id=deps.resolve_workspace_id)
         scope = str(args.get("scope") or "").strip().lower() or None
         scope_ref = str(args.get("scope_ref") or "").strip() or None
         service = deps.private_file_service if scope == "private" else deps.workspace_file_service
@@ -65,7 +57,7 @@ def build_file_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         }
 
     def handle_file_get(args: Dict[str, Any]) -> Dict[str, Any]:
-        workspace_id = _resolve_file_workspace(args)
+        workspace_id = resolve_file_workspace(args=args, resolve_workspace_id=deps.resolve_workspace_id)
         file_id = str(args.get("file_id") or "").strip()
         if not file_id:
             raise deps.error_missing_required_field("file_id")

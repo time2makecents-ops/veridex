@@ -1,27 +1,24 @@
 ﻿from __future__ import annotations
 
 import csv
-import base64
 import json
 import sqlite3
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from office_app.server.archive_service import ArchiveService
 from office_app.server.command_router import CommandRouter
 from office_app.server.errors import error_missing_required_field
-from office_app.server.guards import ensure_single_target
-from office_app.server.model_router import ModelRouter, ModelRoutingError
+from office_app.server.model_router import ModelRouter
 from office_app.server.receptionist_context_service import ReceptionistContextService
 from office_app.server.memo_service import MemoService
 from office_app.server.nancy_service import NancyService
 from office_app.server.ocr_service import OcrService
+from office_app.server.artifact_request_helpers import pending_room_navigation
 from office_app.server.request_pipeline import RequestPipeline
 from office_app.server.request_transcript import record_assistant_turn, record_user_turn
 from office_app.server.request_response_helpers import (
@@ -47,7 +44,6 @@ from office_app.server.workspace_kernel import WorkspaceKernel, WorkspaceStore
 
 SERVER_DIR = Path(__file__).resolve().parent
 PKG_DIR = SERVER_DIR.parent
-ROOT_DIR = PKG_DIR.parent
 
 BACKEND_DIR = PKG_DIR / "backend"
 DATA_DIR = PKG_DIR / "data"
@@ -303,14 +299,6 @@ def ensure_artifact_workspace(workspace_id: str) -> None:
         kernel.bootstrap_workspace(workspace_id)
 
 
-def _workspace_label(workspace_id: str) -> str:
-    idx = kernel.list_workspaces()
-    for row in idx.get("workspaces", []):
-        if row.get("workspace_id") == workspace_id:
-            return str(row.get("label") or workspace_id)
-    return workspace_id
-
-
 def _session_user_profile(session_id: Optional[str]) -> Optional[Dict[str, Any]]:
     if not session_id:
         return None
@@ -349,7 +337,7 @@ def handle_natural_language_request(
     ensure_artifact_workspace(workspace_id)
     user_profile = _session_user_profile(session_id)
     current_state = kernel.get_state(workspace_id)
-    pending_navigation = _pending_room_navigation(current_state)
+    pending_navigation = pending_room_navigation(current_state)
     if pending_navigation and request_text:
         if _is_confirmation_yes(request_text):
             current_state.pop("pending_room_navigation", None)
@@ -721,12 +709,8 @@ def receptionist_context(
     workspace_id: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    resolved_workspace_id = _resolve_http_workspace_id(workspace_id, session_id)
-    context = receptionist_context_service.get_context(resolved_workspace_id)
-    return {
-        "structuredContent": context,
-        "content": [{"type": "text", "text": f"Loaded receptionist context for {resolved_workspace_id}."}],
-    }
+    args = {"workspace_id": workspace_id, "session_id": session_id}
+    return handle_receptionist_context_get(args)
 
 
 @app.get("/sessions")
@@ -734,164 +718,35 @@ def list_sessions(
     workspace_id: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    resolved_workspace_id = _resolve_http_workspace_id(workspace_id, session_id)
-    user = _session_user_profile(session_id)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Invalid session")
-    rows = user_service.list_sessions(str(user["user_id"]), workspace_id=resolved_workspace_id)
-    current_session_id = str(user.get("last_active_session_id") or "").strip()
-    sessions = []
-    for row in rows:
-        sessions.append(
-            {
-                **row,
-                "active_room": row.get("active_room") or "lobby",
-                "active_persona": row.get("active_persona") or "Receptionist",
-                "is_current": row.get("session_id") == current_session_id,
-            }
-        )
-    sessions.sort(
-        key=lambda item: (
-            1 if item.get("is_current") else 0,
-            str(item.get("last_active_at") or ""),
-            str(item.get("updated_at") or ""),
-            str(item.get("created_at") or ""),
-            str(item.get("session_id") or ""),
-        ),
-        reverse=True,
-    )
-    return {
-        "structuredContent": {
-            "workspace_id": resolved_workspace_id,
-            "current_session_id": current_session_id,
-            "count": len(sessions),
-            "sessions": sessions,
-        },
-        "content": [{"type": "text", "text": f"Loaded {len(sessions)} session(s)."}],
-    }
+    args = {"workspace_id": workspace_id, "session_id": session_id}
+    return handle_sessions_list(args)
 
 
 @app.get("/workspaces")
 def list_workspaces(
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    idx = kernel.list_workspaces()
-    if session_id:
-        try:
-            user = user_service.get_user_for_session(session_id)
-            current_workspace_id = str(user_service.resolve_workspace_for_session(session_id) or "").strip()
-            workspaces = user_service.list_user_workspaces(str(user["user_id"]))
-            if current_workspace_id:
-                workspaces = sorted(
-                    workspaces,
-                    key=lambda row: (
-                        0 if str(row.get("workspace_id") or "").strip() == current_workspace_id else 1,
-                        str(row.get("last_active_at") or ""),
-                        str(row.get("workspace_id") or ""),
-                    ),
-                )
-            idx = {"workspaces": workspaces, "current_workspace_id": current_workspace_id}
-        except Exception:
-            pass
-    return {
-        "structuredContent": idx,
-        "content": [{"type": "text", "text": f"Loaded {len(idx.get('workspaces', []))} workspace(s)."}],
-    }
+    return handle_workspaces_list({"session_id": session_id})
 
 
 @app.post("/sessions")
 def create_session(payload: dict[str, Any]) -> Dict[str, Any]:
-    session_id = str(payload.get("session_id") or "").strip()
-    if not session_id:
-        raise HTTPException(status_code=400, detail="Session ID required")
-    title = str(payload.get("title") or "").strip() or "New Session"
-    description = str(payload.get("description") or "").strip() or title
-    user = _session_user_profile(session_id)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Invalid session")
-    session = user_service.create_session(
-        user_id=str(user["user_id"]),
-        title=title,
-        description=description,
-        workspace_id=resolved_workspace_id,
-        workspace_label=title,
-    )
-    workspace_state = kernel.get_state(session["active_workspace_id"])
-    return {
-        "structuredContent": {
-            "session_id": session["session_id"],
-            "workspace_id": session["active_workspace_id"],
-            "title": session["title"],
-            "description": session["description"],
-            "workspace_state": workspace_state,
-        },
-        "content": [{"type": "text", "text": f"Started new session {session['title']}."}],
-    }
+    return handle_session_create(dict(payload or {}))
 
 
 @app.post("/sessions/select")
 def select_session(payload: dict[str, Any]) -> Dict[str, Any]:
-    session_id = str(payload.get("session_id") or "").strip()
-    if not session_id:
-        raise HTTPException(status_code=400, detail="Session ID required")
-    session = user_service.select_session_for_user(session_id)
-    workspace_state = kernel.get_state(session["active_workspace_id"])
-    return {
-        "structuredContent": {
-            "session_id": session["session_id"],
-            "workspace_id": session["active_workspace_id"],
-            "title": session["title"],
-            "description": session["description"],
-            "workspace_state": workspace_state,
-        },
-        "content": [{"type": "text", "text": f"Activated session {session['title']}."}],
-    }
+    return handle_session_activate(dict(payload or {}))
 
 
 @app.post("/workspaces/select")
 def select_workspace(payload: dict[str, Any]) -> Dict[str, Any]:
-    session_id = str(payload.get("session_id") or "").strip()
-    workspace_id = str(payload.get("workspace_id") or "").strip()
-    if not session_id:
-        raise HTTPException(status_code=400, detail="Session ID required")
-    if not workspace_id:
-        raise HTTPException(status_code=400, detail="Workspace ID required")
-    user = _session_user_profile(session_id)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Invalid session")
-    result = user_service.activate_workspace(user_id=str(user["user_id"]), workspace_id=workspace_id)
-    session = result["session"]
-    workspace_state = result["workspace_state"]
-    return {
-        "structuredContent": {
-            "workspace_id": result["workspace_id"],
-            "session_id": session["session_id"],
-            "title": session["title"],
-            "description": session["description"],
-            "workspace_state": workspace_state,
-        },
-        "content": [{"type": "text", "text": f"Activated workspace {workspace_id}."}],
-    }
+    return handle_workspace_activate(dict(payload or {}))
 
 
 @app.post("/receptionist/context")
 def receptionist_context_update(payload: ReceptionistContextUpdateRequest) -> Dict[str, Any]:
-    resolved_workspace_id = _resolve_http_workspace_id(payload.workspace_id, payload.session_id)
-    updates = {
-        "room_directory": payload.room_directory,
-        "persona_directory": payload.persona_directory,
-        "receptionist_script": payload.receptionist_script,
-        "policy_summary": payload.policy_summary,
-        "known_user_profile": payload.known_user_profile,
-        "session_summary_text": payload.session_summary_text,
-        "recent_turns": payload.recent_turns,
-        "current_prompt_state": payload.current_prompt_state,
-    }
-    context = receptionist_context_service.update_context(resolved_workspace_id, updates)
-    return {
-        "structuredContent": context,
-        "content": [{"type": "text", "text": f"Updated receptionist context for {resolved_workspace_id}."}],
-    }
+    return handle_receptionist_context_update(payload.model_dump())
 
 
 @app.get("/files")
@@ -901,43 +756,18 @@ def list_files(
     scope: Optional[str] = None,
     scope_ref: Optional[str] = None,
 ) -> Dict[str, Any]:
-    resolved_workspace_id = _resolve_http_workspace_id(workspace_id, session_id)
-    selected_scope = str(scope or "workspace").strip().lower() or "workspace"
-    service = private_file_service if selected_scope == "private" else workspace_file_service
-    rows = service.list_files(resolved_workspace_id, scope=selected_scope if selected_scope != "workspace" else None, scope_ref=scope_ref)
-    return {
-        "structuredContent": {
-            "workspace_id": resolved_workspace_id,
-            "count": len(rows),
-            "files": rows,
-        },
-        "content": [{"type": "text", "text": f"Found {len(rows)} file(s)."}],
+    args = {
+        "workspace_id": workspace_id,
+        "session_id": session_id,
+        "scope": scope,
+        "scope_ref": scope_ref,
     }
+    return handle_file_list(args)
 
 
 @app.post("/files/upload")
 def upload_file(payload: FileUploadRequest) -> Dict[str, Any]:
-    resolved_workspace_id = _resolve_http_workspace_id(payload.workspace_id, payload.session_id)
-    scope = str(payload.scope or "workspace").strip().lower() or "workspace"
-    service = private_file_service if scope == "private" else workspace_file_service
-    record = service.upload_file(
-        workspace_id=resolved_workspace_id,
-        original_name=payload.name,
-        content_text=payload.content_text,
-        content_base64=payload.content_base64,
-        data_url=payload.data_url,
-        mime_type=payload.mime_type,
-        kind=payload.kind,
-        scope=scope,
-        scope_ref=str(payload.scope_ref or "").strip() or scope,
-        description=payload.description,
-        uploaded_by_user_id=payload.uploaded_by_user_id,
-        uploaded_by_session_id=payload.session_id,
-    )
-    return {
-        "structuredContent": record,
-        "content": [{"type": "text", "text": f"Uploaded file {record['original_name']} as {record['file_id']}."}],
-    }
+    return handle_file_upload(payload.model_dump())
 
 
 @app.get("/files/{file_id}")
@@ -947,14 +777,13 @@ def get_file_metadata(
     session_id: Optional[str] = None,
     scope: Optional[str] = None,
 ) -> Dict[str, Any]:
-    resolved_workspace_id = _resolve_http_workspace_id(workspace_id, session_id)
-    selected_scope = str(scope or "workspace").strip().lower() or "workspace"
-    service = private_file_service if selected_scope == "private" else workspace_file_service
-    record = service.get_file(resolved_workspace_id, file_id)
-    return {
-        "structuredContent": record,
-        "content": [{"type": "text", "text": f"File {record['file_id']} - {record['original_name']}."}],
+    args = {
+        "file_id": file_id,
+        "workspace_id": workspace_id,
+        "session_id": session_id,
+        "scope": scope,
     }
+    return handle_file_get(args)
 
 
 @app.get("/files/{file_id}/download")
@@ -966,13 +795,7 @@ def download_file(
 ):
     resolved_workspace_id = _resolve_http_workspace_id(workspace_id, session_id)
     selected_scope = str(scope or "workspace").strip().lower() or "workspace"
-    service = private_file_service if selected_scope == "private" else workspace_file_service
-    record, _ = service.file_bytes(resolved_workspace_id, file_id)
-    return FileResponse(
-        path=record["storage_path"],
-        filename=record["original_name"],
-        media_type=record["mime_type"] or "application/octet-stream",
-    )
+    return handle_file_download_response(resolved_workspace_id, file_id, selected_scope)
 
 
 @app.get("/private-files/{file_id}")
@@ -981,12 +804,13 @@ def get_private_file_metadata(
     workspace_id: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    resolved_workspace_id = _resolve_http_workspace_id(workspace_id, session_id)
-    record = private_file_service.get_file(resolved_workspace_id, file_id)
-    return {
-        "structuredContent": record,
-        "content": [{"type": "text", "text": f"Private file {record['file_id']} - {record['original_name']}."}],
-    }
+    return handle_private_file_get(
+        {
+            "file_id": file_id,
+            "workspace_id": workspace_id,
+            "session_id": session_id,
+        }
+    )
 
 
 @app.get("/private-files/{file_id}/download")
@@ -996,12 +820,7 @@ def download_private_file(
     session_id: Optional[str] = None,
 ):
     resolved_workspace_id = _resolve_http_workspace_id(workspace_id, session_id)
-    record, _ = private_file_service.file_bytes(resolved_workspace_id, file_id)
-    return FileResponse(
-        path=record["storage_path"],
-        filename=record["original_name"],
-        media_type=record["mime_type"] or "application/octet-stream",
-    )
+    return handle_file_download_response(resolved_workspace_id, file_id, "private")
 
 
 @app.post("/dev/reset-test-data")
@@ -1025,279 +844,6 @@ def reset_test_data() -> Dict[str, Any]:
     (RUNTIME_DIR / "private_files").mkdir(parents=True, exist_ok=True)
     return {"ok": True}
 
-
-def handle_workspaces_list(args: Dict[str, Any]) -> Dict[str, Any]:
-    session_id = str(args.get("session_id") or "").strip()
-    idx = kernel.list_workspaces()
-    if session_id:
-        try:
-            user = user_service.get_user_for_session(session_id)
-            current_workspace_id = str(user_service.resolve_workspace_for_session(session_id) or "").strip()
-            workspaces = user_service.list_user_workspaces(str(user["user_id"]))
-            if current_workspace_id:
-                workspaces = sorted(
-                    workspaces,
-                    key=lambda row: (
-                        0 if str(row.get("workspace_id") or "").strip() == current_workspace_id else 1,
-                        str(row.get("last_active_at") or ""),
-                        str(row.get("workspace_id") or ""),
-                    ),
-                )
-            idx = {"workspaces": workspaces, "current_workspace_id": current_workspace_id}
-        except Exception:
-            pass
-    return pipeline.workspaces_list_response(idx)
-
-
-def handle_workspace_new(args: Dict[str, Any]) -> Dict[str, Any]:
-    label = str(args.get("label") or f"Workspace {utc_now()}")
-    label_key = label.strip().casefold()
-    idx = kernel.list_workspaces()
-    for row in idx.get("workspaces", []):
-        existing_label = str(row.get("label") or "").strip()
-        if existing_label and existing_label.casefold() == label_key:
-            workspace_id = str(row.get("workspace_id") or "").strip()
-            if workspace_id:
-                return pipeline.workspace_new_response(workspace_id, existing_label)
-    workspace_id = f"ws_{uuid.uuid4().hex[:8]}"
-    kernel.create_workspace(workspace_id, label)
-    return pipeline.workspace_new_response(workspace_id, label)
-
-
-def handle_office_bootstrap(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    state, created = kernel.bootstrap_workspace(workspace_id)
-
-    if created:
-        append_incident(
-            severity="LOW",
-            clazz="BOOTSTRAP",
-            rule_or_gate="",
-            command="office.bootstrap",
-            input_ref=json.dumps({"workspace_id": workspace_id}),
-            output_ref="state.json",
-            evidence_path=str(store.state_path(workspace_id)),
-            notes="Initialized workspace state (default lobby + receptionist).",
-            state_sha256=stable_state_sha(state),
-        )
-
-    return pipeline.snapshot_response(workspace_id)
-
-
-def handle_office_state_get(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    return pipeline.snapshot_response(workspace_id)
-
-
-def handle_commands_list(args: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "structuredContent": pipeline.tools_response(),
-        "content": [
-            {
-                "type": "text",
-                "text": "Available Veridex commands: Start Veridex, Install Watchdog, Remove Watchdog.",
-            }
-        ],
-    }
-
-
-def handle_office_room_set(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    session_id = str(args.get("session_id") or "").strip() or None
-    room_id = str(args.get("room_id", "")).strip()
-    if not room_id:
-        raise error_missing_required_field("room_id")
-
-    result = kernel.enter_room(workspace_id, room_id, session_id=session_id)
-    user_service.remember_session_room(
-        session_id,
-        active_room=str(result["active_room"]),
-        active_persona=str(result["active_persona"]),
-    )
-    state = kernel.get_state(workspace_id)
-
-    append_incident(
-        severity="LOW",
-        clazz="STATE_CHANGE",
-        rule_or_gate="Room State Model v1.1.0",
-        command="office.room_set",
-        input_ref=json.dumps({"workspace_id": workspace_id, "room_id": result["active_room"]}),
-        output_ref="state.json",
-        evidence_path=str(store.state_path(workspace_id)),
-        notes=f"active_room: {result['previous_room']} -> {result['active_room']}",
-        state_sha256=stable_state_sha(state),
-    )
-
-    return pipeline.enter_room_response(workspace_id, result)
-
-
-def handle_office_nancy_route(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    request_text = str(args.get("request", "")).strip()
-    if not request_text:
-        raise error_missing_required_field("request")
-    return pipeline.nancy_route_response(workspace_id, request_text)
-
-
-def handle_ai_generate(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = str(args.get("workspace_id", "")).strip()
-    if not workspace_id:
-        raise error_missing_required_field("workspace_id")
-
-    try:
-        state = kernel.get_state(workspace_id)
-    except HTTPException:
-        kernel.bootstrap_workspace(workspace_id)
-        state = kernel.get_state(workspace_id)
-
-    user_prompt = str(args.get("user_prompt") or args.get("request") or args.get("text") or "").strip()
-    if not user_prompt:
-        raise error_missing_required_field("user_prompt")
-
-    system_prompt = str(args.get("system_prompt") or "").strip()
-    if not system_prompt:
-        system_prompt = (
-            f"You are Veridex. The active workspace is {workspace_id}. "
-            f"The active room is {state.get('active_room', 'lobby')}. "
-            f"The active persona is {state.get('active_persona', 'Receptionist')}. "
-            "If the user asks about uploading or downloading files or images, answer with the Veridex file workflow and do not redirect them to IT unless they explicitly ask for troubleshooting. "
-            "Never expose raw JSON, internal tool names, hidden schemas, or backend metadata in your response. "
-            "Use recent turns only when the user is clearly asking a follow-up, using pronouns, or referring to a prior topic. For broad help or capability questions like 'what can you help me with here?', answer from the active room and persona instead of continuing the previous topic. Do not ask for details already present in recent context. "
-            "Do not claim you are searching, processing, working in the background, or that you will send results later. You can only answer with information available in this response. If a tool or missing detail is needed, say so directly. "
-            "Respond clearly, concisely, and stay within Veridex governance."
-        )
-
-    context = args.get("context")
-    if not isinstance(context, dict):
-        context = {
-            "workspace_id": workspace_id,
-            "active_room": state.get("active_room", "lobby"),
-            "active_persona": state.get("active_persona", "Receptionist"),
-        }
-    receptionist_context = receptionist_context_service.build_model_context(
-        workspace_id=workspace_id,
-        session_id=str(args.get("session_id") or "").strip() or None,
-    )
-    context = {
-        **context,
-        "workspace_id": workspace_id,
-        "active_room": receptionist_context.get("active_room", state.get("active_room", "lobby")),
-        "active_persona": receptionist_context.get("active_persona", state.get("active_persona", "Receptionist")),
-        "session_id": receptionist_context.get("session_id"),
-        "session_summary_text": receptionist_context.get("session_summary_text", ""),
-        "recent_turns_text": receptionist_context.get("recent_turns_text", []),
-    }
-
-    settings = args.get("settings")
-    if not isinstance(settings, dict):
-        settings = {}
-
-    task_type = str(args.get("task_type") or "conversation").strip() or "conversation"
-
-    try:
-        result = model_router.generate_response(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            context=context,
-            settings=settings,
-            task_type=task_type,
-        )
-    except ModelRoutingError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": str(exc),
-                "attempts": exc.attempts,
-                "workspace_id": workspace_id,
-                "task_type": task_type,
-            },
-        ) from exc
-
-    structured = {
-        "workspace_id": workspace_id,
-        "provider": result.provider,
-        "model": result.model,
-        "task_type": result.task_type,
-        "fallback_used": result.fallback_used,
-        "attempts": result.attempts,
-        "response_text": result.text,
-    }
-    return {
-        "structuredContent": structured,
-        "content": [{"type": "text", "text": result.text}],
-    }
-
-
-def handle_mailroom_dispatch(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    for field in ("to_room", "body"):
-        if field not in args:
-            raise error_missing_required_field(field)
-
-    to_room_raw = str(args["to_room"])
-    ensure_single_target(to_room_raw)
-    if "," in to_room_raw or " and " in to_room_raw.lower() or "&" in to_room_raw:
-        raise HTTPException(status_code=400, detail="One memo may target only one room. Send separate memos.")
-
-    body = str(args["body"]).strip()
-    explicit_persona = str(args.get("explicit_persona", "")).strip() or None
-
-    state = kernel.get_state(workspace_id)
-    from_room_external = state.get("active_room", "lobby")
-    memo_result = memo_service.dispatch_memo(
-        workspace_id=workspace_id,
-        from_room=from_room_external,
-        to_room=to_room_raw,
-        body=body,
-        explicit_persona=explicit_persona,
-        policy_check_fn=pipeline.assert_mailroom_allowed,
-    )
-
-    append_incident(
-        severity="LOW",
-        clazz="MEMO_DISPATCH",
-        rule_or_gate="Mailroom Dispatch Contract v1.1.0",
-        command="mailroom.dispatch",
-        input_ref=json.dumps({
-            "workspace_id": workspace_id,
-            "from_room": from_room_external,
-            "to_room": memo_result["to_room"],
-            "memo_id": memo_result["memo_id"],
-        }),
-        output_ref="(tool_response)",
-        evidence_path=str(store.memos_dir(workspace_id)),
-        notes="Recorded memo dispatch (single-target).",
-        state_sha256=stable_state_sha(state),
-    )
-
-    return pipeline.mailroom_response(
-        workspace_id=workspace_id,
-        memo_id=memo_result["memo_id"],
-        from_room=from_room_external,
-        to_room=memo_result["to_room"],
-        to_persona=memo_result["to_persona"],
-        subject=memo_result["subject"],
-        dest_room_title=memo_result["dest_room_title"],
-    )
-
-
-def handle_memos_list(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    limit = int(args.get("limit", 25))
-    rows = memo_service.list_memos(workspace_id, limit=limit)
-    return pipeline.memos_list_response(workspace_id, rows)
-
-
-def handle_memo_get(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    memo_id = str(args.get("memo_id", "")).strip()
-    if not memo_id:
-        raise error_missing_required_field("memo_id")
-
-    obj, body = memo_service.get_memo(workspace_id, memo_id)
-    return pipeline.memo_get_response(obj, body)
-
-
 def _parse_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -1318,469 +864,6 @@ def _is_confirmation_yes(text: str) -> bool:
 def _is_confirmation_no(text: str) -> bool:
     normalized = str(text or "").strip().lower()
     return normalized in {"0", "false", "no", "n", "off"}
-
-
-def _pending_room_navigation(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    pending = state.get("pending_room_navigation")
-    return pending if isinstance(pending, dict) else None
-
-
-def _normalize_artifact_scope(args: Dict[str, Any], workspace_id: str) -> str:
-    scope = str(args.get("retrieval_scope") or args.get("scope") or "workspace").strip().lower()
-    scope = scope.replace("-", "_")
-    if scope in {"global", "archive", "archive_global", "all", "all_project", "all_projects"}:
-        return "archive_global"
-
-    state = kernel.get_state(workspace_id)
-    active_room = str(state.get("active_room") or "").strip().lower()
-    if active_room == "records_archive":
-        return "archive_global"
-    return "workspace"
-
-
-def _artifact_workspace_ids(workspace_id: str) -> list[str]:
-    idx = kernel.list_workspaces()
-    workspace_ids: list[str] = []
-    for row in idx.get("workspaces", []):
-        candidate = str(row.get("workspace_id") or "").strip()
-        if candidate and candidate not in workspace_ids:
-            workspace_ids.append(candidate)
-    if workspace_id and workspace_id not in workspace_ids:
-        workspace_ids.insert(0, workspace_id)
-    return workspace_ids
-
-
-def _require_artifact_workspace(workspace_id: str) -> Dict[str, Any]:
-    return kernel.get_state(workspace_id)
-
-
-def _artifact_summary_text(record: Dict[str, Any], action: str) -> str:
-    return f"{action} artifact {record['artifact_id']} ({record.get('display_name') or record.get('title')})."
-
-
-def handle_artifact_create(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    _require_artifact_workspace(workspace_id)
-
-    artifact_type = str(args.get("type") or args.get("artifact_type") or "").strip()
-    title = str(args.get("title") or "").strip()
-    content = str(args.get("content") or "")
-    format_value = str(args.get("format") or "text/plain").strip() or "text/plain"
-    status = str(args.get("status") or "active").strip() or "active"
-    created_by = str(args.get("created_by") or "user").strip() or "user"
-    metadata = args.get("metadata")
-    source_refs = args.get("source_refs")
-
-    record = archive_service.create_artifact(
-        workspace_id=workspace_id,
-        type=artifact_type,
-        title=title,
-        content=content,
-        format=format_value,
-        status=status,
-        created_by=created_by,
-        metadata=metadata,
-        source_refs=source_refs,
-    )
-    return {
-        "structuredContent": record,
-        "content": [{"type": "text", "text": _artifact_summary_text(record, "Created")}],
-    }
-
-
-def handle_artifact_get(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    _require_artifact_workspace(workspace_id)
-    artifact_id = str(args.get("artifact_id", "")).strip()
-    if not artifact_id:
-        raise error_missing_required_field("artifact_id")
-
-    retrieval_scope = _normalize_artifact_scope(args, workspace_id)
-    if retrieval_scope == "archive_global":
-        obj = archive_service.get_artifact_across_workspaces(_artifact_workspace_ids(workspace_id), artifact_id)
-    else:
-        obj = archive_service.get_artifact(workspace_id, artifact_id)
-    preview = obj.get("content_preview", "")
-    return {
-        "structuredContent": {
-            **obj,
-            "retrieval_scope": retrieval_scope,
-        },
-        "content": [
-            {
-                "type": "text",
-                "text": (
-                    f"Artifact {obj['artifact_id']} - {obj.get('display_name') or obj.get('title')}\n"
-                    f"Workspace: {obj.get('workspace_id')}\n\n{preview}"
-                ),
-            }
-        ],
-    }
-
-
-def handle_artifact_list(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    _require_artifact_workspace(workspace_id)
-    include_archived = _parse_bool(args.get("include_archived"), False)
-    retrieval_scope = _normalize_artifact_scope(args, workspace_id)
-    if retrieval_scope == "archive_global":
-        rows = archive_service.list_artifacts_across_workspaces(
-            _artifact_workspace_ids(workspace_id),
-            include_archived=True,
-        )
-    else:
-        rows = archive_service.list_artifacts(workspace_id, include_archived=include_archived)
-    return {
-        "structuredContent": {
-            "workspace_id": workspace_id,
-            "count": len(rows),
-            "retrieval_scope": retrieval_scope,
-            "include_archived": include_archived,
-            "artifacts": rows,
-        },
-        "content": [
-            {
-                "type": "text",
-                "text": (
-                    f"Found {len(rows)} artifact(s) "
-                    f"({'all workspaces' if retrieval_scope == 'archive_global' else 'this workspace'})."
-                ),
-            }
-        ],
-    }
-
-
-def handle_artifact_update(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    _require_artifact_workspace(workspace_id)
-    artifact_id = str(args.get("artifact_id", "")).strip()
-    if not artifact_id:
-        raise error_missing_required_field("artifact_id")
-
-    updated_fields = {
-        "title": args.get("title"),
-        "content": args.get("content"),
-        "format": args.get("format"),
-        "status": args.get("status"),
-        "metadata": args.get("metadata"),
-        "source_refs": args.get("source_refs"),
-    }
-    if all(value is None for value in updated_fields.values()):
-        raise HTTPException(status_code=400, detail="Provide at least one field to update.")
-
-    record = archive_service.update_artifact(workspace_id=workspace_id, artifact_id=artifact_id, **updated_fields)
-    return {
-        "structuredContent": record,
-        "content": [{"type": "text", "text": _artifact_summary_text(record, "Updated")}],
-    }
-
-
-def handle_artifact_append(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    _require_artifact_workspace(workspace_id)
-    artifact_id = str(args.get("artifact_id", "")).strip()
-    if not artifact_id:
-        raise error_missing_required_field("artifact_id")
-
-    content = args.get("content")
-    if content is None:
-        content = args.get("append_text")
-    if content is None:
-        raise error_missing_required_field("content")
-
-    separator_value = args.get("separator")
-    separator = "\n" if separator_value in (None, "") else str(separator_value)
-    record = archive_service.append_to_artifact(
-        workspace_id=workspace_id,
-        artifact_id=artifact_id,
-        content=content,
-        separator=separator,
-        metadata=args.get("metadata"),
-        source_refs=args.get("source_refs"),
-    )
-    return {
-        "structuredContent": record,
-        "content": [{"type": "text", "text": _artifact_summary_text(record, "Appended to")}],
-    }
-
-
-def handle_artifact_archive(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    _require_artifact_workspace(workspace_id)
-    artifact_id = str(args.get("artifact_id", "")).strip()
-    if not artifact_id:
-        raise error_missing_required_field("artifact_id")
-
-    record = archive_service.archive_artifact(workspace_id=workspace_id, artifact_id=artifact_id)
-    return {
-        "structuredContent": record,
-        "content": [{"type": "text", "text": _artifact_summary_text(record, "Archived")}],
-    }
-
-
-def handle_archive_store_text(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    _require_artifact_workspace(workspace_id)
-
-    name = str(args.get("name", "")).strip()
-    if not name:
-        raise error_missing_required_field("name")
-
-    content = str(args.get("content", ""))
-    artifact_type = str(args.get("artifact_type", "document")).strip() or "document"
-
-    state = kernel.get_state(workspace_id)
-    source_room = str(args.get("source_room") or state.get("active_room", "lobby"))
-    source_persona = str(args.get("source_persona") or state.get("active_persona", "Receptionist"))
-
-    record = archive_service.store_text_artifact(
-        workspace_id=workspace_id,
-        name=name,
-        content=content,
-        artifact_type=artifact_type,
-        source_room=source_room,
-        source_persona=source_persona,
-    )
-
-    append_incident(
-        severity="LOW",
-        clazz="ARCHIVE_STORE",
-        rule_or_gate="Records Archive",
-        command="office.archive_store_text",
-        input_ref=json.dumps({"workspace_id": workspace_id, "name": name}),
-        output_ref=record["artifact_id"],
-        evidence_path=str(archive_service.db_path),
-        notes=f"Stored artifact {record['artifact_id']}.",
-        state_sha256=stable_state_sha(state),
-    )
-
-    try:
-        record_assistant_turn(
-            workspace_id=workspace_id,
-            session_id=str(args.get("session_id") or ""),
-            response_text=f"Artifact stored: {record.get('display_name') or record.get('title')} ({record['artifact_id']})",
-            kernel=kernel,
-            store=store,
-            receptionist_context_service=receptionist_context_service,
-            user_profile=None,
-            speaker="System",
-            room_id=state.get("active_room", "records_archive"),
-            persona_name=state.get("active_persona", "Receptionist"),
-        )
-    except Exception:
-        pass
-
-    return {
-        "structuredContent": record,
-        "content": [{"type": "text", "text": f"Records Archive stored {record.get('display_name') or record.get('title')} as {record['artifact_id']}."}],
-    }
-
-
-def handle_archive_list(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    _require_artifact_workspace(workspace_id)
-    retrieval_scope = _normalize_artifact_scope(args, workspace_id)
-    if retrieval_scope == "archive_global":
-        rows = archive_service.list_artifacts_across_workspaces(_artifact_workspace_ids(workspace_id), include_archived=True)
-    else:
-        rows = archive_service.list_artifacts(workspace_id, include_archived=True)
-    return {
-        "structuredContent": {
-            "workspace_id": workspace_id,
-            "count": len(rows),
-            "retrieval_scope": retrieval_scope,
-            "artifacts": rows,
-        },
-        "content": [
-            {
-                "type": "text",
-                "text": (
-                    f"Found {len(rows)} artifact(s) "
-                    f"({'all workspaces' if retrieval_scope == 'archive_global' else 'this workspace'})."
-                ),
-            }
-        ],
-    }
-
-
-def handle_archive_get(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    _require_artifact_workspace(workspace_id)
-    artifact_id = str(args.get("artifact_id", "")).strip()
-    if not artifact_id:
-        raise error_missing_required_field("artifact_id")
-
-    retrieval_scope = _normalize_artifact_scope(args, workspace_id)
-    if retrieval_scope == "archive_global":
-        obj = archive_service.get_artifact_across_workspaces(_artifact_workspace_ids(workspace_id), artifact_id)
-    else:
-        obj = archive_service.get_artifact(workspace_id, artifact_id)
-    preview = obj.get("content_preview", "")
-    return {
-        "structuredContent": {
-            **obj,
-            "retrieval_scope": retrieval_scope,
-        },
-        "content": [
-            {
-                "type": "text",
-                "text": (
-                    f"Artifact {obj['artifact_id']} - {obj['display_name']}\n"
-                    f"Workspace: {obj.get('workspace_id')}\n\n{preview}"
-                ),
-            }
-        ],
-    }
-
-
-def handle_nancy_artifacts_list(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    retrieval_scope = _normalize_artifact_scope(args, workspace_id)
-    return nancy_service.artifacts_list_response(workspace_id, retrieval_scope=retrieval_scope)
-
-
-def handle_nancy_artifact_open(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    artifact_id = str(args.get("artifact_id", "")).strip()
-    if not artifact_id:
-        raise error_missing_required_field("artifact_id")
-    retrieval_scope = _normalize_artifact_scope(args, workspace_id)
-    return nancy_service.artifact_open_response(workspace_id, artifact_id, retrieval_scope=retrieval_scope)
-
-
-def handle_nancy_workspace_briefing(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = args["workspace_id"]
-    return nancy_service.workspace_briefing_response(workspace_id)
-
-
-def _resolve_file_workspace(args: Dict[str, Any]) -> str:
-    tool = "office.file_upload"
-    workspace_id = str(args.get("workspace_id", "")).strip()
-    session_id = str(args.get("session_id", "")).strip()
-    if session_id:
-        return resolve_workspace_id(tool, {"session_id": session_id, "workspace_id": workspace_id})
-    if workspace_id:
-        return workspace_id
-    return resolve_workspace_id(tool, args)
-
-
-def handle_file_upload(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = _resolve_file_workspace(args)
-    original_name = str(args.get("name") or args.get("filename") or args.get("file_name") or "").strip()
-    if not original_name:
-        raise error_missing_required_field("name")
-    scope = str(args.get("scope") or "workspace").strip().lower() or "workspace"
-    scope_ref = str(args.get("scope_ref") or "").strip()
-    service = private_file_service if scope == "private" else workspace_file_service
-    record = service.upload_file(
-        workspace_id=workspace_id,
-        original_name=original_name,
-        content_text=args.get("content_text"),
-        content_base64=args.get("content_base64"),
-        data_url=args.get("data_url"),
-        mime_type=str(args.get("mime_type") or "").strip() or None,
-        kind=str(args.get("kind") or "generic").strip() or "generic",
-        scope=scope,
-        scope_ref=scope_ref or scope,
-        description=args.get("description"),
-        uploaded_by_user_id=str(args.get("uploaded_by_user_id") or "").strip() or None,
-        uploaded_by_session_id=str(args.get("session_id") or "").strip() or None,
-    )
-    return {
-        **record,
-        "structuredContent": record,
-        "content": [{"type": "text", "text": f"Uploaded file {record['original_name']} as {record['file_id']}."}],
-    }
-
-
-def handle_file_list(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = _resolve_file_workspace(args)
-    scope = str(args.get("scope") or "").strip().lower() or None
-    scope_ref = str(args.get("scope_ref") or "").strip() or None
-    service = private_file_service if scope == "private" else workspace_file_service
-    rows = service.list_files(workspace_id, scope=scope, scope_ref=scope_ref)
-    return {
-        "workspace_id": workspace_id,
-        "count": len(rows),
-        "files": rows,
-        "structuredContent": {
-            "workspace_id": workspace_id,
-            "count": len(rows),
-            "files": rows,
-        },
-        "content": [{"type": "text", "text": f"Found {len(rows)} file(s)."}],
-    }
-
-
-def handle_file_get(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = _resolve_file_workspace(args)
-    file_id = str(args.get("file_id") or "").strip()
-    if not file_id:
-        raise error_missing_required_field("file_id")
-    scope = str(args.get("scope") or "").strip().lower() or "workspace"
-    service = private_file_service if scope == "private" else workspace_file_service
-    record = service.get_file(workspace_id, file_id)
-    return {
-        **record,
-        "structuredContent": record,
-        "content": [{"type": "text", "text": f"File {record['file_id']} - {record['original_name']}."}],
-    }
-
-
-def handle_file_download_response(workspace_id: str, file_id: str, scope: str = "workspace"):
-    service = private_file_service if scope == "private" else workspace_file_service
-    record = service.get_file(workspace_id, file_id)
-    return FileResponse(
-        path=record["storage_path"],
-        filename=record["original_name"],
-        media_type=record["mime_type"] or "application/octet-stream",
-    )
-
-
-def handle_receptionist_context_get(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = resolve_workspace_id("office.receptionist_context_get", args)
-    context = receptionist_context_service.get_context(workspace_id)
-    return {
-        "structuredContent": context,
-        "content": [{"type": "text", "text": f"Loaded receptionist context for {workspace_id}."}],
-    }
-
-
-def handle_private_file_upload(args: Dict[str, Any]) -> Dict[str, Any]:
-    args = dict(args)
-    args["scope"] = "private"
-    return handle_file_upload(args)
-
-
-def handle_private_file_list(args: Dict[str, Any]) -> Dict[str, Any]:
-    args = dict(args)
-    args["scope"] = "private"
-    return handle_file_list(args)
-
-
-def handle_private_file_get(args: Dict[str, Any]) -> Dict[str, Any]:
-    args = dict(args)
-    args["scope"] = "private"
-    return handle_file_get(args)
-
-
-def handle_receptionist_context_update(args: Dict[str, Any]) -> Dict[str, Any]:
-    workspace_id = resolve_workspace_id("office.receptionist_context_update", args)
-    updates = {
-        "room_directory": args.get("room_directory"),
-        "persona_directory": args.get("persona_directory"),
-        "receptionist_script": args.get("receptionist_script"),
-        "policy_summary": args.get("policy_summary"),
-        "known_user_profile": args.get("known_user_profile"),
-        "session_summary_text": args.get("session_summary_text"),
-        "recent_turns": args.get("recent_turns"),
-        "current_prompt_state": args.get("current_prompt_state"),
-    }
-    context = receptionist_context_service.update_context(workspace_id, updates)
-    return {
-        "structuredContent": context,
-        "content": [{"type": "text", "text": f"Updated receptionist context for {workspace_id}."}],
-    }
 
 
 def refresh_handler_bindings() -> None:

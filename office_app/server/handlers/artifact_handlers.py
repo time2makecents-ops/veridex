@@ -5,6 +5,13 @@ from typing import Any, Dict
 
 from fastapi import HTTPException
 
+from office_app.server.artifact_request_helpers import (
+    artifact_summary_text,
+    artifact_workspace_ids,
+    normalize_artifact_scope,
+    require_artifact_workspace,
+)
+
 from .dependencies import HandlerDeps
 
 
@@ -22,38 +29,9 @@ def _parse_bool(value: Any, default: bool = False) -> bool:
 
 
 def build_artifact_handlers(deps: HandlerDeps) -> Dict[str, Any]:
-    def _normalize_artifact_scope(args: Dict[str, Any], workspace_id: str) -> str:
-        scope = str(args.get("retrieval_scope") or args.get("scope") or "workspace").strip().lower()
-        scope = scope.replace("-", "_")
-        if scope in {"global", "archive", "archive_global", "all", "all_project", "all_projects"}:
-            return "archive_global"
-
-        state = deps.kernel.get_state(workspace_id)
-        active_room = str(state.get("active_room") or "").strip().lower()
-        if active_room == "records_archive":
-            return "archive_global"
-        return "workspace"
-
-    def _artifact_workspace_ids(workspace_id: str) -> list[str]:
-        idx = deps.kernel.list_workspaces()
-        workspace_ids: list[str] = []
-        for row in idx.get("workspaces", []):
-            candidate = str(row.get("workspace_id") or "").strip()
-            if candidate and candidate not in workspace_ids:
-                workspace_ids.append(candidate)
-        if workspace_id and workspace_id not in workspace_ids:
-            workspace_ids.insert(0, workspace_id)
-        return workspace_ids
-
-    def _require_artifact_workspace(workspace_id: str) -> Dict[str, Any]:
-        return deps.kernel.get_state(workspace_id)
-
-    def _artifact_summary_text(record: Dict[str, Any], action: str) -> str:
-        return f"{action} artifact {record['artifact_id']} ({record.get('display_name') or record.get('title')})."
-
     def handle_artifact_create(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
-        _require_artifact_workspace(workspace_id)
+        require_artifact_workspace(workspace_id=workspace_id, kernel=deps.kernel)
 
         artifact_type = str(args.get("type") or args.get("artifact_type") or "").strip()
         title = str(args.get("title") or "").strip()
@@ -77,19 +55,22 @@ def build_artifact_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         )
         return {
             "structuredContent": record,
-            "content": [{"type": "text", "text": _artifact_summary_text(record, "Created")}],
+            "content": [{"type": "text", "text": artifact_summary_text(record, "Created")}],
         }
 
     def handle_artifact_get(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
-        _require_artifact_workspace(workspace_id)
+        require_artifact_workspace(workspace_id=workspace_id, kernel=deps.kernel)
         artifact_id = str(args.get("artifact_id", "")).strip()
         if not artifact_id:
             raise deps.error_missing_required_field("artifact_id")
 
-        retrieval_scope = _normalize_artifact_scope(args, workspace_id)
+        retrieval_scope = normalize_artifact_scope(args=args, workspace_id=workspace_id, kernel=deps.kernel)
         if retrieval_scope == "archive_global":
-            obj = deps.archive_service.get_artifact_across_workspaces(_artifact_workspace_ids(workspace_id), artifact_id)
+            obj = deps.archive_service.get_artifact_across_workspaces(
+                artifact_workspace_ids(workspace_id=workspace_id, kernel=deps.kernel),
+                artifact_id,
+            )
         else:
             obj = deps.archive_service.get_artifact(workspace_id, artifact_id)
         preview = obj.get("content_preview", "")
@@ -111,12 +92,12 @@ def build_artifact_handlers(deps: HandlerDeps) -> Dict[str, Any]:
 
     def handle_artifact_list(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
-        _require_artifact_workspace(workspace_id)
+        require_artifact_workspace(workspace_id=workspace_id, kernel=deps.kernel)
         include_archived = _parse_bool(args.get("include_archived"), False)
-        retrieval_scope = _normalize_artifact_scope(args, workspace_id)
+        retrieval_scope = normalize_artifact_scope(args=args, workspace_id=workspace_id, kernel=deps.kernel)
         if retrieval_scope == "archive_global":
             rows = deps.archive_service.list_artifacts_across_workspaces(
-                _artifact_workspace_ids(workspace_id),
+                artifact_workspace_ids(workspace_id=workspace_id, kernel=deps.kernel),
                 include_archived=True,
             )
         else:
@@ -142,7 +123,7 @@ def build_artifact_handlers(deps: HandlerDeps) -> Dict[str, Any]:
 
     def handle_artifact_update(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
-        _require_artifact_workspace(workspace_id)
+        require_artifact_workspace(workspace_id=workspace_id, kernel=deps.kernel)
         artifact_id = str(args.get("artifact_id", "")).strip()
         if not artifact_id:
             raise deps.error_missing_required_field("artifact_id")
@@ -161,12 +142,12 @@ def build_artifact_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         record = deps.archive_service.update_artifact(workspace_id=workspace_id, artifact_id=artifact_id, **updated_fields)
         return {
             "structuredContent": record,
-            "content": [{"type": "text", "text": _artifact_summary_text(record, "Updated")}],
+            "content": [{"type": "text", "text": artifact_summary_text(record, "Updated")}],
         }
 
     def handle_artifact_append(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
-        _require_artifact_workspace(workspace_id)
+        require_artifact_workspace(workspace_id=workspace_id, kernel=deps.kernel)
         artifact_id = str(args.get("artifact_id", "")).strip()
         if not artifact_id:
             raise deps.error_missing_required_field("artifact_id")
@@ -189,12 +170,12 @@ def build_artifact_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         )
         return {
             "structuredContent": record,
-            "content": [{"type": "text", "text": _artifact_summary_text(record, "Appended to")}],
+            "content": [{"type": "text", "text": artifact_summary_text(record, "Appended to")}],
         }
 
     def handle_artifact_archive(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
-        _require_artifact_workspace(workspace_id)
+        require_artifact_workspace(workspace_id=workspace_id, kernel=deps.kernel)
         artifact_id = str(args.get("artifact_id", "")).strip()
         if not artifact_id:
             raise deps.error_missing_required_field("artifact_id")
@@ -202,12 +183,12 @@ def build_artifact_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         record = deps.archive_service.archive_artifact(workspace_id=workspace_id, artifact_id=artifact_id)
         return {
             "structuredContent": record,
-            "content": [{"type": "text", "text": _artifact_summary_text(record, "Archived")}],
+            "content": [{"type": "text", "text": artifact_summary_text(record, "Archived")}],
         }
 
     def handle_archive_store_text(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
-        _require_artifact_workspace(workspace_id)
+        require_artifact_workspace(workspace_id=workspace_id, kernel=deps.kernel)
 
         name = str(args.get("name", "")).strip()
         if not name:
@@ -258,10 +239,13 @@ def build_artifact_handlers(deps: HandlerDeps) -> Dict[str, Any]:
 
     def handle_archive_list(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
-        _require_artifact_workspace(workspace_id)
-        retrieval_scope = _normalize_artifact_scope(args, workspace_id)
+        require_artifact_workspace(workspace_id=workspace_id, kernel=deps.kernel)
+        retrieval_scope = normalize_artifact_scope(args=args, workspace_id=workspace_id, kernel=deps.kernel)
         if retrieval_scope == "archive_global":
-            rows = deps.archive_service.list_artifacts_across_workspaces(_artifact_workspace_ids(workspace_id), include_archived=True)
+            rows = deps.archive_service.list_artifacts_across_workspaces(
+                artifact_workspace_ids(workspace_id=workspace_id, kernel=deps.kernel),
+                include_archived=True,
+            )
         else:
             rows = deps.archive_service.list_artifacts(workspace_id, include_archived=True)
         return {
@@ -284,14 +268,17 @@ def build_artifact_handlers(deps: HandlerDeps) -> Dict[str, Any]:
 
     def handle_archive_get(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
-        _require_artifact_workspace(workspace_id)
+        require_artifact_workspace(workspace_id=workspace_id, kernel=deps.kernel)
         artifact_id = str(args.get("artifact_id", "")).strip()
         if not artifact_id:
             raise deps.error_missing_required_field("artifact_id")
 
-        retrieval_scope = _normalize_artifact_scope(args, workspace_id)
+        retrieval_scope = normalize_artifact_scope(args=args, workspace_id=workspace_id, kernel=deps.kernel)
         if retrieval_scope == "archive_global":
-            obj = deps.archive_service.get_artifact_across_workspaces(_artifact_workspace_ids(workspace_id), artifact_id)
+            obj = deps.archive_service.get_artifact_across_workspaces(
+                artifact_workspace_ids(workspace_id=workspace_id, kernel=deps.kernel),
+                artifact_id,
+            )
         else:
             obj = deps.archive_service.get_artifact(workspace_id, artifact_id)
         preview = obj.get("content_preview", "")
@@ -313,7 +300,7 @@ def build_artifact_handlers(deps: HandlerDeps) -> Dict[str, Any]:
 
     def handle_nancy_artifacts_list(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
-        retrieval_scope = _normalize_artifact_scope(args, workspace_id)
+        retrieval_scope = normalize_artifact_scope(args=args, workspace_id=workspace_id, kernel=deps.kernel)
         return deps.nancy_service.artifacts_list_response(workspace_id, retrieval_scope=retrieval_scope)
 
     def handle_nancy_artifact_open(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -321,7 +308,7 @@ def build_artifact_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         artifact_id = str(args.get("artifact_id", "")).strip()
         if not artifact_id:
             raise deps.error_missing_required_field("artifact_id")
-        retrieval_scope = _normalize_artifact_scope(args, workspace_id)
+        retrieval_scope = normalize_artifact_scope(args=args, workspace_id=workspace_id, kernel=deps.kernel)
         return deps.nancy_service.artifact_open_response(workspace_id, artifact_id, retrieval_scope=retrieval_scope)
 
     def handle_nancy_workspace_briefing(args: Dict[str, Any]) -> Dict[str, Any]:
