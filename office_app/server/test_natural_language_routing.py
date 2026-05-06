@@ -189,6 +189,330 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["arguments"]["query"], "ambrosia italian restaurant")
         self.assertEqual(routed["arguments"]["location"], "eugene")
 
+    def test_numbered_list_followup_rewrites_to_model_question(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "what the most powerful one used in marketing?",
+            [
+                {
+                    "role": "user",
+                    "text": "what is maslow's hierarchy of needs?",
+                },
+                {
+                    "role": "assistant",
+                    "text": (
+                        "Maslow's Hierarchy of Needs is a theory of motivation.\n\n"
+                        "The levels are:\n"
+                        "1. Physiological Needs\n"
+                        "2. Safety Needs\n"
+                        "3. Love and Belonging Needs\n"
+                        "4. Esteem Needs\n"
+                        "5. Self-Actualization Needs"
+                    ),
+                },
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["capability"], "ai.respond")
+        self.assertEqual(
+            routed["arguments"]["user_prompt"],
+            "Which single level of Maslow's hierarchy of needs is most powerful in marketing? "
+            "Answer with one level first, then a brief reason.",
+        )
+
+    def test_numbered_list_followup_rewrites_explicit_level_reference(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "whats the most powerful level used in marketing?",
+            [
+                {
+                    "role": "user",
+                    "text": "what is maslow's hierarchy of needs?",
+                },
+                {
+                    "role": "assistant",
+                    "text": (
+                        "Maslow's Hierarchy of Needs is a theory of motivation.\n\n"
+                        "The levels are:\n"
+                        "1. Physiological Needs\n"
+                        "2. Safety Needs\n"
+                        "3. Love and Belonging Needs\n"
+                        "4. Esteem Needs\n"
+                        "5. Self-Actualization Needs"
+                    ),
+                },
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["capability"], "ai.respond")
+        self.assertEqual(
+            routed["arguments"]["user_prompt"],
+            "Which single level of Maslow's hierarchy of needs is most powerful in marketing? "
+            "Answer with one level first, then a brief reason.",
+        )
+
+    def test_numbered_list_followup_can_recover_after_intervening_bad_answer(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "what the most powerful one used in marketing?",
+            [
+                {
+                    "role": "user",
+                    "text": "what is maslow's hierarchy of needs?",
+                },
+                {
+                    "role": "assistant",
+                    "text": (
+                        "Maslow's Hierarchy of Needs is a theory of motivation.\n\n"
+                        "The levels are:\n"
+                        "1. Physiological Needs\n"
+                        "2. Safety Needs\n"
+                        "3. Love and Belonging Needs\n"
+                        "4. Esteem Needs\n"
+                        "5. Self-Actualization Needs"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "text": "whats the most powerful level used in marketing?",
+                },
+                {
+                    "role": "assistant",
+                    "text": "The most powerful tool in marketing is subjective and depends on the campaign.",
+                },
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(
+            routed["arguments"]["user_prompt"],
+            "Which single level of Maslow's hierarchy of needs is most powerful in marketing? "
+            "Answer with one level first, then a brief reason.",
+        )
+
+    def test_numbered_list_followup_rewrites_first_one_reference(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "tell me more about the first one",
+            [
+                {
+                    "role": "user",
+                    "text": "what is maslow's hierarchy of needs?",
+                },
+                {
+                    "role": "assistant",
+                    "text": (
+                        "Maslow's Hierarchy of Needs is a theory of motivation.\n\n"
+                        "The levels are:\n"
+                        "1. Physiological Needs\n"
+                        "2. Safety Needs\n"
+                        "3. Love and Belonging Needs"
+                    ),
+                },
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(
+            routed["arguments"]["user_prompt"],
+            "Tell me more about the first level in Maslow's hierarchy of needs.",
+        )
+
+    def test_numbered_list_followup_rewrites_compare_reference(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "how does that compare?",
+            [
+                {
+                    "role": "user",
+                    "text": "what is maslow's hierarchy of needs?",
+                },
+                {
+                    "role": "assistant",
+                    "text": (
+                        "Maslow's Hierarchy of Needs is a theory of motivation.\n\n"
+                        "The levels are:\n"
+                        "1. Physiological Needs\n"
+                        "2. Safety Needs\n"
+                        "3. Love and Belonging Needs"
+                    ),
+                },
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(
+            routed["arguments"]["user_prompt"],
+            "How does that compare with the other levels in Maslow's hierarchy of needs?",
+        )
+
+    def test_numbered_list_followup_rewrites_work_reference(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "would that work for bars too?",
+            [
+                {
+                    "role": "user",
+                    "text": "what is maslow's hierarchy of needs?",
+                },
+                {
+                    "role": "assistant",
+                    "text": (
+                        "Maslow's Hierarchy of Needs is a theory of motivation.\n\n"
+                        "The levels are:\n"
+                        "1. Physiological Needs\n"
+                        "2. Safety Needs\n"
+                        "3. Love and Belonging Needs"
+                    ),
+                },
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(
+            routed["arguments"]["user_prompt"],
+            "Would that level from Maslow's hierarchy of needs also work for bars?",
+        )
+
+    def test_meta_followup_rewrites_to_previous_claim(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "how did you come to that conclusion?",
+            [
+                {
+                    "role": "user",
+                    "text": "what is maslow's hierarchy of needs?",
+                },
+                {
+                    "role": "assistant",
+                    "text": (
+                        "Maslow's Hierarchy of Needs is a theory of motivation.\n\n"
+                        "The levels are:\n"
+                        "1. Physiological Needs\n"
+                        "2. Safety Needs\n"
+                        "3. Love and Belonging Needs\n"
+                        "4. Esteem Needs\n"
+                        "5. Self-Actualization Needs"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "text": "whats the most powerful level used in marketing?",
+                },
+                {
+                    "role": "assistant",
+                    "text": (
+                        "The most powerful single level of Maslow's hierarchy of needs in marketing is **Esteem**.\n\n"
+                        "This is because once basic needs are met, consumers are motivated by a desire for self-respect, "
+                        "status, recognition, and achievement."
+                    ),
+                },
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(
+            routed["arguments"]["user_prompt"],
+            "Explain why you concluded that Esteem is the most powerful single level of Maslow's hierarchy of needs in marketing. "
+            "Keep the explanation tied to the immediately previous answer, compare it briefly with the next strongest level, "
+            "and keep it concrete to marketing behavior.",
+        )
+
+    def test_meta_followup_what_makes_you_say_that_rewrites_to_previous_claim(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "what makes you say that?",
+            [
+                {
+                    "role": "user",
+                    "text": "whats the most powerful level used in marketing?",
+                },
+                {
+                    "role": "assistant",
+                    "text": (
+                        "The most powerful single level of Maslow's hierarchy of needs in marketing is **Esteem**.\n\n"
+                        "This is because consumers are often motivated by status and recognition."
+                    ),
+                },
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(
+            routed["arguments"]["user_prompt"],
+            "Explain why you concluded that Esteem is the most powerful single level of Maslow's hierarchy of needs in marketing. "
+            "Keep the explanation tied to the immediately previous answer, compare it briefly with the next strongest level, "
+            "and keep it concrete to marketing behavior.",
+        )
+
+    def test_meta_followup_rewrites_short_label_claim(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "how did you come to that conclusion?",
+            [
+                {
+                    "role": "user",
+                    "text": "what is maslo's heirachy of needs?",
+                },
+                {
+                    "role": "assistant",
+                    "text": (
+                        "Maslow's Hierarchy of Needs is a psychological theory.\n\n"
+                        "The levels are:\n"
+                        "1. Physiological Needs\n"
+                        "2. Safety Needs\n"
+                        "3. Love and Belonging Needs\n"
+                        "4. Esteem Needs\n"
+                        "5. Self-Actualization Needs"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "text": "whats the most powerful level used in marketing?",
+                },
+                {
+                    "role": "assistant",
+                    "text": "Esteem. It taps into consumers' desire for recognition, status, and self-respect, which can be powerful motivators for purchasing decisions.",
+                },
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(
+            routed["arguments"]["user_prompt"],
+            "Explain why you concluded that Esteem is the most powerful single level of Maslow's hierarchy of needs in marketing. "
+            "Keep the explanation tied to the immediately previous answer, compare it briefly with the next strongest level, "
+            "and keep it concrete to marketing behavior.",
+        )
+
+    def test_non_list_followup_does_not_rewrite_which_one(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "which one?",
+            [
+                {
+                    "role": "user",
+                    "text": "what can you do?",
+                },
+                {
+                    "role": "assistant",
+                    "text": "I can chat, search the web, and manage files.",
+                },
+            ],
+        )
+        self.assertIsNone(routed)
+
     def test_find_restaurants_near_me_routes_to_places_with_missing_location(self) -> None:
         routed = self.pipeline.route_user_request("default", "Find restaurants near me")
         self.assertEqual(routed["route_kind"], "tool")
@@ -388,6 +712,7 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertIn("Do not claim you are searching", routed["arguments"]["system_prompt"])
         self.assertIn("Use recent turns only", routed["arguments"]["system_prompt"])
         self.assertIn("Answer normal advice", routed["arguments"]["system_prompt"])
+        self.assertIn("how did you come to that conclusion?", routed["arguments"]["system_prompt"])
 
     def test_broad_room_help_stays_model_with_room_context_instruction(self) -> None:
         routed = self.pipeline.route_user_request("default", "what can you help me with here?")

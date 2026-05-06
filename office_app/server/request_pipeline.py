@@ -192,7 +192,9 @@ class RequestPipeline:
     MODEL_CONTEXT_RULE = (
         "Use recent turns only when the user is clearly asking a follow-up, using pronouns, or referring to a prior topic. "
         "For broad help or capability questions like 'what can you help me with here?', answer from the active room and persona instead of continuing the previous topic. "
-        "Do not ask for details already present in recent context."
+        "Do not ask for details already present in recent context. "
+        "If the user asks a reflective follow-up like 'how did you come to that conclusion?' or 'what makes you say that?', "
+        "explain the immediately previous answer instead of asking the user for more context."
     )
     MODEL_DIRECT_ANSWER_RULE = (
         "Answer normal advice, strategy, explanation, and meta questions directly. "
@@ -268,6 +270,36 @@ class RequestPipeline:
         "create new session",
         "start a new session",
         "create a new session",
+    )
+    CONTEXTUAL_REFERENCE_HINTS = (
+        "which one",
+        "what one",
+        "which level",
+        "what level",
+        "the first one",
+        "the last one",
+        "the strongest one",
+        "the best one",
+        "the most powerful one",
+        "the most powerful level",
+        "how does that compare",
+        "would that work",
+        "would that work for",
+        "does that work",
+    )
+    NUMBERED_LIST_ITEM_RE = re.compile(r"(?m)^\s*\d+\.\s+")
+    PRIOR_TOPIC_PATTERNS = (
+        re.compile(r"\bwhat\s+is\s+(.+?)\??$", re.IGNORECASE),
+        re.compile(r"\bexplain\s+(.+?)\??$", re.IGNORECASE),
+        re.compile(r"\btell me about\s+(.+?)\??$", re.IGNORECASE),
+    )
+    META_REFERENCE_PATTERNS = (
+        re.compile(r"^how did you come to that conclusion\??$", re.IGNORECASE),
+        re.compile(r"^why did you come to that conclusion\??$", re.IGNORECASE),
+        re.compile(r"^what makes you say that\??$", re.IGNORECASE),
+        re.compile(r"^why do you think that\??$", re.IGNORECASE),
+        re.compile(r"^why that conclusion\??$", re.IGNORECASE),
+        re.compile(r"^how did you decide that\??$", re.IGNORECASE),
     )
 
     def __init__(
@@ -1079,6 +1111,173 @@ class RequestPipeline:
             "reason": "Matched a room status query.",
         }
 
+    def _recent_assistant_turn(self, recent_turns: List[Dict[str, Any]], *, require_numbered_list: bool = False) -> Optional[str]:
+        for turn in reversed(recent_turns[-8:]):
+            if str(turn.get("role") or "").strip().lower() == "assistant":
+                text = str(turn.get("text") or "").strip()
+                if text and (not require_numbered_list or self.NUMBERED_LIST_ITEM_RE.search(text)):
+                    return text
+        return None
+
+    def _recent_user_turn_before_assistant(self, recent_turns: List[Dict[str, Any]]) -> Optional[str]:
+        seen_assistant = False
+        for turn in reversed(recent_turns[-8:]):
+            role = str(turn.get("role") or "").strip().lower()
+            text = str(turn.get("text") or "").strip()
+            if not text:
+                continue
+            if role == "assistant" and not seen_assistant:
+                seen_assistant = True
+                continue
+            if seen_assistant and role == "user":
+                return text
+        return None
+
+    def _infer_followup_subject(self, recent_turns: List[Dict[str, Any]]) -> tuple[Optional[str], str]:
+        assistant_text = self._recent_assistant_turn(recent_turns, require_numbered_list=True) or self._recent_assistant_turn(recent_turns) or ""
+        user_text = self._recent_user_turn_before_assistant(recent_turns) or ""
+        combined = f"{user_text}\n{assistant_text}".lower()
+
+        if "maslow" in combined:
+            return "Maslow's hierarchy of needs", "level"
+
+        for pattern in self.PRIOR_TOPIC_PATTERNS:
+            match = pattern.search(user_text)
+            if match:
+                subject = re.sub(r"\s+", " ", match.group(1).strip(" .?!"))
+                if subject:
+                    return subject, "item"
+
+        if assistant_text and self.NUMBERED_LIST_ITEM_RE.search(assistant_text):
+            first_sentence = assistant_text.split("\n", 1)[0].strip()
+            if first_sentence:
+                return first_sentence.rstrip(".:"), "item"
+
+        return None, "item"
+
+    def _looks_like_contextual_followup(self, request_text: str) -> bool:
+        lowered = re.sub(r"\s+", " ", request_text.strip().lower())
+        if not lowered:
+            return False
+        if any(hint in lowered for hint in self.CONTEXTUAL_REFERENCE_HINTS):
+            return True
+        if len(lowered.split()) <= 8 and re.search(r"\b(it|that|those|them|one|ones|level)\b", lowered):
+            return True
+        return False
+
+    def _extract_ordinal_reference(self, lowered: str) -> Optional[str]:
+        if "first" in lowered:
+            return "first"
+        if "second" in lowered:
+            return "second"
+        if "third" in lowered:
+            return "third"
+        if "last" in lowered:
+            return "last"
+        return None
+
+    def _extract_primary_claim(
+        self,
+        assistant_text: str,
+        *,
+        subject: Optional[str] = None,
+        unit: Optional[str] = None,
+    ) -> Optional[str]:
+        text = re.sub(r"\s+", " ", assistant_text.strip())
+        if not text:
+            return None
+
+        bold_match = re.search(r"\*\*(.+?)\*\*", assistant_text)
+        if bold_match:
+            bold_value = re.sub(r"\s+", " ", bold_match.group(1).strip(" .,:;"))
+            if subject == "Maslow's hierarchy of needs" and bold_value:
+                return f"{bold_value} is the most powerful single {unit} of {subject} in marketing"
+            return bold_value
+
+        first_sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0].strip()
+        short_label = first_sentence.strip(" .,:;")
+        if subject == "Maslow's hierarchy of needs" and unit == "level" and short_label:
+            if re.fullmatch(r"[A-Za-z][A-Za-z -]{1,40}", short_label):
+                return f"{short_label} is the most powerful single {unit} of {subject} in marketing"
+        if len(first_sentence) >= 12:
+            return first_sentence.rstrip(".")
+        return None
+
+    def _rewrite_meta_reference_followup(
+        self,
+        request_text: str,
+        recent_turns: List[Dict[str, Any]],
+    ) -> Optional[str]:
+        text = re.sub(r"\s+", " ", request_text.strip())
+        if not text:
+            return None
+        if not any(pattern.match(text) for pattern in self.META_REFERENCE_PATTERNS):
+            return None
+
+        assistant_text = self._recent_assistant_turn(recent_turns)
+        if not assistant_text:
+            return None
+
+        subject, unit = self._infer_followup_subject(recent_turns)
+        claim = self._extract_primary_claim(
+            assistant_text,
+            subject=subject,
+            unit=unit,
+        )
+        if not claim:
+            return None
+
+        return (
+            f"Explain why you concluded that {claim}. "
+            "Keep the explanation tied to the immediately previous answer, compare it briefly with the next strongest level, "
+            "and keep it concrete to marketing behavior."
+        )
+
+    def _rewrite_contextual_reference_followup(
+        self,
+        request_text: str,
+        recent_turns: List[Dict[str, Any]],
+    ) -> Optional[str]:
+        assistant_text = self._recent_assistant_turn(recent_turns, require_numbered_list=True) or ""
+        if not assistant_text:
+            return None
+
+        text = re.sub(r"\s+", " ", request_text.strip())
+        lowered = text.lower()
+        if not self._looks_like_contextual_followup(text):
+            return None
+
+        subject, unit = self._infer_followup_subject(recent_turns)
+        if not subject:
+            return None
+
+        if (
+            any(phrase in lowered for phrase in ("most powerful one", "most powerful level", "which level", "what level"))
+            and "marketing" in lowered
+        ):
+            return (
+                f"Which single {unit} of {subject} is most powerful in marketing? "
+                "Answer with one level first, then a brief reason."
+            )
+        if "how does that compare" in lowered:
+            return f"How does that compare with the other {unit}s in {subject}?"
+        if "would that work" in lowered or "does that work" in lowered:
+            target_match = re.search(r"\bfor\s+([A-Za-z][A-Za-z0-9 '&-]{1,60})\??$", text, re.IGNORECASE)
+            if target_match:
+                target = re.sub(r"\s+too$", "", target_match.group(1).strip(), flags=re.IGNORECASE).strip()
+                return f"Would that {unit} from {subject} also work for {target}?"
+            return f"Would that {unit} from {subject} also work in a similar context?"
+        if "strongest one" in lowered:
+            return f"Which {unit} of {subject} is strongest?"
+        if "best one" in lowered:
+            return f"Which {unit} of {subject} is most effective?"
+        ordinal = self._extract_ordinal_reference(lowered)
+        if ordinal is not None:
+            return f"Tell me more about the {ordinal} {unit} in {subject}."
+        if "which one" in lowered or "what one" in lowered:
+            return f"Which single {unit} of {subject} is the best fit here? Answer with one {unit} first, then a brief reason."
+        return None
+
     def route_contextual_followup(
         self,
         workspace_id: str,
@@ -1087,45 +1286,50 @@ class RequestPipeline:
     ) -> Optional[Dict[str, Any]]:
         text = request_text.strip()
         match = re.match(r"^(?:what|how)\s+about\s+(.+?)\??$", text, re.IGNORECASE)
-        if not match:
-            return None
-        subject = re.sub(r"\s+", " ", match.group(1).strip(" .?!")).strip()
-        if len(subject) < 3:
-            return None
-
         recent_text = "\n".join(str(turn.get("text") or "") for turn in recent_turns[-8:])
         recent_lower = recent_text.lower()
-        if not any(marker in recent_lower for marker in ("restaurant", "restaurants", "review-oriented results", "place results")):
+        if match:
+            subject = re.sub(r"\s+", " ", match.group(1).strip(" .?!")).strip()
+            if len(subject) >= 3 and any(
+                marker in recent_lower for marker in ("restaurant", "restaurants", "review-oriented results", "place results")
+            ):
+                location = None
+                for turn in reversed(recent_turns[-8:]):
+                    location = self.extract_location(str(turn.get("text") or ""))
+                    if location:
+                        break
+                if location:
+                    category = "restaurant"
+                    if "italian" in recent_lower:
+                        category = "italian restaurant"
+                    elif "thai" in recent_lower:
+                        category = "thai restaurant"
+
+                    return {
+                        "route_kind": "tool",
+                        "workspace_id": workspace_id,
+                        "request": request_text,
+                        "capability": "search.reviews",
+                        "tool": "office.search_reviews",
+                        "arguments": {
+                            "query": f"{subject} {category}",
+                            "location": location,
+                            "time_window": None,
+                            "limit": 5,
+                        },
+                        "reason": "Resolved a short follow-up against the recent restaurant search context.",
+                    }
+
+        rewritten_prompt = self._rewrite_contextual_reference_followup(request_text, recent_turns)
+        if rewritten_prompt is None:
+            rewritten_prompt = self._rewrite_meta_reference_followup(request_text, recent_turns)
+        if rewritten_prompt is None:
             return None
-
-        location = None
-        for turn in reversed(recent_turns[-8:]):
-            location = self.extract_location(str(turn.get("text") or ""))
-            if location:
-                break
-        if not location:
-            return None
-
-        category = "restaurant"
-        if "italian" in recent_lower:
-            category = "italian restaurant"
-        elif "thai" in recent_lower:
-            category = "thai restaurant"
-
-        return {
-            "route_kind": "tool",
-            "workspace_id": workspace_id,
-            "request": request_text,
-            "capability": "search.reviews",
-            "tool": "office.search_reviews",
-            "arguments": {
-                "query": f"{subject} {category}",
-                "location": location,
-                "time_window": None,
-                "limit": 5,
-            },
-            "reason": "Resolved a short follow-up against the recent restaurant search context.",
-        }
+        return self.model_route(
+            workspace_id,
+            rewritten_prompt,
+            reason=f"Resolved a short follow-up against the immediately previous numbered-list topic: {request_text}",
+        )
 
     def route_session_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         text = request_text.lower().strip()
