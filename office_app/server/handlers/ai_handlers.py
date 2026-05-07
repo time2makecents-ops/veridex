@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
@@ -12,6 +13,132 @@ from .dependencies import HandlerDeps
 
 
 def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
+    NUMBERED_LIST_PLAN_RE = re.compile(r"\bcomplete numbered list of\s+(\d{1,2})\b", re.IGNORECASE)
+    NUMBERED_ITEM_RE = re.compile(r"(?m)^\s*\d+\.")
+    RISK_CONTEXT_RE = re.compile(
+        r"\b(alcohol|liquor|bar|bars|pub|pubs|tavern|taverns|nightclub|nightclubs|medical|health|legal|law|"
+        r"finance|financial|investment|insurance|hiring|employment|privacy|security|tax|real estate|food safety|regulated)\b",
+        re.IGNORECASE,
+    )
+    RISKY_TACTIC_RE = re.compile(
+        r"\b(loyalty programs?|reward(?:s|ed)?|points?|discounts?|coupons?|punch cards?|free drinks?|free items?|"
+        r"complimentary|buy\s+\d+.*get\s+\d+|incentives?|guaranteed returns?|medical claims?|legal advice)\b",
+        re.IGNORECASE,
+    )
+    CAUTION_ALREADY_RE = re.compile(
+        r"\b(compliance note|caution|verify (?:the )?(?:applicable |local )?rules|review local|ensure compliance|"
+        r"regulated|policy-sensitive|legal requirements)\b",
+        re.IGNORECASE,
+    )
+    OREGON_CONTEXT_RE = re.compile(r"\b(oregon|olcc)\b", re.IGNORECASE)
+    USER_REQUEST_RE = re.compile(r"^\s*User request:\s*(.+?)(?:\n\s*\n|$)", re.IGNORECASE | re.DOTALL)
+    GENERIC_RISK_INSTRUCTION_RE = re.compile(
+        r"\bIf (?:any recommendation|the recommendation|the answer|this suggestion).*?"
+        r"(?:risk|caution|rules|requirements|regulated|policy-sensitive).*?(?:\.|$)",
+        re.IGNORECASE,
+    )
+    GENERIC_RISK_PHRASE_RE = re.compile(
+        r"\blegal,\s*regulatory,\s*safety,\s*financial(?:,\s*employment)?(?:,\s*privacy)?,?\s*or\s*policy\s*risk\b",
+        re.IGNORECASE,
+    )
+
+    def _combined_context_text(context: Dict[str, Any]) -> str:
+        parts: List[str] = []
+        summary = str(context.get("session_summary_text") or "").strip()
+        if summary:
+            parts.append(summary)
+        recent_turns = context.get("recent_turns_text")
+        if isinstance(recent_turns, list):
+            parts.extend(str(turn or "").strip() for turn in recent_turns if str(turn or "").strip())
+        history = str(context.get("conversation_history_text") or "").strip()
+        if history:
+            parts.append(history)
+        return "\n".join(parts)
+
+    def _risk_detection_prompt_text(user_prompt: str) -> str:
+        text = str(user_prompt or "").strip()
+        match = USER_REQUEST_RE.search(text)
+        if match:
+            return re.sub(r"\s+", " ", match.group(1).strip())
+        text = GENERIC_RISK_INSTRUCTION_RE.sub("", text)
+        text = GENERIC_RISK_PHRASE_RE.sub("", text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    def _risk_caution_note(*, user_prompt: str, context: Dict[str, Any], response_text: str) -> str:
+        if not response_text.strip():
+            return response_text
+        prompt_text = _risk_detection_prompt_text(user_prompt)
+        context_text = _combined_context_text(context)
+        prompt_has_risk = RISK_CONTEXT_RE.search(prompt_text) is not None
+        prompt_looks_like_followup = bool(
+            re.search(
+                r"\b(it|that|those|them|this|which one|what one|why that|that one|the one|one)\b",
+                prompt_text,
+                re.IGNORECASE,
+            )
+            and len(prompt_text.split()) <= 10
+        )
+        context_has_risk = RISK_CONTEXT_RE.search(context_text) is not None
+        if not prompt_has_risk and not (prompt_looks_like_followup and context_has_risk):
+            return response_text
+        if not RISKY_TACTIC_RE.search(response_text):
+            return response_text
+        if CAUTION_ALREADY_RE.search(response_text):
+            return response_text
+        combined_text = "\n".join([prompt_text, context_text]).strip()
+        specific_to_oregon = bool(OREGON_CONTEXT_RE.search(combined_text))
+        note = (
+            "Compliance note: This suggestion may involve regulated or policy-sensitive details. "
+            "Verify the applicable local rules before implementing incentives, claims, or offers."
+        )
+        if specific_to_oregon:
+            note += " If this is in Oregon, verify OLCC rules before using alcohol-based incentives."
+        return f"{response_text.rstrip()}\n\n{note}"
+
+    def _format_model_failure_message(exc: ModelRoutingError) -> str:
+        attempts = [str(item).strip() for item in exc.attempts if str(item).strip()]
+        if not attempts:
+            return str(exc)
+        attempts_text = "; ".join(attempts[:4])
+        if len(attempts) > 4:
+            attempts_text += f"; plus {len(attempts) - 4} more"
+        return f"{exc} Attempts: {attempts_text}"
+
+    def _planned_numbered_list_count(user_prompt: str) -> Optional[int]:
+        match = NUMBERED_LIST_PLAN_RE.search(user_prompt)
+        if not match:
+            return None
+        count = int(match.group(1))
+        return count if 2 <= count <= 20 else None
+
+    def _numbered_item_count(response_text: str) -> int:
+        return len(NUMBERED_ITEM_RE.findall(response_text or ""))
+
+    def _list_completion_retry_prompt(*, user_prompt: str, response_text: str, expected_count: int) -> str:
+        return (
+            "The previous response did not complete the requested numbered list.\n\n"
+            f"Original request and answer plan:\n{user_prompt}\n\n"
+            f"Partial response:\n{response_text.strip()}\n\n"
+            f"Return a complete numbered list with {expected_count} items. "
+            "Keep any correct existing item, continue through the final item, and do not add an apology."
+        )
+
+    def _incomplete_list_failure_message(
+        *,
+        expected_count: int,
+        actual_count: int,
+        retry_error: Optional[ModelRoutingError] = None,
+    ) -> str:
+        message = (
+            f"The AI returned an incomplete list ({actual_count} of {expected_count} requested items), "
+            "so I did not treat it as a final answer."
+        )
+        if retry_error is not None:
+            message += f" Automatic retry failed. {_format_model_failure_message(retry_error)}"
+        else:
+            message += " Automatic retry also returned an incomplete answer. Please retry the request."
+        return message
+
     def _resolve_ocr_file_record(
         *,
         workspace_id: str,
@@ -98,7 +225,7 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                 f"The active persona is {state.get('active_persona', 'Receptionist')}. "
                 "If the user asks about uploading or downloading files or images, answer with the Veridex file workflow and do not redirect them to IT unless they explicitly ask for troubleshooting. "
                 "Never expose raw JSON, internal tool names, hidden schemas, or backend metadata in your response. "
-                "Use recent turns only when the user is clearly asking a follow-up, using pronouns, or referring to a prior topic. For broad help or capability questions like 'what can you help me with here?', answer from the active room and persona instead of continuing the previous topic. Do not ask for details already present in recent context. If the user asks a reflective follow-up like 'how did you come to that conclusion?' or 'what makes you say that?', explain the immediately previous answer instead of asking the user for more context. "
+                "Use the provided session conversation history as the current chat thread. When the user asks a follow-up, comparison, pronoun-based question, 'what about ...', or 'how about ...', resolve it against the immediately relevant prior turns instead of treating it as a blank new chat. For broad help or capability questions like 'what can you help me with here?', answer from the active room and persona instead of continuing the previous topic. Do not ask for details already present in recent context. If the user asks a reflective follow-up like 'how did you come to that conclusion?' or 'what makes you say that?', explain the immediately previous answer instead of asking the user for more context. "
                 "Do not claim you are searching, processing, working in the background, or that you will send results later. You can only answer with information available in this response. If a tool or missing detail is needed, say so directly. "
                 "Respond clearly, concisely, and stay within Veridex governance."
             )
@@ -122,6 +249,8 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "session_id": receptionist_context.get("session_id"),
             "session_summary_text": receptionist_context.get("session_summary_text", ""),
             "recent_turns_text": receptionist_context.get("recent_turns_text", []),
+            "recent_turns": receptionist_context.get("recent_turns", []),
+            "conversation_history_text": receptionist_context.get("conversation_history_text", ""),
         }
 
         settings = args.get("settings")
@@ -139,16 +268,54 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                 task_type=task_type,
             )
         except ModelRoutingError as exc:
+            message = _format_model_failure_message(exc)
             raise HTTPException(
                 status_code=503,
                 detail={
-                    "message": str(exc),
+                    "message": message,
                     "attempts": exc.attempts,
                     "workspace_id": workspace_id,
                     "task_type": task_type,
                 },
             ) from exc
 
+        expected_list_count = _planned_numbered_list_count(user_prompt)
+        response_text = result.text
+        if expected_list_count is not None and _numbered_item_count(response_text) < expected_list_count:
+            original_count = _numbered_item_count(response_text)
+            retry_prompt = _list_completion_retry_prompt(
+                user_prompt=user_prompt,
+                response_text=response_text,
+                expected_count=expected_list_count,
+            )
+            try:
+                retry = deps.model_router.generate_response(
+                    system_prompt=system_prompt,
+                    user_prompt=retry_prompt,
+                    context=context,
+                    settings=settings,
+                    task_type=task_type,
+                )
+                result = retry
+                response_text = retry.text
+                retry_count = _numbered_item_count(response_text)
+                if retry_count < expected_list_count:
+                    response_text = _incomplete_list_failure_message(
+                        expected_count=expected_list_count,
+                        actual_count=retry_count,
+                    )
+            except ModelRoutingError as exc:
+                response_text = _incomplete_list_failure_message(
+                    expected_count=expected_list_count,
+                    actual_count=original_count,
+                    retry_error=exc,
+                )
+
+        response_text = _risk_caution_note(
+            user_prompt=user_prompt,
+            context=context,
+            response_text=response_text,
+        )
         structured = {
             "workspace_id": workspace_id,
             "provider": result.provider,
@@ -156,11 +323,11 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "task_type": result.task_type,
             "fallback_used": result.fallback_used,
             "attempts": result.attempts,
-            "response_text": result.text,
+            "response_text": response_text,
         }
         return {
             "structuredContent": structured,
-            "content": [{"type": "text", "text": result.text}],
+            "content": [{"type": "text", "text": response_text}],
         }
 
     def _workspace_id(args: Dict[str, Any], tool_name: str) -> str:

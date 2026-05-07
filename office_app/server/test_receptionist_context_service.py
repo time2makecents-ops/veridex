@@ -24,6 +24,9 @@ class ReceptionistContextServiceTests(unittest.TestCase):
             store.append_transcript("ws_test", "user", "lobby", "session alpha first user turn", speaker="You", session_id="sess_alpha")
             store.append_transcript("ws_test", "assistant", "lobby", "session alpha first assistant turn", speaker="Receptionist", session_id="sess_alpha")
             store.append_transcript("ws_test", "user", "lobby", "session beta only turn", speaker="You", session_id="sess_beta")
+            for index in range(2, 7):
+                store.append_transcript("ws_test", "user", "sales_department", f"session alpha user turn {index}", speaker="You", session_id="sess_alpha")
+                store.append_transcript("ws_test", "assistant", "sales_department", f"session alpha assistant turn {index}", speaker="Sales Director", session_id="sess_alpha")
 
             model_context = service.build_model_context(
                 workspace_id="ws_test",
@@ -31,12 +34,16 @@ class ReceptionistContextServiceTests(unittest.TestCase):
             )
             self.assertEqual(model_context["active_room"], "lobby")
             self.assertEqual(model_context["session_id"], "sess_alpha")
-            self.assertLessEqual(len(model_context["recent_turns_text"]), 4)
+            self.assertLessEqual(len(model_context["recent_turns_text"]), 12)
             for item in model_context["recent_turns_text"]:
-                self.assertLessEqual(len(item), 340)
+                self.assertLessEqual(len(item), 760)
             self.assertTrue(any("session alpha first user turn" in item for item in model_context["recent_turns_text"]))
             self.assertFalse(any("session beta only turn" in item for item in model_context["recent_turns_text"]))
-            self.assertLessEqual(len(model_context["session_summary_text"]), 600)
+            self.assertIn("conversation_history_text", model_context)
+            self.assertIn("session alpha first user turn", model_context["conversation_history_text"])
+            self.assertIn("session alpha assistant turn 6", model_context["conversation_history_text"])
+            self.assertNotIn("session beta only turn", model_context["conversation_history_text"])
+            self.assertLessEqual(len(model_context["session_summary_text"]), 1400)
             self.assertNotIn("room_directory_text", model_context)
             self.assertNotIn("known_user_profile_text", model_context)
             self.assertNotIn("prompt_state_text", model_context)

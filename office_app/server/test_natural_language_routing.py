@@ -95,25 +95,28 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
 
     def test_explicit_room_navigation_routes_to_room_change(self) -> None:
         routed = self.pipeline.route_user_request("default", "go to it department")
-        self.assertEqual(routed["route_kind"], "nancy")
+        self.assertEqual(routed["route_kind"], "navigation")
         self.assertEqual(routed["capability"], "room.navigate")
         self.assertEqual(routed["room_id"], "it_department")
+        self.assertEqual(routed["tool"], "office.room_set")
 
     def test_go_to_my_office_routes_to_my_office(self) -> None:
         routed = self.pipeline.route_user_request("default", "go to my office")
-        self.assertEqual(routed["route_kind"], "nancy")
+        self.assertEqual(routed["route_kind"], "navigation")
         self.assertEqual(routed["capability"], "room.navigate")
         self.assertEqual(routed["room_id"], "my_office")
         self.assertEqual(routed["room_title"], "My Office")
         self.assertFalse(routed.get("requires_confirmation", False))
+        self.assertEqual(routed["tool"], "office.room_set")
 
     def test_go_to_conference_room_routes_to_conference_room(self) -> None:
         routed = self.pipeline.route_user_request("default", "go to conference room")
-        self.assertEqual(routed["route_kind"], "nancy")
+        self.assertEqual(routed["route_kind"], "navigation")
         self.assertEqual(routed["capability"], "room.navigate")
         self.assertEqual(routed["room_id"], "conference_room")
         self.assertEqual(routed["room_title"], "Conference Room")
         self.assertFalse(routed.get("requires_confirmation", False))
+        self.assertEqual(routed["tool"], "office.room_set")
 
     def test_meta_question_stays_in_model_route(self) -> None:
         routed = self.pipeline.route_user_request("default", "why did you respond that way")
@@ -137,10 +140,11 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
 
     def test_conversational_room_reference_requires_confirmation(self) -> None:
         routed = self.pipeline.route_user_request("default", "can you talk to my office manager?")
-        self.assertEqual(routed["route_kind"], "nancy")
+        self.assertEqual(routed["route_kind"], "navigation")
         self.assertEqual(routed["capability"], "room.navigate")
         self.assertEqual(routed["room_id"], "my_office")
         self.assertTrue(routed.get("requires_confirmation", False))
+        self.assertEqual(routed["tool"], "office.room_set")
 
     def test_review_request_routes_to_review_search(self) -> None:
         routed = self.pipeline.route_user_request(
@@ -420,12 +424,10 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertIsNotNone(routed)
         assert routed is not None
         self.assertEqual(routed["route_kind"], "model")
-        self.assertEqual(
-            routed["arguments"]["user_prompt"],
-            "Explain why you concluded that Esteem is the most powerful single level of Maslow's hierarchy of needs in marketing. "
-            "Keep the explanation tied to the immediately previous answer, compare it briefly with the next strongest level, "
-            "and keep it concrete to marketing behavior.",
-        )
+        prompt = routed["arguments"]["user_prompt"]
+        self.assertIn("Explain why you concluded that Esteem is the most powerful single level of Maslow's hierarchy of needs in marketing.", prompt)
+        self.assertIn("Tie the explanation to the immediately previous answer", prompt)
+        self.assertIn("Use plain text only, not a table", prompt)
 
     def test_meta_followup_what_makes_you_say_that_rewrites_to_previous_claim(self) -> None:
         routed = self.pipeline.route_contextual_followup(
@@ -448,12 +450,10 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertIsNotNone(routed)
         assert routed is not None
         self.assertEqual(routed["route_kind"], "model")
-        self.assertEqual(
-            routed["arguments"]["user_prompt"],
-            "Explain why you concluded that Esteem is the most powerful single level of Maslow's hierarchy of needs in marketing. "
-            "Keep the explanation tied to the immediately previous answer, compare it briefly with the next strongest level, "
-            "and keep it concrete to marketing behavior.",
-        )
+        prompt = routed["arguments"]["user_prompt"]
+        self.assertIn("Explain why you concluded that Esteem is the most powerful single level of Maslow's hierarchy of needs in marketing.", prompt)
+        self.assertIn("Tie the explanation to the immediately previous answer", prompt)
+        self.assertIn("Use plain text only, not a table", prompt)
 
     def test_meta_followup_rewrites_short_label_claim(self) -> None:
         routed = self.pipeline.route_contextual_followup(
@@ -489,12 +489,189 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertIsNotNone(routed)
         assert routed is not None
         self.assertEqual(routed["route_kind"], "model")
-        self.assertEqual(
-            routed["arguments"]["user_prompt"],
-            "Explain why you concluded that Esteem is the most powerful single level of Maslow's hierarchy of needs in marketing. "
-            "Keep the explanation tied to the immediately previous answer, compare it briefly with the next strongest level, "
-            "and keep it concrete to marketing behavior.",
+        prompt = routed["arguments"]["user_prompt"]
+        self.assertIn("Explain why you concluded that Esteem is the most powerful single level of Maslow's hierarchy of needs in marketing.", prompt)
+        self.assertIn("Tie the explanation to the immediately previous answer", prompt)
+        self.assertIn("Use plain text only, not a table", prompt)
+
+    def test_plain_sentence_list_followup_rewrites_which_one(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "which one is most effective?",
+            [
+                {
+                    "role": "user",
+                    "text": "what are the main ways bars increase repeat customers?",
+                },
+                {
+                    "role": "assistant",
+                    "text": (
+                        "Bars typically increase repeat customers through a combination of excellent service, "
+                        "a welcoming atmosphere, loyalty programs, consistent quality in food and drinks, "
+                        "and engaging with customers to build relationships."
+                    ),
+                },
+            ],
         )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "model")
+        prompt = routed["arguments"]["user_prompt"]
+        self.assertIn("For bars increase repeat customers, choose the single strongest option from this list:", prompt)
+        self.assertIn("excellent service", prompt)
+        self.assertIn("loyalty programs", prompt)
+        self.assertIn("state the criteria you used", prompt)
+        self.assertIn("Use plain text only, not a table", prompt)
+        self.assertIn("legal, regulatory, safety, financial, or policy risk", prompt)
+
+    def test_plain_sentence_list_followup_rewrites_most_powerful_one_to_use(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "whats the most powerful one to use?",
+            [
+                {
+                    "role": "user",
+                    "text": "what are the main ways bars increase repeat customers?",
+                },
+                {
+                    "role": "assistant",
+                    "text": (
+                        "The main ways bars increase repeat customers are by excellent service, "
+                        "creating a unique atmosphere and experience, implementing a loyalty program, "
+                        "ensuring consistent quality of service and products, and building a sense of community."
+                    ),
+                },
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "model")
+        prompt = routed["arguments"]["user_prompt"]
+        self.assertIn("For bars increase repeat customers, choose the single strongest option from this list:", prompt)
+        self.assertIn("creating a unique atmosphere and experience", prompt)
+        self.assertIn("implementing a loyalty program", prompt)
+        self.assertIn("Answer with one option first", prompt)
+        self.assertIn("Use plain text only, not a table", prompt)
+
+    def test_plain_sentence_list_meta_followup_rewrites_why_that_one(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "why that one?",
+            [
+                {
+                    "role": "user",
+                    "text": "what are the main ways bars increase repeat customers?",
+                },
+                {
+                    "role": "assistant",
+                    "text": (
+                        "Bars typically increase repeat customers through a combination of excellent service, "
+                        "a welcoming atmosphere, loyalty programs, consistent quality in food and drinks, "
+                        "and engaging with customers to build relationships."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "text": "which one is most effective?",
+                },
+                {
+                    "role": "assistant",
+                    "text": "Excellent service is typically the most effective factor because it creates positive experiences that naturally encourage customers to return.",
+                },
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "model")
+        prompt = routed["arguments"]["user_prompt"]
+        self.assertIn("Explain why you concluded that Excellent service is the strongest option", prompt)
+        self.assertIn("bars increase repeat customers", prompt)
+        self.assertIn("state the criteria used", prompt)
+        self.assertIn("next strongest alternative", prompt)
+        self.assertIn("Use plain text only, not a table", prompt)
+
+    def test_what_about_new_industry_rewrites_against_prior_sales_thread(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "what about cellphone companies?",
+            [
+                {
+                    "role": "user",
+                    "text": "what are the main ways bars increase repeat customers?",
+                },
+                {
+                    "role": "assistant",
+                    "text": "1. Service quality\n2. Atmosphere\n3. Community\n4. Consistency\n5. Events",
+                },
+                {
+                    "role": "user",
+                    "text": "which one is most effective?",
+                },
+                {
+                    "role": "assistant",
+                    "text": "Service quality is the strongest option.",
+                },
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "model")
+        prompt = routed["arguments"]["user_prompt"]
+        self.assertIn("previous discussion about bars increase repeat customers", prompt)
+        self.assertIn("cellphone companies", prompt)
+        self.assertIn("same thread", prompt)
+
+    def test_what_about_cold_calling_uses_current_insurance_thread_not_older_cellphone_topic(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "what about cold calling?",
+            [
+                {
+                    "role": "user",
+                    "text": "what are the main ways cellphone stores increase repeat customers?",
+                },
+                {
+                    "role": "assistant",
+                    "text": "1. Promotions\n2. Loyalty programs\n3. Service quality",
+                },
+                {
+                    "role": "user",
+                    "text": "whats the most effective one of those?",
+                },
+                {
+                    "role": "assistant",
+                    "text": "Service quality is the strongest option.",
+                },
+                {
+                    "role": "user",
+                    "text": "whats the best way for an insurance agent to find new customers?",
+                },
+                {
+                    "role": "assistant",
+                    "text": "The best way is building a strong referral network.",
+                },
+                {
+                    "role": "user",
+                    "text": "list the top 5 ways",
+                },
+                {
+                    "role": "assistant",
+                    "text": (
+                        "Here are the top 5 ways for an insurance agent to find new customers, ranked by effectiveness:\n"
+                        "1. Build a strong referral network\n"
+                        "2. Targeted digital marketing\n"
+                        "3. Networking at local events"
+                    ),
+                },
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "model")
+        prompt = routed["arguments"]["user_prompt"]
+        self.assertIn("insurance agent to find new customers", prompt)
+        self.assertIn("cold calling", prompt)
+        self.assertNotIn("cellphone", prompt)
 
     def test_non_list_followup_does_not_rewrite_which_one(self) -> None:
         routed = self.pipeline.route_contextual_followup(
@@ -512,6 +689,41 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
             ],
         )
         self.assertIsNone(routed)
+
+    def test_bar_repeat_customer_advice_prompt_is_rewritten(self) -> None:
+        routed = self.pipeline.route_user_request("default", "what are the main ways bars increase repeat customers?")
+        self.assertEqual(routed["route_kind"], "model")
+        prompt = routed["arguments"]["user_prompt"]
+        self.assertIn("User request: what are the main ways bars increase repeat customers?", prompt)
+        self.assertIn("Provide a complete numbered list of 5 substantive items", prompt)
+        self.assertIn("Do not stop after the first item.", prompt)
+        self.assertIn("legal, regulatory, safety, financial, or policy risk", prompt)
+
+    def test_partial_list_feedback_rewrites_to_continue_numbered_list(self) -> None:
+        routed = self.pipeline.route_contextual_followup(
+            "default",
+            "you only listed 1...service quality",
+            [
+                {
+                    "role": "user",
+                    "text": "what are the main ways bars increase repeat customers?",
+                },
+                {
+                    "role": "assistant",
+                    "text": "1. Service Quality",
+                },
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(
+            routed["arguments"]["user_prompt"],
+            "Continue the incomplete list for bars increase repeat customers. "
+            "Keep the existing item 1 unless the user explicitly asks to revise it. "
+            "Provide items 2 through 5 as concise numbered lines only. "
+            "Use plain text only: no markdown tables, no pipe tables, and no markdown bold.",
+        )
 
     def test_find_restaurants_near_me_routes_to_places_with_missing_location(self) -> None:
         routed = self.pipeline.route_user_request("default", "Find restaurants near me")
@@ -710,7 +922,7 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         routed = self.pipeline.route_user_request("default", "help me think through a menu idea")
         self.assertEqual(routed["route_kind"], "model")
         self.assertIn("Do not claim you are searching", routed["arguments"]["system_prompt"])
-        self.assertIn("Use recent turns only", routed["arguments"]["system_prompt"])
+        self.assertIn("Use the provided session conversation history", routed["arguments"]["system_prompt"])
         self.assertIn("Answer normal advice", routed["arguments"]["system_prompt"])
         self.assertIn("how did you come to that conclusion?", routed["arguments"]["system_prompt"])
 

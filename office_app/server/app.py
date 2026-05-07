@@ -372,7 +372,7 @@ def handle_natural_language_request(
                 structured = response.get("structuredContent")
                 if isinstance(structured, dict):
                     structured["routing"] = {
-                        "route_kind": "nancy",
+                        "route_kind": "navigation",
                         "capability": "room.navigate",
                         "tool": "office.room_set",
                         "reason": "Confirmed pending room navigation.",
@@ -414,12 +414,12 @@ def handle_natural_language_request(
         followup_route = pipeline.route_contextual_followup(
             workspace_id,
             request_text,
-            store.load_transcript(workspace_id, limit=8, session_id=session_id),
+            store.load_transcript(workspace_id, limit=16, session_id=session_id),
         )
         if followup_route is not None:
             routed = followup_route
 
-    should_record = routed["route_kind"] in {"artifact", "model", "nancy", "tool", "clarify"}
+    should_record = routed["route_kind"] in {"artifact", "model", "navigation", "tool", "clarify"}
     if should_record:
         current_state = kernel.get_state(workspace_id)
         active_room_for_user = str(current_state.get("active_room") or "lobby")
@@ -508,7 +508,7 @@ def handle_natural_language_request(
         )
         return enriched
 
-    if routed["route_kind"] == "nancy":
+    if routed["route_kind"] == "navigation":
         if routed.get("requires_confirmation"):
             current_state = kernel.get_state(workspace_id)
             current_state["pending_room_navigation"] = {
@@ -528,7 +528,7 @@ def handle_natural_language_request(
                     "requires_confirmation": True,
                     "pending_room_navigation": current_state["pending_room_navigation"],
                     "routing": {
-                        "route_kind": "nancy",
+                        "route_kind": "navigation",
                         "capability": routed["capability"],
                         "tool": routed["tool"],
                         "reason": routed["reason"],
@@ -578,7 +578,7 @@ def handle_natural_language_request(
             structured = response.get("structuredContent")
             if isinstance(structured, dict):
                 structured["routing"] = {
-                    "route_kind": "nancy",
+                    "route_kind": "navigation",
                     "capability": routed["capability"],
                     "tool": routed["tool"],
                     "reason": routed["reason"],

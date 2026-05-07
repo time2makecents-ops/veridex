@@ -114,6 +114,18 @@ class BaseProvider(ABC):
 
         lines: list[str] = []
         for key in sorted(context.keys()):
+            if key == "recent_turns":
+                continue
+            if key == "conversation_history_text":
+                history_text = _scalar_text(context[key]).strip()
+                if history_text:
+                    lines.append(f"Conversation history:\n{history_text[:5000]}")
+                continue
+            if key == "session_summary_text":
+                summary_text = _scalar_text(context[key]).strip()
+                if summary_text:
+                    lines.append(f"Session summary: {summary_text[:1400]}")
+                continue
             value_text = _value_text(context[key]).strip()
             if value_text:
                 lines.append(f"{key}: {value_text[:300]}")

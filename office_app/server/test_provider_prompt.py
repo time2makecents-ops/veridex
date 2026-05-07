@@ -40,6 +40,31 @@ class ProviderPromptTests(unittest.TestCase):
         self.assertNotIn("{", result.text)
         self.assertNotIn("}", result.text)
 
+    def test_conversation_history_is_preserved_in_system_context(self) -> None:
+        provider = PromptProbeProvider()
+        history = "\n".join(
+            [
+                "You [user]: what are the main ways bars increase repeat customers?",
+                "Sales Director [assistant]: 1. Service quality\n2. Atmosphere\n3. Community",
+                "You [user]: which one is most effective?",
+                "Sales Director [assistant]: Service quality is strongest.",
+            ]
+        )
+        result = provider.generate_response(
+            system_prompt="system",
+            user_prompt="what about cellphone companies?",
+            context={
+                "workspace_id": "ws_1",
+                "active_room": "sales_department",
+                "active_persona": "Sales Director",
+                "conversation_history_text": history,
+            },
+        )
+        self.assertEqual(provider.last_user_prompt, "what about cellphone companies?")
+        self.assertIn("Conversation history:", result.text)
+        self.assertIn("what are the main ways bars increase repeat customers?", result.text)
+        self.assertIn("Service quality is strongest.", result.text)
+
 
 if __name__ == "__main__":
     unittest.main()

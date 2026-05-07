@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
+from office_app.server.conversation_planner import ConversationPlanner
 from office_app.server.persona_registry import persona_profile_for_name
 from office_app.server.room_policy_registry import load_room_policies
 from office_app.server.room_router import rooms_payload, validate_room
@@ -190,7 +191,9 @@ class RequestPipeline:
         "You can only answer with information available in this response. If a tool or missing detail is needed, say so directly."
     )
     MODEL_CONTEXT_RULE = (
-        "Use recent turns only when the user is clearly asking a follow-up, using pronouns, or referring to a prior topic. "
+        "Use the provided session conversation history as the current chat thread. "
+        "When the user asks a follow-up, comparison, pronoun-based question, 'what about ...', or 'how about ...', "
+        "resolve it against the immediately relevant prior turns instead of treating it as a blank new chat. "
         "For broad help or capability questions like 'what can you help me with here?', answer from the active room and persona instead of continuing the previous topic. "
         "Do not ask for details already present in recent context. "
         "If the user asks a reflective follow-up like 'how did you come to that conclusion?' or 'what makes you say that?', "
@@ -204,6 +207,11 @@ class RequestPipeline:
         "Veridex can search the web when explicitly asked, upload/download/list/read files, extract text from uploaded documents, "
         "switch rooms, create/switch sessions, create/select workspaces, and save artifacts/files. "
         "Do not deny these Veridex capabilities. If the user asks how to use one, explain the app workflow."
+    )
+    MODEL_RISK_RULE = (
+        "When advice touches legal, regulatory, safety, financial, employment, privacy, or policy risk, "
+        "be cautious, avoid unsupported certainty, and include a brief verification note when appropriate. "
+        "Do not present risky promotional, medical, legal, or financial tactics as clean advice without a caution."
     )
     CORRECTION_VOCABULARY = (
         "artifact",
@@ -276,6 +284,8 @@ class RequestPipeline:
         "what one",
         "which level",
         "what level",
+        "most effective one",
+        "most powerful one",
         "the first one",
         "the last one",
         "the strongest one",
@@ -293,6 +303,11 @@ class RequestPipeline:
         re.compile(r"\bexplain\s+(.+?)\??$", re.IGNORECASE),
         re.compile(r"\btell me about\s+(.+?)\??$", re.IGNORECASE),
     )
+    STRATEGY_TOPIC_PATTERNS = (
+        re.compile(r"\bmain ways?\s+(.+?)\??$", re.IGNORECASE),
+        re.compile(r"\btypes of\s+(.+?)\??$", re.IGNORECASE),
+        re.compile(r"\bways?\s+to\s+(.+?)\??$", re.IGNORECASE),
+    )
     META_REFERENCE_PATTERNS = (
         re.compile(r"^how did you come to that conclusion\??$", re.IGNORECASE),
         re.compile(r"^why did you come to that conclusion\??$", re.IGNORECASE),
@@ -300,6 +315,7 @@ class RequestPipeline:
         re.compile(r"^why do you think that\??$", re.IGNORECASE),
         re.compile(r"^why that conclusion\??$", re.IGNORECASE),
         re.compile(r"^how did you decide that\??$", re.IGNORECASE),
+        re.compile(r"^why that one\??$", re.IGNORECASE),
     )
 
     def __init__(
@@ -317,6 +333,7 @@ class RequestPipeline:
         self.tool_names = tool_names or []
         self.tool_catalog = tool_catalog or []
         self.app_version = app_version or "0.0.0"
+        self.conversation_planner = ConversationPlanner()
 
     def health_response(self) -> Dict[str, Any]:
         return {"ok": True, "ts": self.utc_now()}
@@ -679,7 +696,7 @@ class RequestPipeline:
         navigation_room = self.extract_navigation_room(request_text)
         if navigation_room is not None:
             return {
-                "route_kind": "nancy",
+                "route_kind": "navigation",
                 "workspace_id": workspace_id,
                 "request": request_text,
                 "capability": "room.navigate",
@@ -695,12 +712,12 @@ class RequestPipeline:
         route = self.recommend_room(request_text)
         if route.get("matched") and self.is_explicit_room_navigation(request_text):
             return {
-                "route_kind": "nancy",
+                "route_kind": "navigation",
                 "workspace_id": workspace_id,
                 "request": request_text,
                 "capability": "room.navigate",
-                "tool": "office.nancy_route",
-                "arguments": {"workspace_id": workspace_id, "request": request_text},
+                "tool": "office.room_set",
+                "arguments": {"workspace_id": workspace_id, "room_id": route["room_id"]},
                 "reason": route["reason"],
                 "room_id": route["room_id"],
                 "room_title": route["room_title"],
@@ -709,12 +726,12 @@ class RequestPipeline:
 
         if route.get("matched") and self.room_navigation_requires_confirmation(request_text):
             return {
-                "route_kind": "nancy",
+                "route_kind": "navigation",
                 "workspace_id": workspace_id,
                 "request": request_text,
                 "capability": "room.navigate",
-                "tool": "office.nancy_route",
-                "arguments": {"workspace_id": workspace_id, "request": request_text},
+                "tool": "office.room_set",
+                "arguments": {"workspace_id": workspace_id, "room_id": route["room_id"]},
                 "reason": route["reason"],
                 "room_id": route["room_id"],
                 "room_title": route["room_title"],
@@ -740,15 +757,19 @@ class RequestPipeline:
             reason="No explicit tool or room command found. Using the model route.",
         )
 
-    def model_route(self, workspace_id: str, request_text: str, *, reason: str) -> Dict[str, Any]:
+    def model_route(self, workspace_id: str, request_text: str, *, reason: str, apply_conversation_plan: bool = True) -> Dict[str, Any]:
         ctx = self.current_context(workspace_id)
         active_room = str(ctx["active_room"])
         active_persona = str(ctx["active_persona"])
+        user_prompt = request_text
+        if apply_conversation_plan:
+            user_prompt = self.conversation_planner.plan_model_prompt(request_text).user_prompt
         system_prompt = (
             f"You are Veridex. The active workspace is {workspace_id}. "
             f"The active room is {active_room}. The active persona is {active_persona}. "
             "Respond clearly, concisely, and in a way that fits the current office context. "
-            f"{self.MODEL_CONTEXT_RULE} {self.MODEL_NO_BACKGROUND_RULE} {self.MODEL_DIRECT_ANSWER_RULE} {self.MODEL_CAPABILITY_RULE}"
+            f"{self.MODEL_CONTEXT_RULE} {self.MODEL_NO_BACKGROUND_RULE} {self.MODEL_DIRECT_ANSWER_RULE} "
+            f"{self.MODEL_CAPABILITY_RULE} {self.MODEL_RISK_RULE}"
         )
         return {
             "route_kind": "model",
@@ -760,7 +781,7 @@ class RequestPipeline:
                 "workspace_id": workspace_id,
                 "task_type": "conversation",
                 "system_prompt": system_prompt,
-                "user_prompt": request_text,
+                "user_prompt": user_prompt,
                 "context": {
                     "workspace_id": workspace_id,
                     "active_room": active_room,
@@ -1133,13 +1154,34 @@ class RequestPipeline:
                 return text
         return None
 
+    def _recent_user_turns(self, recent_turns: List[Dict[str, Any]]) -> List[str]:
+        rows: List[str] = []
+        for turn in recent_turns[-8:]:
+            if str(turn.get("role") or "").strip().lower() != "user":
+                continue
+            text = str(turn.get("text") or "").strip()
+            if text:
+                rows.append(text)
+        return rows
+
     def _infer_followup_subject(self, recent_turns: List[Dict[str, Any]]) -> tuple[Optional[str], str]:
         assistant_text = self._recent_assistant_turn(recent_turns, require_numbered_list=True) or self._recent_assistant_turn(recent_turns) or ""
         user_text = self._recent_user_turn_before_assistant(recent_turns) or ""
+        user_turns = self._recent_user_turns(recent_turns)
         combined = f"{user_text}\n{assistant_text}".lower()
 
         if "maslow" in combined:
             return "Maslow's hierarchy of needs", "level"
+
+        for candidate_text in [user_text, *reversed(user_turns)]:
+            if not candidate_text:
+                continue
+            for pattern in self.STRATEGY_TOPIC_PATTERNS:
+                match = pattern.search(candidate_text)
+                if match:
+                    subject = re.sub(r"\s+", " ", match.group(1).strip(" .?!"))
+                    if subject:
+                        return subject, "option"
 
         for pattern in self.PRIOR_TOPIC_PATTERNS:
             match = pattern.search(user_text)
@@ -1176,6 +1218,39 @@ class RequestPipeline:
             return "last"
         return None
 
+    def _extract_list_items(self, assistant_text: str) -> List[str]:
+        text = re.sub(r"\s+", " ", assistant_text.strip())
+        if not text:
+            return []
+        first_sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0].strip()
+        working = re.sub(
+            r"^.*?(?:through a combination of|include|includes|including|are|is)\s+",
+            "",
+            first_sentence,
+            flags=re.IGNORECASE,
+        )
+        working = working.strip(" .")
+        if "," not in working and " and " not in working:
+            return []
+        working = re.sub(r",\s*(?:and|or)\s+", ", ", working, flags=re.IGNORECASE)
+        parts = [re.sub(r"^(?:by|a|an|the)\s+", "", part.strip(" .")) for part in working.split(",")]
+        cleaned = []
+        for part in parts:
+            if len(part) < 4:
+                continue
+            if part.lower().startswith(("this is because", "for example", "such as")):
+                continue
+            cleaned.append(part)
+        unique: List[str] = []
+        seen = set()
+        for item in cleaned:
+            key = item.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
+        return unique if len(unique) >= 3 else []
+
     def _extract_primary_claim(
         self,
         assistant_text: str,
@@ -1199,9 +1274,23 @@ class RequestPipeline:
         if subject == "Maslow's hierarchy of needs" and unit == "level" and short_label:
             if re.fullmatch(r"[A-Za-z][A-Za-z -]{1,40}", short_label):
                 return f"{short_label} is the most powerful single {unit} of {subject} in marketing"
+        if unit == "option" and short_label:
+            if re.fullmatch(r"[A-Za-z][A-Za-z '&-]{1,50}", short_label):
+                return short_label
         if len(first_sentence) >= 12:
             return first_sentence.rstrip(".")
         return None
+
+    def _normalize_option_subject(self, subject: str) -> str:
+        text = re.sub(r"\s+", " ", str(subject or "").strip())
+        return text
+
+    def _extract_option_label(self, claim: str) -> str:
+        text = re.sub(r"\s+", " ", str(claim or "").strip()).strip(" .")
+        if not text:
+            return text
+        head = re.split(r"\s+is\s+", text, maxsplit=1, flags=re.IGNORECASE)[0].strip(" .,:;")
+        return head or text
 
     def _rewrite_meta_reference_followup(
         self,
@@ -1227,6 +1316,14 @@ class RequestPipeline:
         if not claim:
             return None
 
+        if unit == "option" and subject:
+            option_subject = self._normalize_option_subject(subject)
+            option_label = self._extract_option_label(claim)
+            return (
+                f"Explain why you concluded that {option_label} is the strongest option for {option_subject}. "
+                "Keep the explanation tied to the immediately previous answer, compare it briefly with the next strongest option, "
+                "and keep it concrete to customer behavior."
+            )
         return (
             f"Explain why you concluded that {claim}. "
             "Keep the explanation tied to the immediately previous answer, compare it briefly with the next strongest level, "
@@ -1238,7 +1335,7 @@ class RequestPipeline:
         request_text: str,
         recent_turns: List[Dict[str, Any]],
     ) -> Optional[str]:
-        assistant_text = self._recent_assistant_turn(recent_turns, require_numbered_list=True) or ""
+        assistant_text = self._recent_assistant_turn(recent_turns, require_numbered_list=True) or self._recent_assistant_turn(recent_turns) or ""
         if not assistant_text:
             return None
 
@@ -1250,6 +1347,7 @@ class RequestPipeline:
         subject, unit = self._infer_followup_subject(recent_turns)
         if not subject:
             return None
+        list_items = self._extract_list_items(assistant_text)
 
         if (
             any(phrase in lowered for phrase in ("most powerful one", "most powerful level", "which level", "what level"))
@@ -1271,8 +1369,24 @@ class RequestPipeline:
             return f"Which {unit} of {subject} is strongest?"
         if "best one" in lowered:
             return f"Which {unit} of {subject} is most effective?"
+        if list_items and any(
+            phrase in lowered
+            for phrase in (
+                "which one",
+                "what one",
+                "most effective one",
+                "most powerful one",
+                "strongest one",
+                "best one",
+            )
+        ):
+            items_text = ", ".join(list_items[:-1]) + f", or {list_items[-1]}" if len(list_items) > 1 else list_items[0]
+            return (
+                f"For {subject}, which single option is most effective out of these: {items_text}? "
+                "Name one first, then briefly explain why."
+            )
         ordinal = self._extract_ordinal_reference(lowered)
-        if ordinal is not None:
+        if ordinal is not None and (self.NUMBERED_LIST_ITEM_RE.search(assistant_text) or list_items):
             return f"Tell me more about the {ordinal} {unit} in {subject}."
         if "which one" in lowered or "what one" in lowered:
             return f"Which single {unit} of {subject} is the best fit here? Answer with one {unit} first, then a brief reason."
@@ -1285,6 +1399,7 @@ class RequestPipeline:
         recent_turns: List[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
         text = request_text.strip()
+        lowered = re.sub(r"\s+", " ", text.lower())
         match = re.match(r"^(?:what|how)\s+about\s+(.+?)\??$", text, re.IGNORECASE)
         recent_text = "\n".join(str(turn.get("text") or "") for turn in recent_turns[-8:])
         recent_lower = recent_text.lower()
@@ -1320,15 +1435,14 @@ class RequestPipeline:
                         "reason": "Resolved a short follow-up against the recent restaurant search context.",
                     }
 
-        rewritten_prompt = self._rewrite_contextual_reference_followup(request_text, recent_turns)
-        if rewritten_prompt is None:
-            rewritten_prompt = self._rewrite_meta_reference_followup(request_text, recent_turns)
-        if rewritten_prompt is None:
+        plan = self.conversation_planner.rewrite_followup(request_text, recent_turns)
+        if plan is None:
             return None
         return self.model_route(
             workspace_id,
-            rewritten_prompt,
-            reason=f"Resolved a short follow-up against the immediately previous numbered-list topic: {request_text}",
+            plan.user_prompt,
+            reason=f"Resolved a short follow-up against the recent session thread: {request_text}",
+            apply_conversation_plan=False,
         )
 
     def route_session_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:

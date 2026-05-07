@@ -171,6 +171,11 @@ class ReceptionistContextStore:
 
 
 class ReceptionistContextService:
+    MODEL_CONTEXT_TURN_LIMIT = 12
+    MODEL_CONTEXT_TURN_CHARS = 700
+    MODEL_CONTEXT_HISTORY_CHARS = 5000
+    MODEL_CONTEXT_SUMMARY_CHARS = 1400
+
     def __init__(self, *, kernel, runtime_dir: Path, utc_now_fn):
         self.kernel = kernel
         self.runtime_dir = Path(runtime_dir)
@@ -314,22 +319,47 @@ class ReceptionistContextService:
         state = self.kernel.get_state(workspace_id)
         transcript_rows: List[Dict[str, Any]] = []
         if session_id:
-            transcript_rows = self.kernel.store.load_transcript(workspace_id, limit=8, session_id=session_id)
+            transcript_rows = self.kernel.store.load_transcript(
+                workspace_id,
+                limit=max(self.MODEL_CONTEXT_TURN_LIMIT * 2, 16),
+                session_id=session_id,
+            )
         recent_turns = []
-        for turn in transcript_rows[-4:]:
+        recent_turn_records = []
+        for turn in transcript_rows[-self.MODEL_CONTEXT_TURN_LIMIT :]:
             role = str(turn.get("role") or "assistant").strip()
-            speaker = str(turn.get("persona_name") or role.title()).strip()
-            text = self._truncate_text(turn.get("text") or "", 300)
+            if role not in {"user", "assistant", "system"}:
+                role = "assistant"
+            speaker = str(turn.get("speaker") or turn.get("persona_name") or role.title()).strip()
+            text = self._truncate_text(turn.get("text") or "", self.MODEL_CONTEXT_TURN_CHARS)
             if not text:
                 continue
-            recent_turns.append(f"{speaker} [{role}]: {text[:300]}")
-        session_summary_text = self._truncate_text(" | ".join(recent_turns[-4:]), 600)
+            room = str(turn.get("room") or turn.get("room_id") or state.get("active_room", "lobby")).strip()
+            recent_turns.append(f"{speaker} [{role}]: {text}")
+            recent_turn_records.append(
+                {
+                    "role": role,
+                    "speaker": speaker,
+                    "room": room,
+                    "text": text,
+                }
+            )
+        conversation_history_text = self._truncate_text(
+            "\n".join(recent_turns),
+            self.MODEL_CONTEXT_HISTORY_CHARS,
+        )
+        session_summary_text = self._truncate_text(
+            " | ".join(recent_turns[-6:]),
+            self.MODEL_CONTEXT_SUMMARY_CHARS,
+        )
         merged = {
             "workspace_id": workspace_id,
             "active_room": state.get("active_room", "lobby"),
             "active_persona": state.get("active_persona", "Receptionist"),
             "session_summary_text": session_summary_text,
             "recent_turns_text": recent_turns,
+            "recent_turns": recent_turn_records,
+            "conversation_history_text": conversation_history_text,
             "session_id": session_id,
         }
         return merged
