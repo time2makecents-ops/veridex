@@ -15,6 +15,8 @@ from .dependencies import HandlerDeps
 def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
     NUMBERED_LIST_PLAN_RE = re.compile(r"\bcomplete numbered list of\s+(\d{1,2})\b", re.IGNORECASE)
     NUMBERED_ITEM_RE = re.compile(r"(?m)^\s*\d+\.")
+    BULLET_ITEM_RE = re.compile(r"(?m)^\s*[-*]\s+")
+    YES_NO_START_RE = re.compile(r"^\s*(yes|no)\b", re.IGNORECASE)
     RISK_CONTEXT_RE = re.compile(
         r"\b(alcohol|liquor|bar|bars|pub|pubs|tavern|taverns|nightclub|nightclubs|medical|health|legal|law|"
         r"finance|financial|investment|insurance|hiring|employment|privacy|security|tax|real estate|food safety|regulated)\b",
@@ -41,12 +43,51 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         r"\blegal,\s*regulatory,\s*safety,\s*financial(?:,\s*employment)?(?:,\s*privacy)?,?\s*or\s*policy\s*risk\b",
         re.IGNORECASE,
     )
+    YES_NO_QUESTION_RE = re.compile(
+        r"^(?:does|do|did|is|are|was|were|has|have|had|can|could|will|would|should)\b",
+        re.IGNORECASE,
+    )
+    COMPARISON_RE = re.compile(
+        r"\b(vs\.?|versus|compare|comparison|difference between|better than|better for)\b",
+        re.IGNORECASE,
+    )
+    SINGLE_CHOICE_RE = re.compile(
+        r"\b(which one|what one|most effective one|most powerful one|strongest one|best one|best fit|single best|pick one)\b",
+        re.IGNORECASE,
+    )
+    SINGLE_CHOICE_BEST_WAY_RE = re.compile(
+        r"^(?:what|which)\s+(?:is\s+)?(?:the\s+)?best way\b",
+        re.IGNORECASE,
+    )
+    FACTUAL_ENTITY_RE = re.compile(
+        r"\b(what can you tell me about|tell me about|information about|who is|what do you know about)\b",
+        re.IGNORECASE,
+    )
+    LABELED_FIELD_RE = re.compile(
+        r"(?ims)^\s*([A-Za-z][A-Za-z ]{1,32})\s*:\s*(.+?)(?=^\s*[A-Za-z][A-Za-z ]{1,32}\s*:|\Z)"
+    )
+    UNCERTAINTY_PREFIXES = (
+        "i do not",
+        "i don't",
+        "i could not",
+        "i can't",
+        "not from the information i have",
+        "based on the information i have",
+        "based on the available information",
+        "the available results do not",
+        "the search results do not",
+        "search results do not",
+        "the evidence provided does not",
+    )
 
     def _combined_context_text(context: Dict[str, Any]) -> str:
         parts: List[str] = []
         room_memory = str(context.get("room_behavior_memory_text") or "").strip()
         if room_memory:
             parts.append(room_memory)
+        session_facts = str(context.get("session_facts_text") or "").strip()
+        if session_facts:
+            parts.append(session_facts)
         summary = str(context.get("session_summary_text") or "").strip()
         if summary:
             parts.append(summary)
@@ -140,8 +181,272 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         count = int(match.group(1))
         return count if 2 <= count <= 20 else None
 
+    def _effective_user_request_text(user_prompt: str) -> str:
+        text = str(user_prompt or "").strip()
+        match = USER_REQUEST_RE.search(text)
+        if match:
+            return re.sub(r"\s+", " ", match.group(1).strip())
+        return re.sub(r"\s+", " ", text).strip()
+
     def _numbered_item_count(response_text: str) -> int:
         return len(NUMBERED_ITEM_RE.findall(response_text or ""))
+
+    def _answer_completeness_contract(user_prompt: str) -> Optional[Dict[str, Any]]:
+        request_text = _effective_user_request_text(user_prompt)
+        lowered = request_text.lower()
+        if not request_text:
+            return None
+        if _planned_numbered_list_count(user_prompt) is not None:
+            return {
+                "kind": "numbered_list",
+                "request_text": request_text,
+                "expected_count": _planned_numbered_list_count(user_prompt),
+            }
+        if YES_NO_QUESTION_RE.match(lowered):
+            return {
+                "kind": "yes_no",
+                "request_text": request_text,
+                "grounded": "Search results:" in user_prompt,
+            }
+        if SINGLE_CHOICE_RE.search(lowered) or SINGLE_CHOICE_BEST_WAY_RE.search(lowered):
+            return {
+                "kind": "single_choice",
+                "request_text": request_text,
+            }
+        if COMPARISON_RE.search(lowered):
+            return {
+                "kind": "comparison",
+                "request_text": request_text,
+            }
+        if "Search results:" in user_prompt and FACTUAL_ENTITY_RE.search(lowered):
+            return {
+                "kind": "grounded_entity_summary",
+                "request_text": request_text,
+                "grounded": True,
+            }
+        return None
+
+    def _structured_contract_prompt(*, user_prompt: str, contract: Optional[Dict[str, Any]]) -> str:
+        if not contract:
+            return user_prompt
+        kind = str(contract.get("kind") or "")
+        if kind == "numbered_list":
+            expected_count = int(contract.get("expected_count") or 0)
+            if expected_count <= 0:
+                return user_prompt
+            return (
+                f"{user_prompt}\n\n"
+                "Internal answer contract:\n"
+                f"- Return a complete numbered list with exactly {expected_count} items.\n"
+                "- Each item must be substantive.\n"
+                "- Do not stop early.\n"
+                "- Do not include setup text before item 1."
+            )
+        if kind == "yes_no":
+            grounding_rule = (
+                "- Use only the grounded facts provided. If those facts do not support a direct answer, say Uncertain.\n"
+                if contract.get("grounded")
+                else ""
+            )
+            return (
+                f"{user_prompt}\n\n"
+                "Internal answer contract:\n"
+                "Return plain text using exactly these labeled lines:\n"
+                "Direct answer: Yes, No, or Uncertain\n"
+                "Reason: one or two concise sentences\n"
+                "Caveat: brief caution or none\n"
+                f"{grounding_rule}"
+                "Do not add any other labels or preamble."
+            )
+        if kind == "single_choice":
+            return (
+                f"{user_prompt}\n\n"
+                "Internal answer contract:\n"
+                "Return plain text using exactly these labeled lines:\n"
+                "Direct answer: one single best option only\n"
+                "Reason: one or two concise sentences\n"
+                "Caveat: brief caution or none\n"
+                "Do not include multiple options."
+            )
+        if kind == "comparison":
+            return (
+                f"{user_prompt}\n\n"
+                "Internal answer contract:\n"
+                "Return plain text using exactly these labeled lines:\n"
+                "Summary: one sentence that answers the comparison directly\n"
+                "Side A: concise points for the first side\n"
+                "Side B: concise points for the second side\n"
+                "Recommendation: brief recommendation or none"
+            )
+        if kind == "grounded_entity_summary":
+            return (
+                f"{user_prompt}\n\n"
+                "Internal answer contract:\n"
+                "Return plain text using exactly these labeled lines:\n"
+                "Summary: grounded summary only\n"
+                "Evidence: one or two grounded facts from the provided results\n"
+                "Unknowns: what is still not verified, or none\n"
+                "Use only grounded facts from the provided results. Do not infer unsupported specifics."
+            )
+        return user_prompt
+
+    def _parse_labeled_fields(response_text: str) -> Dict[str, str]:
+        fields: Dict[str, str] = {}
+        for label, value in LABELED_FIELD_RE.findall(str(response_text or "")):
+            normalized_label = re.sub(r"\s+", " ", str(label).strip().lower())
+            cleaned_value = re.sub(r"\s+", " ", str(value).strip())
+            if normalized_label and cleaned_value and normalized_label not in fields:
+                fields[normalized_label] = cleaned_value
+        return fields
+
+    def _ensure_terminal_punctuation(text: str) -> str:
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return ""
+        if cleaned.endswith((".", "!", "?")):
+            return cleaned
+        return f"{cleaned}."
+
+    def _render_structured_contract_response(contract: Optional[Dict[str, Any]], response_text: str) -> str:
+        if not contract:
+            return response_text
+        kind = str(contract.get("kind") or "")
+        if kind == "numbered_list":
+            return response_text
+        fields = _parse_labeled_fields(response_text)
+        if not fields:
+            return response_text
+        if kind == "yes_no":
+            direct_answer = str(fields.get("direct answer") or "").strip()
+            reason = str(fields.get("reason") or "").strip()
+            caveat = str(fields.get("caveat") or "").strip()
+            parts: List[str] = []
+            if direct_answer and direct_answer.lower() != "uncertain":
+                parts.append(_ensure_terminal_punctuation(direct_answer))
+            elif reason:
+                parts.append(_ensure_terminal_punctuation(reason))
+                reason = ""
+            elif direct_answer:
+                parts.append(_ensure_terminal_punctuation(direct_answer))
+            if reason:
+                parts.append(_ensure_terminal_punctuation(reason))
+            if caveat and caveat.lower() != "none":
+                parts.append(_ensure_terminal_punctuation(caveat))
+            return " ".join(part for part in parts if part).strip() or response_text
+        if kind == "single_choice":
+            direct_answer = str(fields.get("direct answer") or "").strip()
+            reason = str(fields.get("reason") or "").strip()
+            caveat = str(fields.get("caveat") or "").strip()
+            parts = [
+                _ensure_terminal_punctuation(direct_answer),
+                _ensure_terminal_punctuation(reason),
+            ]
+            if caveat and caveat.lower() != "none":
+                parts.append(_ensure_terminal_punctuation(caveat))
+            rendered = " ".join(part for part in parts if part).strip()
+            return rendered or response_text
+        if kind == "comparison":
+            summary = str(fields.get("summary") or "").strip()
+            side_a = str(fields.get("side a") or "").strip()
+            side_b = str(fields.get("side b") or "").strip()
+            recommendation = str(fields.get("recommendation") or "").strip()
+            sections = [
+                _ensure_terminal_punctuation(summary),
+                _ensure_terminal_punctuation(side_a),
+                _ensure_terminal_punctuation(side_b),
+            ]
+            if recommendation and recommendation.lower() != "none":
+                sections.append(_ensure_terminal_punctuation(recommendation))
+            rendered_sections = [section for section in sections if section]
+            return "\n\n".join(rendered_sections).strip() or response_text
+        if kind == "grounded_entity_summary":
+            summary = str(fields.get("summary") or "").strip()
+            evidence = str(fields.get("evidence") or "").strip()
+            unknowns = str(fields.get("unknowns") or "").strip()
+            parts = [
+                _ensure_terminal_punctuation(summary),
+                _ensure_terminal_punctuation(evidence),
+            ]
+            if unknowns and unknowns.lower() != "none":
+                parts.append(_ensure_terminal_punctuation(unknowns))
+            rendered = " ".join(part for part in parts if part).strip()
+            return rendered or response_text
+        return response_text
+
+    def _response_satisfies_contract(contract: Dict[str, Any], response_text: str) -> bool:
+        text = str(response_text or "").strip()
+        if not text:
+            return False
+        kind = str(contract.get("kind") or "")
+        lowered = text.lower()
+        if kind == "yes_no":
+            if YES_NO_START_RE.search(text):
+                return True
+            return any(lowered.startswith(prefix) for prefix in UNCERTAINTY_PREFIXES)
+        if kind == "single_choice":
+            if _numbered_item_count(text) > 1:
+                return False
+            if BULLET_ITEM_RE.search(text):
+                return False
+            first_sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0].strip().lower()
+            if re.search(r"\b(options?|answers?|choices?|factors?)\s+(?:are|include)\b", first_sentence):
+                return False
+            if "," in first_sentence:
+                return False
+            if re.search(r"\b(?:and|or)\b", first_sentence):
+                return False
+            return True
+        if kind == "comparison":
+            paragraphs = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
+            return len(paragraphs) >= 3
+        if kind == "grounded_entity_summary":
+            return len(text.split()) >= 6
+        return True
+
+    def _completeness_retry_prompt(*, user_prompt: str, response_text: str, contract: Dict[str, Any]) -> str:
+        kind = str(contract.get("kind") or "")
+        request_text = str(contract.get("request_text") or user_prompt).strip()
+        if kind == "yes_no":
+            return (
+                "The previous response did not answer the question directly enough.\n\n"
+                f"Original request:\n{request_text}\n\n"
+                f"Previous response:\n{response_text.strip()}\n\n"
+                "Answer the question directly in the first word: Yes or No. "
+                "If the available information does not support a direct yes/no answer, start with a brief uncertainty statement instead of guessing. "
+                "Then give one or two concise sentences of reasoning."
+            )
+        if kind == "single_choice":
+            return (
+                "The previous response did not give a single best answer first.\n\n"
+                f"Original request:\n{request_text}\n\n"
+                f"Previous response:\n{response_text.strip()}\n\n"
+                "Answer with one single best option in the first sentence, then give a brief reason. "
+                "Do not return a list of multiple options unless the user explicitly asked for a list."
+            )
+        if kind == "comparison":
+            return (
+                "The previous response did not complete the comparison clearly enough.\n\n"
+                f"Original request:\n{request_text}\n\n"
+                f"Previous response:\n{response_text.strip()}\n\n"
+                "Answer with a direct one-sentence summary first, then clearly cover each side, then a brief recommendation if useful."
+            )
+        if kind == "grounded_entity_summary":
+            return (
+                "The previous response did not produce a complete grounded summary.\n\n"
+                f"Original request:\n{request_text}\n\n"
+                f"Previous response:\n{response_text.strip()}\n\n"
+                "Use only grounded facts from the provided search results or documents. "
+                "State what is verified, then state what remains unverified. Do not guess."
+            )
+        return user_prompt
+
+    def _incomplete_direct_answer_failure_message(contract: Dict[str, Any]) -> str:
+        kind = str(contract.get("kind") or "")
+        if kind == "yes_no" and contract.get("grounded"):
+            return "I could not produce a complete grounded yes/no answer from the available information without guessing."
+        if kind == "grounded_entity_summary" and contract.get("grounded"):
+            return "I could not produce a complete grounded summary from the available information without guessing."
+        return "I could not produce a complete direct answer. Please retry the question."
 
     def _list_completion_retry_prompt(*, user_prompt: str, response_text: str, expected_count: int) -> str:
         return (
@@ -254,8 +559,9 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                 f"The active persona is {state.get('active_persona', 'Receptionist')}. "
                 "If the user asks about uploading or downloading files or images, answer with the Veridex file workflow and do not redirect them to IT unless they explicitly ask for troubleshooting. "
                 "Never expose raw JSON, internal tool names, hidden schemas, or backend metadata in your response. "
+                "Do not invent unsupported factual details about a specific company, entity, or person. If verified grounding is missing, say so directly instead of guessing. "
                 "Apply active-room behavior memory as durable room-specific instructions when present. "
-                "Use the provided session conversation history as the current chat thread. When the user asks a follow-up, comparison, pronoun-based question, 'what about ...', or 'how about ...', resolve it against the immediately relevant prior turns instead of treating it as a blank new chat. For broad help or capability questions like 'what can you help me with here?', answer from the active room and persona instead of continuing the previous topic. Do not ask for details already present in recent context. If the user asks a reflective follow-up like 'how did you come to that conclusion?' or 'what makes you say that?', explain the immediately previous answer instead of asking the user for more context. "
+                "Use the provided session conversation history as the current chat thread. Use session facts as transient thread-local context for details stated earlier in this session, such as location or organization, but do not turn them into durable room memory unless the user explicitly asks you to remember them. When the user asks a follow-up, comparison, pronoun-based question, 'what about ...', or 'how about ...', resolve it against the immediately relevant prior turns instead of treating it as a blank new chat. For broad help or capability questions like 'what can you help me with here?', answer from the active room and persona instead of continuing the previous topic. Do not ask for details already present in recent context. If the user asks a reflective follow-up like 'how did you come to that conclusion?' or 'what makes you say that?', explain the immediately previous answer instead of asking the user for more context. "
                 "Do not claim you are searching, processing, working in the background, or that you will send results later. You can only answer with information available in this response. If a tool or missing detail is needed, say so directly. "
                 "Respond clearly, concisely, and stay within Veridex governance."
             )
@@ -281,6 +587,8 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "recent_turns_text": receptionist_context.get("recent_turns_text", []),
             "recent_turns": receptionist_context.get("recent_turns", []),
             "conversation_history_text": receptionist_context.get("conversation_history_text", ""),
+            "session_facts": receptionist_context.get("session_facts", []),
+            "session_facts_text": receptionist_context.get("session_facts_text", ""),
             "room_behavior_memory_refs": receptionist_context.get("room_behavior_memory_refs", []),
         }
         context["room_behavior_memory_text"] = _room_behavior_memory_text(
@@ -294,10 +602,13 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
 
         task_type = str(args.get("task_type") or "conversation").strip() or "conversation"
 
+        answer_contract = _answer_completeness_contract(user_prompt)
+        generation_prompt = _structured_contract_prompt(user_prompt=user_prompt, contract=answer_contract)
+
         try:
             result = deps.model_router.generate_response(
                 system_prompt=system_prompt,
-                user_prompt=user_prompt,
+                user_prompt=generation_prompt,
                 context=context,
                 settings=settings,
                 task_type=task_type,
@@ -315,7 +626,7 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             ) from exc
 
         expected_list_count = _planned_numbered_list_count(user_prompt)
-        response_text = result.text
+        response_text = _render_structured_contract_response(answer_contract, result.text)
         if expected_list_count is not None and _numbered_item_count(response_text) < expected_list_count:
             original_count = _numbered_item_count(response_text)
             retry_prompt = _list_completion_retry_prompt(
@@ -332,7 +643,7 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                     task_type=task_type,
                 )
                 result = retry
-                response_text = retry.text
+                response_text = _render_structured_contract_response(answer_contract, retry.text)
                 retry_count = _numbered_item_count(response_text)
                 if retry_count < expected_list_count:
                     response_text = _incomplete_list_failure_message(
@@ -345,6 +656,26 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                     actual_count=original_count,
                     retry_error=exc,
                 )
+        elif answer_contract is not None and not _response_satisfies_contract(answer_contract, response_text):
+            retry_prompt = _completeness_retry_prompt(
+                user_prompt=user_prompt,
+                response_text=response_text,
+                contract=answer_contract,
+            )
+            try:
+                retry = deps.model_router.generate_response(
+                    system_prompt=system_prompt,
+                    user_prompt=_structured_contract_prompt(user_prompt=retry_prompt, contract=answer_contract),
+                    context=context,
+                    settings=settings,
+                    task_type=task_type,
+                )
+                result = retry
+                response_text = _render_structured_contract_response(answer_contract, retry.text)
+                if not _response_satisfies_contract(answer_contract, response_text):
+                    response_text = _incomplete_direct_answer_failure_message(answer_contract)
+            except ModelRoutingError:
+                response_text = _incomplete_direct_answer_failure_message(answer_contract)
 
         response_text = _risk_caution_note(
             user_prompt=user_prompt,

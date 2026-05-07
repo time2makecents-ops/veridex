@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict
 
+from fastapi import HTTPException
+
 from office_app.server.errors import error_missing_required_field
 
 from .dependencies import HandlerDeps
@@ -39,12 +41,8 @@ def _extract_topic(request_text: str) -> str:
 
 
 def build_session_handlers(deps: HandlerDeps) -> Dict[str, Any]:
-    def handle_sessions_list(args: Dict[str, Any]) -> Dict[str, Any]:
-        workspace_id = deps.resolve_workspace_id("office.sessions_list", args)
-        user = deps.user_service.get_user_for_session(str(args.get("session_id") or "").strip())
-        rows = deps.user_service.list_sessions(str(user["user_id"]), workspace_id=workspace_id)
-        current_session_id = str(user.get("last_active_session_id") or "").strip()
-        current_workspace = deps.kernel.get_state(workspace_id)
+    def _sorted_sessions(*, current_session_id: str, workspace_id: str, user_id: str) -> list[Dict[str, Any]]:
+        rows = deps.user_service.list_sessions(user_id, workspace_id=workspace_id)
         sessions = []
         for row in rows:
             sessions.append(
@@ -65,6 +63,54 @@ def build_session_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             ),
             reverse=True,
         )
+        return sessions
+
+    def _resolve_session_ref(*, current_session_id: str, workspace_id: str, user_id: str, session_ref: str) -> Dict[str, Any]:
+        sessions = _sorted_sessions(current_session_id=current_session_id, workspace_id=workspace_id, user_id=user_id)
+        ref = re.sub(r"\s+", " ", str(session_ref or "").strip())
+        if not ref:
+            raise HTTPException(status_code=400, detail="Session reference required.")
+        numeric_match = re.fullmatch(r"#?(\d{1,3})", ref)
+        if numeric_match:
+            index = int(numeric_match.group(1))
+            if 1 <= index <= len(sessions):
+                return sessions[index - 1]
+            raise HTTPException(status_code=404, detail=f"Session {index} was not found.")
+        lowered_ref = ref.casefold()
+        for session in sessions:
+            title = str(session.get("title") or "").strip()
+            session_id_value = str(session.get("session_id") or "").strip()
+            if title.casefold() == lowered_ref or session_id_value.casefold() == lowered_ref:
+                return session
+        for session in sessions:
+            title = str(session.get("title") or "").strip()
+            session_id_value = str(session.get("session_id") or "").strip()
+            if title.casefold().startswith(lowered_ref) or session_id_value.casefold().startswith(lowered_ref):
+                return session
+        raise HTTPException(status_code=404, detail=f"Session '{ref}' was not found.")
+
+    def handle_sessions_list(args: Dict[str, Any]) -> Dict[str, Any]:
+        workspace_id = deps.resolve_workspace_id("office.sessions_list", args)
+        user = deps.user_service.get_user_for_session(str(args.get("session_id") or "").strip())
+        current_session_id = str(user.get("last_active_session_id") or "").strip()
+        current_workspace = deps.kernel.get_state(workspace_id)
+        sessions = _sorted_sessions(
+            current_session_id=current_session_id,
+            workspace_id=workspace_id,
+            user_id=str(user["user_id"]),
+        )
+        lines = ["Here are the sessions:"]
+        items = []
+        for index, item in enumerate(sessions, start=1):
+            title = str(item.get("title") or item.get("session_id") or f"Session {index}").strip()
+            session_id = str(item.get("session_id") or "").strip()
+            description = title
+            if session_id and session_id != title:
+                description = f"{title} ({session_id})"
+            if item.get("is_current"):
+                description += " [Active]"
+            lines.append(f"{index}. {description}")
+            items.append({"index": index, "description": description})
         return {
             "structuredContent": {
                 "workspace_id": workspace_id,
@@ -72,8 +118,10 @@ def build_session_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                 "current_workspace_id": current_workspace.get("workspace_id", workspace_id),
                 "count": len(sessions),
                 "sessions": sessions,
+                "items": items,
+                "response_text": "\n".join(lines),
             },
-            "content": [{"type": "text", "text": f"Loaded {len(sessions)} session(s)."}],
+            "content": [{"type": "text", "text": "\n".join(lines)}],
         }
 
     def handle_session_create(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -111,10 +159,24 @@ def build_session_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         }
 
     def handle_session_activate(args: Dict[str, Any]) -> Dict[str, Any]:
-        session_id = str(args.get("session_id") or "").strip()
-        if not session_id:
+        current_session_id = str(args.get("session_id") or "").strip()
+        session_ref = re.sub(r"\s+", " ", str(args.get("session_ref") or "").strip(" .,:;"))
+        target_session_id = current_session_id
+        if session_ref:
+            if not current_session_id:
+                raise error_missing_required_field("session_id")
+            current_user = deps.user_service.get_user_for_session(current_session_id)
+            workspace_id = deps.resolve_workspace_id("office.session_activate", args)
+            target = _resolve_session_ref(
+                current_session_id=current_session_id,
+                workspace_id=workspace_id,
+                user_id=str(current_user["user_id"]),
+                session_ref=session_ref,
+            )
+            target_session_id = str(target.get("session_id") or "").strip()
+        if not target_session_id:
             raise error_missing_required_field("session_id")
-        session = deps.user_service.select_session_for_user(session_id)
+        session = deps.user_service.select_session_for_user(target_session_id)
         workspace_state = deps.kernel.get_state(session["active_workspace_id"])
         return {
             "structuredContent": {
@@ -124,7 +186,7 @@ def build_session_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                 "description": session["description"],
                 "workspace_state": workspace_state,
             },
-            "content": [{"type": "text", "text": f"Activated session {session['title']}."}],
+            "content": [{"type": "text", "text": f"You are now in session {session['title']} ({session['session_id']})."}],
         }
 
     def handle_workspace_activate(args: Dict[str, Any]) -> Dict[str, Any]:

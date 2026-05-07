@@ -92,10 +92,12 @@ class FakeReceptionistContextService:
         summary: str = "",
         recent_turns: Optional[List[str]] = None,
         room_memory_refs: Optional[List[Dict[str, Any]]] = None,
+        session_facts_text: str = "",
     ) -> None:
         self.summary = summary
         self.recent_turns = recent_turns or []
         self.room_memory_refs = room_memory_refs or []
+        self.session_facts_text = session_facts_text
 
     def build_model_context(self, *, workspace_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         return {
@@ -104,6 +106,7 @@ class FakeReceptionistContextService:
             "session_id": session_id,
             "session_summary_text": self.summary,
             "recent_turns_text": list(self.recent_turns),
+            "session_facts_text": self.session_facts_text,
             "room_behavior_memory_refs": list(self.room_memory_refs),
         }
 
@@ -161,6 +164,7 @@ class CapturingModelRouter:
     def __init__(self, text: str = "Default model response.") -> None:
         self.text = text
         self.contexts: List[Dict[str, Any]] = []
+        self.system_prompts: List[str] = []
 
     def generate_response(
         self,
@@ -171,6 +175,7 @@ class CapturingModelRouter:
         settings: Optional[Dict[str, Any]] = None,
         task_type: str = "conversation",
     ) -> ModelRouteResult:
+        self.system_prompts.append(system_prompt)
         self.contexts.append(dict(context or {}))
         return ModelRouteResult(
             provider="gemini",
@@ -427,6 +432,33 @@ class AiHandlerTests(unittest.TestCase):
         )
         self.assertIn("Sales questions pertain to Oregon businesses.", router.contexts[0]["room_behavior_memory_text"])
 
+    def test_ai_generate_propagates_session_facts_into_context(self) -> None:
+        router = CapturingModelRouter()
+        deps = self._deps([], model_text="Default model response.")
+        deps = HandlerDeps(
+            **{
+                **deps.__dict__,
+                "receptionist_context_service": FakeReceptionistContextService(
+                    summary="",
+                    recent_turns=["You [user]: I live in Oregon."],
+                    room_memory_refs=[],
+                    session_facts_text="- User lives in Oregon.",
+                ),
+                "model_router": router,
+            }
+        )
+        handlers = build_ai_handlers(deps)
+        handlers["office.ai_generate"](
+            {
+                "workspace_id": "ws_1",
+                "user_prompt": "where do I live?",
+                "session_id": "sess_1",
+            }
+        )
+        self.assertIn("session_facts_text", router.contexts[0])
+        self.assertIn("Use session facts as transient thread-local context", router.system_prompts[0])
+        self.assertIn("Do not invent unsupported factual details", router.system_prompts[0])
+
     def test_ai_generate_ignores_generic_risk_instruction_for_cellphone_plan(self) -> None:
         handlers = build_ai_handlers(
             self._deps(
@@ -544,6 +576,214 @@ class AiHandlerTests(unittest.TestCase):
         text = result["content"][0]["text"]
         self.assertIn("The AI returned an incomplete list (2 of 5 requested items)", text)
         self.assertIn("Automatic retry also returned an incomplete answer.", text)
+
+    def test_ai_generate_retries_yes_no_question_until_direct_answer(self) -> None:
+        router = SequenceModelRouter(
+            [
+                "The evidence suggests it does.",
+                "Yes. The evidence suggests it does.",
+            ]
+        )
+        deps = self._deps([])
+        deps = HandlerDeps(
+            **{
+                **deps.__dict__,
+                "model_router": router,
+            }
+        )
+        handlers = build_ai_handlers(deps)
+        result = handlers["office.ai_generate"](
+            {
+                "workspace_id": "ws_1",
+                "user_prompt": "does it have live music?",
+                "session_id": "sess_1",
+            }
+        )
+        self.assertEqual(len(router.user_prompts), 2)
+        self.assertIn("Internal answer contract:", router.user_prompts[0])
+        self.assertIn("Answer the question directly in the first word: Yes or No.", router.user_prompts[1])
+        self.assertEqual(result["content"][0]["text"], "Yes. The evidence suggests it does.")
+
+    def test_ai_generate_renders_structured_yes_no_contract_response(self) -> None:
+        router = SequenceModelRouter(
+            [
+                "Direct answer: Yes\nReason: Search results describe it as a music venue.\nCaveat: Check the current event calendar for specific dates.",
+            ]
+        )
+        deps = self._deps([])
+        deps = HandlerDeps(
+            **{
+                **deps.__dict__,
+                "model_router": router,
+            }
+        )
+        handlers = build_ai_handlers(deps)
+        result = handlers["office.ai_generate"](
+            {
+                "workspace_id": "ws_1",
+                "user_prompt": (
+                    "User request: does it have live music?\n\n"
+                    "Search results:\n"
+                    "1. Blairally (Google): Music Venue/Arcade in Eugene, Oregon.\n\n"
+                    "Write the response the user should see."
+                ),
+                "session_id": "sess_1",
+            }
+        )
+        self.assertIn("Direct answer: Yes, No, or Uncertain", router.user_prompts[0])
+        self.assertEqual(
+            result["content"][0]["text"],
+            "Yes. Search results describe it as a music venue. Check the current event calendar for specific dates.",
+        )
+
+    def test_ai_generate_retries_single_choice_question_until_one_answer(self) -> None:
+        router = SequenceModelRouter(
+            [
+                "The strongest options are service quality and consistency.",
+                "Service quality. It builds trust and affects every repeat interaction.",
+            ]
+        )
+        deps = self._deps([])
+        deps = HandlerDeps(
+            **{
+                **deps.__dict__,
+                "model_router": router,
+            }
+        )
+        handlers = build_ai_handlers(deps)
+        result = handlers["office.ai_generate"](
+            {
+                "workspace_id": "ws_1",
+                "user_prompt": "which one is most effective?",
+                "session_id": "sess_1",
+            }
+        )
+        self.assertEqual(len(router.user_prompts), 2)
+        self.assertIn("Direct answer: one single best option only", router.user_prompts[0])
+        self.assertIn("single best option", router.user_prompts[1].lower())
+        self.assertEqual(
+            result["content"][0]["text"],
+            "Service quality. It builds trust and affects every repeat interaction.",
+        )
+
+    def test_ai_generate_renders_structured_single_choice_contract_response(self) -> None:
+        router = SequenceModelRouter(
+            [
+                "Direct answer: Service quality\nReason: It builds trust and affects every repeat interaction.\nCaveat: none",
+            ]
+        )
+        deps = self._deps([])
+        deps = HandlerDeps(
+            **{
+                **deps.__dict__,
+                "model_router": router,
+            }
+        )
+        handlers = build_ai_handlers(deps)
+        result = handlers["office.ai_generate"](
+            {
+                "workspace_id": "ws_1",
+                "user_prompt": "which one is most effective?",
+                "session_id": "sess_1",
+            }
+        )
+        self.assertEqual(
+            result["content"][0]["text"],
+            "Service quality. It builds trust and affects every repeat interaction.",
+        )
+
+    def test_ai_generate_renders_structured_comparison_contract_response(self) -> None:
+        router = SequenceModelRouter(
+            [
+                "Summary: Referrals are stronger for conversion, while ads scale faster.\n"
+                "Side A: Referrals bring warmer leads and stronger trust.\n"
+                "Side B: Digital ads reach more people but convert less efficiently.\n"
+                "Recommendation: Start with referrals, then add ads to scale."
+            ]
+        )
+        deps = self._deps([])
+        deps = HandlerDeps(
+            **{
+                **deps.__dict__,
+                "model_router": router,
+            }
+        )
+        handlers = build_ai_handlers(deps)
+        result = handlers["office.ai_generate"](
+            {
+                "workspace_id": "ws_1",
+                "user_prompt": "compare referrals vs digital ads for insurance leads",
+                "session_id": "sess_1",
+            }
+        )
+        self.assertIn("Summary: one sentence that answers the comparison directly", router.user_prompts[0])
+        self.assertIn("Referrals are stronger for conversion", result["content"][0]["text"])
+        self.assertIn("Start with referrals, then add ads to scale.", result["content"][0]["text"])
+
+    def test_ai_generate_renders_structured_grounded_entity_summary_response(self) -> None:
+        router = SequenceModelRouter(
+            [
+                "Summary: Blairally appears to be a music venue and arcade in Eugene, Oregon.\n"
+                "Evidence: Search snippets describe it as a Music Venue/Arcade and mention events.\n"
+                "Unknowns: I do not have verified current event dates."
+            ]
+        )
+        deps = self._deps([])
+        deps = HandlerDeps(
+            **{
+                **deps.__dict__,
+                "model_router": router,
+            }
+        )
+        handlers = build_ai_handlers(deps)
+        result = handlers["office.ai_generate"](
+            {
+                "workspace_id": "ws_1",
+                "user_prompt": (
+                    "User request: what can you tell me about Blairally?\n\n"
+                    "Search results:\n"
+                    "1. Blairally (Google): Music Venue/Arcade in Eugene, Oregon.\n"
+                    "2. Blairally (Facebook): Events and live performances.\n\n"
+                    "Write the response the user should see."
+                ),
+                "session_id": "sess_1",
+            }
+        )
+        self.assertIn("Use only grounded facts from the provided results.", router.user_prompts[0])
+        self.assertIn("Blairally appears to be a music venue and arcade in Eugene, Oregon.", result["content"][0]["text"])
+        self.assertIn("I do not have verified current event dates.", result["content"][0]["text"])
+
+    def test_ai_generate_fails_closed_for_grounded_yes_no_when_retry_is_still_indirect(self) -> None:
+        router = SequenceModelRouter(
+            [
+                "The search results suggest it may host events.",
+                "The available information suggests that possibility.",
+            ]
+        )
+        deps = self._deps([])
+        deps = HandlerDeps(
+            **{
+                **deps.__dict__,
+                "model_router": router,
+            }
+        )
+        handlers = build_ai_handlers(deps)
+        result = handlers["office.ai_generate"](
+            {
+                "workspace_id": "ws_1",
+                "user_prompt": (
+                    "User request: does it have live music?\n\n"
+                    "Search results:\n"
+                    "1. Blairally (Google): Music Venue/Arcade in Eugene, Oregon.\n\n"
+                    "Write the response the user should see."
+                ),
+                "session_id": "sess_1",
+            }
+        )
+        self.assertEqual(
+            result["content"][0]["text"],
+            "I could not produce a complete grounded yes/no answer from the available information without guessing.",
+        )
 
     def test_ai_generate_reports_retry_failure_for_incomplete_planned_list(self) -> None:
         router = PartialThenFailingModelRouter()

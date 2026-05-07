@@ -197,8 +197,9 @@ export async function enter(pin_code: string): Promise<LobbyResponse> {
   return postJson<LobbyResponse>("/lobby/enter", { pin_code });
 }
 
-export async function request(text: string): Promise<RequestResponse> {
-  const sessionId = typeof window === "undefined" ? "" : window.localStorage.getItem("veridex.session_id") ?? "";
+export async function request(text: string, sessionIdOverride?: string): Promise<RequestResponse> {
+  const storedSessionId = typeof window === "undefined" ? "" : window.localStorage.getItem("veridex.session_id") ?? "";
+  const sessionId = String(sessionIdOverride || storedSessionId || "");
   if (!sessionId) {
     throw new Error("Session ID required");
   }
@@ -208,7 +209,7 @@ export async function request(text: string): Promise<RequestResponse> {
       "Content-Type": "application/json",
       "X-Session-Id": sessionId,
     },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, session_id: sessionId }),
   });
 
   if (!response.ok) {

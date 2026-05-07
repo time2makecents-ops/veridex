@@ -410,7 +410,83 @@ def handle_natural_language_request(
             )
             return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
 
-    routed = pipeline.route_user_request(workspace_id, request_text)
+    current_state = kernel.get_state(workspace_id)
+    pending_session_create = _pending_session_create(current_state, session_id)
+    if pending_session_create and request_text:
+        record_user_turn(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            request_text=request_text,
+            kernel=kernel,
+            store=store,
+            receptionist_context_service=receptionist_context_service,
+            user_profile=user_profile,
+        )
+        if _is_cancel_text(request_text) or _is_confirmation_no(request_text):
+            current_state = _clear_pending_session_create(current_state, session_id)
+            store.save_state(workspace_id, current_state)
+            response_text = "Okay. I did not create a new session."
+            response = {
+                "structuredContent": {
+                    "workspace_id": workspace_id,
+                    "session_id": session_id,
+                    "response_text": response_text,
+                    "routing": {
+                        "route_kind": "clarify",
+                        "capability": "session.create.name_required",
+                        "tool": "office.session_create",
+                        "reason": "Cancelled pending session creation.",
+                    },
+                },
+                "content": [{"type": "text", "text": response_text}],
+            }
+            record_assistant_turn(
+                workspace_id=workspace_id,
+                session_id=session_id,
+                response_text=response_text,
+                kernel=kernel,
+                store=store,
+                receptionist_context_service=receptionist_context_service,
+                user_profile=user_profile,
+            )
+            return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
+
+        current_state = _clear_pending_session_create(current_state, session_id)
+        store.save_state(workspace_id, current_state)
+        title_text = str(request_text or "").strip(" .,:;") or "New Session"
+        result = router.dispatch_capability(
+            "session.create",
+            {
+                "workspace_id": workspace_id,
+                "session_id": session_id,
+                "title": title_text,
+                "description": title_text,
+                "request_text": f"start new session named {title_text}",
+            },
+            preferred_tool="office.session_create",
+        )
+        if isinstance(result, dict):
+            structured = result.get("structuredContent")
+            if isinstance(structured, dict):
+                structured["routing"] = {
+                    "route_kind": "tool",
+                    "capability": "session.create",
+                    "tool": "office.session_create",
+                    "reason": "Created a new session from the pending session-name prompt.",
+                }
+        enriched = attach_request_context(result, workspace_id=workspace_id, session_id=session_id)
+        record_assistant_turn(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            response_text=request_text_from_response(enriched),
+            kernel=kernel,
+            store=store,
+            receptionist_context_service=receptionist_context_service,
+            user_profile=user_profile,
+        )
+        return enriched
+
+    routed = pipeline.route_user_request(workspace_id, request_text, session_id=session_id)
     if routed["route_kind"] == "model":
         followup_route = pipeline.route_contextual_followup(
             workspace_id,
@@ -473,11 +549,41 @@ def handle_natural_language_request(
         args["workspace_id"] = workspace_id
         if session_id:
             args["session_id"] = session_id
-        result = router.dispatch_capability(
-            routed["capability"],
-            args,
-            preferred_tool=routed.get("tool"),
-        )
+        try:
+            result = router.dispatch_capability(
+                routed["capability"],
+                args,
+                preferred_tool=routed.get("tool"),
+            )
+        except HTTPException:
+            if routed.get("grounding_required") and str(routed.get("capability") or "").startswith("search."):
+                entity_subject = str(routed.get("entity_subject") or "that entity").strip() or "that entity"
+                response_text = f"I could not verify information about {entity_subject} because the search failed. I should not guess."
+                response = {
+                    "structuredContent": {
+                        "workspace_id": workspace_id,
+                        "session_id": session_id,
+                        "response_text": response_text,
+                        "routing": {
+                            "route_kind": "clarify",
+                            "capability": "clarification.entity_grounding",
+                            "tool": routed.get("tool"),
+                            "reason": "Grounded factual search failed closed.",
+                        },
+                    },
+                    "content": [{"type": "text", "text": response_text}],
+                }
+                record_assistant_turn(
+                    workspace_id=workspace_id,
+                    session_id=session_id,
+                    response_text=response_text,
+                    kernel=kernel,
+                    store=store,
+                    receptionist_context_service=receptionist_context_service,
+                    user_profile=user_profile,
+                )
+                return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
+            raise
         result = synthesize_search_response(
             routed=routed,
             result=result,
@@ -588,6 +694,10 @@ def handle_natural_language_request(
         return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
 
     if routed["route_kind"] == "clarify":
+        if str(routed.get("capability") or "") == "session.create.name_required":
+            current_state = kernel.get_state(workspace_id)
+            current_state = _set_pending_session_create(current_state, session_id, request_text)
+            store.save_state(workspace_id, current_state)
         response_text = str(routed.get("arguments", {}).get("response_text") or "Did you mean something else?")
         response = {
             "structuredContent": {
@@ -865,6 +975,42 @@ def _is_confirmation_yes(text: str) -> bool:
 def _is_confirmation_no(text: str) -> bool:
     normalized = str(text or "").strip().lower()
     return normalized in {"0", "false", "no", "n", "off"}
+
+
+def _is_cancel_text(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    return normalized in {"cancel", "never mind", "nevermind", "stop", "abort"}
+
+
+def _pending_session_create(state: Dict[str, Any], session_id: str) -> Optional[Dict[str, Any]]:
+    pending_map = state.get("pending_session_create_by_session")
+    if not isinstance(pending_map, dict):
+        return None
+    pending = pending_map.get(session_id)
+    return pending if isinstance(pending, dict) else None
+
+
+def _set_pending_session_create(state: Dict[str, Any], session_id: str, request_text: str) -> Dict[str, Any]:
+    pending_map = dict(state.get("pending_session_create_by_session") or {})
+    pending_map[session_id] = {
+        "request_text": request_text,
+        "ts": utc_now(),
+    }
+    state["pending_session_create_by_session"] = pending_map
+    return state
+
+
+def _clear_pending_session_create(state: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+    pending_map = state.get("pending_session_create_by_session")
+    if not isinstance(pending_map, dict):
+        return state
+    next_map = dict(pending_map)
+    next_map.pop(session_id, None)
+    if next_map:
+        state["pending_session_create_by_session"] = next_map
+    else:
+        state.pop("pending_session_create_by_session", None)
+    return state
 
 
 def refresh_handler_bindings() -> None:

@@ -173,7 +173,7 @@ export default function ChatPage() {
         setActiveRoom(nextRoom);
         setActivePersona(nextPersona);
         setRecentRooms((current) => pushRecentRoom(current, nextRoom));
-        applyHydratedMessages(nextRoom, nextPersona, transcriptEntries);
+        applyHydratedMessages(nextRoom, nextPersona, transcriptEntries, sessionId);
         void refreshWorkspaces(nextWorkspace);
         void refreshSessions();
       } catch (err) {
@@ -222,7 +222,12 @@ export default function ChatPage() {
     [activeRoom, chatScope, messages, sessionId],
   );
 
-  function applyHydratedMessages(nextRoom: string, nextPersona: string, transcriptEntries: TranscriptEntry[]) {
+  function applyHydratedMessages(
+    nextRoom: string,
+    nextPersona: string,
+    transcriptEntries: TranscriptEntry[],
+    hydratedSessionId?: string,
+  ) {
     const nextStatus = roomTransitionText(nextRoom, nextPersona);
     setRoomStatus(nextStatus);
     const hydratedMessages = mapTranscriptEntries(transcriptEntries);
@@ -237,7 +242,7 @@ export default function ChatPage() {
           role: "assistant",
           speaker: "Receptionist",
           text: "Receptionist ready. How may I help you today?",
-          sessionId: sessionId,
+          sessionId: hydratedSessionId || sessionId,
         },
       ]);
     }
@@ -318,8 +323,10 @@ export default function ChatPage() {
     }
   }
 
-  async function refreshFiles() {
-    if (!sessionId) {
+  async function refreshFiles(nextSessionId?: string, nextRoomId?: string) {
+    const chosenSessionId = nextSessionId || sessionId;
+    const chosenRoomId = nextRoomId || activeRoom;
+    if (!chosenSessionId) {
       return;
     }
     setFilesLoading(true);
@@ -329,7 +336,7 @@ export default function ChatPage() {
         setWorkspaceFiles([]);
         setPrivateFiles(privateResponse.files || []);
       } else {
-        const scopeRef = loadScope === "room" ? activeRoom : loadScope === "session" ? sessionId : "public";
+        const scopeRef = loadScope === "room" ? chosenRoomId : loadScope === "session" ? chosenSessionId : "public";
         const response = await listFiles(loadScope, scopeRef);
         setWorkspaceFiles(response.files || []);
         setPrivateFiles([]);
@@ -371,8 +378,9 @@ export default function ChatPage() {
     if (!chosenSessionId) {
       return;
     }
+    setStoredSessionId(chosenSessionId);
     const transcriptEntries = await loadTranscript(120, chosenSessionId);
-    const stateResponse = await callTool("office.state_get", {});
+    const stateResponse = await callTool("office.state_get", { session_id: chosenSessionId });
     const structured = stateResponse.structuredContent as LobbyState | undefined;
     if (!structured) {
       return;
@@ -386,7 +394,7 @@ export default function ChatPage() {
     setActiveRoom(nextRoom);
     setActivePersona(nextPersona);
     setRecentRooms((current) => pushRecentRoom(current, nextRoom));
-    applyHydratedMessages(nextRoom, nextPersona, transcriptEntries);
+    applyHydratedMessages(nextRoom, nextPersona, transcriptEntries, chosenSessionId);
   }
 
   async function handleWorkspaceSelect(targetWorkspaceId: string) {
@@ -412,10 +420,10 @@ export default function ChatPage() {
       setChatScope("room");
       setRecentRooms((current) => pushRecentRoom(current, nextRoom));
       const transcriptEntries = await loadTranscript(120, nextSessionId);
-      applyHydratedMessages(nextRoom, nextPersona, transcriptEntries);
+      applyHydratedMessages(nextRoom, nextPersona, transcriptEntries, nextSessionId);
       await refreshWorkspaces(nextWorkspaceId);
       await refreshSessions(nextSessionId);
-      await refreshFiles();
+      await refreshFiles(nextSessionId, nextRoom);
       setWorkspaceMenuOpen(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to activate workspace.";
@@ -443,10 +451,10 @@ export default function ChatPage() {
       setRecentRooms((current) => pushRecentRoom(current, "lobby"));
       setWorkspaceTitleDraft(String(created.label || title));
       const transcriptEntries = await loadTranscript(120, nextSessionId);
-      applyHydratedMessages("lobby", "Receptionist", transcriptEntries);
+      applyHydratedMessages("lobby", "Receptionist", transcriptEntries, nextSessionId);
       await refreshWorkspaces(nextWorkspaceId);
       await refreshSessions(nextSessionId);
-      await refreshFiles();
+      await refreshFiles(nextSessionId, "lobby");
       setWorkspaceMenuOpen(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to create workspace.";
@@ -474,7 +482,7 @@ export default function ChatPage() {
       setSessionDescriptionDraft(String(response.description || ""));
       await refreshCurrentThread(nextSessionId);
       await refreshWorkspaces(nextWorkspaceId);
-      await refreshFiles();
+      await refreshFiles(nextSessionId);
       await refreshSessions(nextSessionId);
       setChatScope("room");
       setSessionMenuOpen(false);
@@ -506,7 +514,7 @@ export default function ChatPage() {
       setRecentRooms((current) => pushRecentRoom(current, "lobby"));
       await refreshCurrentThread(nextSessionId);
       await refreshWorkspaces(nextWorkspaceId);
-      await refreshFiles();
+      await refreshFiles(nextSessionId, "lobby");
       await refreshSessions(nextSessionId);
       setSessionMenuOpen(false);
     } catch (err) {
@@ -521,18 +529,35 @@ export default function ChatPage() {
     if (!value || loading) {
       return;
     }
+    const outgoingSessionId = sessionId;
     setDraft("");
     setError("");
     setBackendBanner("");
     setLoading(true);
-      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text: value, room: activeRoom, sessionId }]);
+    setMessages((current) => [
+      ...current,
+      { id: crypto.randomUUID(), role: "user", text: value, room: activeRoom, sessionId: outgoingSessionId },
+    ]);
     try {
-      const response = await request(value);
+      const response = await request(value, outgoingSessionId);
       const assistantText = requestText(response);
       const nextWorkspaceId = String(response.workspace_id || response.structuredContent?.workspace_id || workspaceId);
-      const nextSessionId = String(response.session_id || response.structuredContent?.session_id || sessionId);
+      const nextSessionId = String(response.session_id || response.structuredContent?.session_id || outgoingSessionId);
       const nextRoom = String((response.structuredContent as { active_room?: string } | undefined)?.active_room || activeRoom);
       const nextPersona = String((response.structuredContent as { active_persona?: string } | undefined)?.active_persona || activePersona);
+      if (nextSessionId && nextSessionId !== outgoingSessionId) {
+        setStoredSessionId(nextSessionId);
+        setSessionId(nextSessionId);
+        setWorkspaceId(nextWorkspaceId);
+        setChatScope("room");
+        await refreshCurrentThread(nextSessionId);
+        await refreshWorkspaces(nextWorkspaceId);
+        await refreshSessions(nextSessionId);
+        return;
+      }
+      if (nextSessionId) {
+        setStoredSessionId(nextSessionId);
+      }
       setWorkspaceId(nextWorkspaceId);
       setSessionId(nextSessionId);
       setActiveRoom(nextRoom);
@@ -549,7 +574,10 @@ export default function ChatPage() {
       const message = err instanceof Error ? err.message : "Request failed.";
       setError(message);
       setBackendBanner(backendDisconnectedMessage(message));
-      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message, room: activeRoom, sessionId }]);
+      setMessages((current) => [
+        ...current,
+        { id: crypto.randomUUID(), role: "assistant", text: message, room: activeRoom, sessionId: outgoingSessionId },
+      ]);
       if (message.toLowerCase().includes("session")) {
         clearStoredSessionId();
         router.replace("/");
@@ -593,7 +621,7 @@ export default function ChatPage() {
       setActivePersona(nextPersona);
       setChatScope("room");
       setRecentRooms((current) => pushRecentRoom(current, nextRoom));
-      applyHydratedMessages(nextRoom, nextPersona, transcriptEntries);
+      applyHydratedMessages(nextRoom, nextPersona, transcriptEntries, sessionId);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to change room.";
       setError(message);

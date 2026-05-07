@@ -10,6 +10,7 @@ from office_app.server.conversation_planner import ConversationPlanner
 from office_app.server.persona_registry import persona_profile_for_name
 from office_app.server.room_policy_registry import load_room_policies
 from office_app.server.room_router import rooms_payload, validate_room
+from office_app.server.search_response_synthesis import grounded_entity_followup_response
 
 
 def normalize_room_text(value: str) -> str:
@@ -116,15 +117,23 @@ class RequestPipeline:
         "what memory objects do you have saved",
         "what memory objects do i have saved",
         "what memory objects are saved",
+        "what memory items do you have saved",
+        "what memory items do i have saved",
+        "what memory items are saved",
         "what memories do you have saved",
         "what memories do i have saved",
         "what memories are saved",
         "what do you remember",
         "what do you remember in",
         "show memory objects",
+        "show memory items",
         "list memory objects",
+        "list memory items",
         "list saved memories",
         "show saved memories",
+        "what memory items are saved now",
+        "what memory objects are saved now",
+        "what memories are saved now",
     )
     ROOM_NAVIGATION_PREFIXES = (
         "go to ",
@@ -272,6 +281,10 @@ class RequestPipeline:
         "be cautious, avoid unsupported certainty, and include a brief verification note when appropriate. "
         "Do not present risky promotional, medical, legal, or financial tactics as clean advice without a caution."
     )
+    MODEL_GROUNDING_RULE = (
+        "For factual questions about a specific company, entity, or person, do not invent unsupported details. "
+        "If verified grounding is missing, say so directly and offer search when appropriate."
+    )
     CORRECTION_VOCABULARY = (
         "artifact",
         "artifacts",
@@ -338,6 +351,34 @@ class RequestPipeline:
         "start a new session",
         "create a new session",
     )
+    SESSION_REQUEST_RE = re.compile(
+        r"^(?:new|start|create)(?:\s+a|\s+an|\s+the)?(?:\s+new)?\s+session(?:\s+for|\s+about|\s+called|\s+named)?\s*(.*)$",
+        re.IGNORECASE,
+    )
+    SESSION_LIST_HINTS = (
+        "list sessions",
+        "show sessions",
+        "show me the sessions",
+        "what sessions do i have",
+        "what sessions are there",
+        "what are my sessions",
+        "which sessions do i have",
+    )
+    SESSION_ACTIVATE_RE = re.compile(
+        r"^(?:go(?:\s+back)?\s+to|switch\s+to|activate|open|return\s+to)\s+session\s+(.+?)\??$",
+        re.IGNORECASE,
+    )
+    SESSION_THREAD_HINTS = (
+        "show this sessions thread",
+        "show this session thread",
+        "show this session's thread",
+        "show session thread",
+        "show this thread",
+        "show this session conversation",
+        "show this session transcript",
+        "show this thread history",
+        "show this session history",
+    )
     CONTEXTUAL_REFERENCE_HINTS = (
         "which one",
         "what one",
@@ -375,6 +416,13 @@ class RequestPipeline:
         re.compile(r"^why that conclusion\??$", re.IGNORECASE),
         re.compile(r"^how did you decide that\??$", re.IGNORECASE),
         re.compile(r"^why that one\??$", re.IGNORECASE),
+    )
+    FACTUAL_ENTITY_LOOKUP_PATTERNS = (
+        re.compile(r"^(?:what\s+can\s+you\s+tell\s+me\s+about|what\s+do\s+you\s+know\s+about|tell\s+me\s+about|information\s+about)\s+(.+?)\??$", re.IGNORECASE),
+        re.compile(r"^(?:who|what)\s+is\s+(.+?)\??$", re.IGNORECASE),
+    )
+    FACTUAL_ENTITY_SEARCH_PATTERNS = (
+        re.compile(r"^(?:search(?:\s+the\s+(?:web|internet))?\s+for|search\s+online\s+for|look\s+up)\s+(.+?)\??$", re.IGNORECASE),
     )
 
     def __init__(
@@ -694,7 +742,7 @@ class RequestPipeline:
 
         return None
 
-    def route_user_request(self, workspace_id: str, request_text: str) -> Dict[str, Any]:
+    def route_user_request(self, workspace_id: str, request_text: str, *, session_id: Optional[str] = None) -> Dict[str, Any]:
         room_memory_list_route = self.route_room_memory_list_request(workspace_id, request_text)
         if room_memory_list_route is not None:
             return {
@@ -719,6 +767,15 @@ class RequestPipeline:
                 **room_memory_route,
             }
 
+        session_thread_route = self.route_session_thread_request(workspace_id, request_text)
+        if session_thread_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **session_thread_route,
+            }
+
         capability_route = self.route_capability_question(workspace_id, request_text)
         if capability_route is not None:
             return capability_route
@@ -730,6 +787,14 @@ class RequestPipeline:
                 request_text,
                 reason=f"Classified as {intent} intent before tool routing.",
             )
+
+        factual_entity_route = self.route_factual_entity_request(
+            workspace_id,
+            request_text,
+            session_id=session_id,
+        )
+        if factual_entity_route is not None:
+            return factual_entity_route
 
         artifact_route = self.route_artifact_request(workspace_id, request_text)
         if artifact_route is not None:
@@ -769,6 +834,12 @@ class RequestPipeline:
 
         session_route = self.route_session_request(workspace_id, request_text)
         if session_route is not None:
+            if "route_kind" in session_route:
+                return {
+                    "workspace_id": workspace_id,
+                    "request": request_text,
+                    **session_route,
+                }
             return {
                 "route_kind": "tool",
                 "workspace_id": workspace_id,
@@ -994,7 +1065,7 @@ class RequestPipeline:
             f"The active room is {active_room}. The active persona is {active_persona}. "
             "Respond clearly, concisely, and in a way that fits the current office context. "
             f"{self.MODEL_CONTEXT_RULE} {self.MODEL_NO_BACKGROUND_RULE} {self.MODEL_DIRECT_ANSWER_RULE} "
-            f"{self.MODEL_CAPABILITY_RULE} {self.MODEL_RISK_RULE}"
+            f"{self.MODEL_CAPABILITY_RULE} {self.MODEL_RISK_RULE} {self.MODEL_GROUNDING_RULE}"
         )
         return {
             "route_kind": "model",
@@ -1171,6 +1242,187 @@ class RequestPipeline:
                 return str(room.get("title") or room_id).strip()
         return room_id or "Lobby"
 
+    def _load_recent_transcript_turns(self, workspace_id: str, *, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        store = getattr(self.kernel, "store", None)
+        loader = getattr(store, "load_transcript", None)
+        if loader is None:
+            return []
+        try:
+            return loader(workspace_id, limit=24, session_id=session_id)
+        except Exception:
+            return []
+
+    def _clean_entity_subject(self, subject: str) -> str:
+        cleaned = re.sub(r"\s+", " ", str(subject or "").strip(" .?!,:;"))
+        cleaned = re.sub(
+            r"\s+(?:and\s+give\s+me\s+information(?:\s+about\s+the\s+company)?|and\s+tell\s+me\s+about\s+the\s+company|please)$",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(r"\s+(?:company|business|brand)\s*$", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"^(?:the\s+)?(?:company|business|brand)\s+", "", cleaned, flags=re.IGNORECASE)
+        return cleaned.strip(" .?!,:;")
+
+    def _looks_like_specific_entity(self, subject: str) -> bool:
+        text = re.sub(r"\s+", " ", str(subject or "").strip()).lower()
+        if not text:
+            return False
+        if self.FILE_ID_RE.search(text) or self.FILE_NAME_RE.search(text):
+            return False
+        if len(text.split()) > 6:
+            return False
+        if re.search(
+            r"\b(restaurant marketing|customer retention|sales process|strong brand|brand strategy|marketing strategy|"
+            r"marketing ideas|ideas|strategy|branding|brand|marketing|sales|retention|process|successful|success|"
+            r"file|document|session|workspace|room|response)\b",
+            text,
+        ):
+            return False
+        if text in {"company", "business", "brand", "restaurant", "restaurants"}:
+            return False
+        return True
+
+    def extract_factual_entity_request(self, request_text: str) -> Optional[Dict[str, Any]]:
+        text = str(request_text or "").strip()
+        lowered = text.lower()
+        if not text or self.is_advice_intent(lowered):
+            return None
+        place_signals = self.place_search_signals(request_text)
+        if place_signals["has_place_hint"] and (place_signals["discovery_signal"] or place_signals["review_signal"]):
+            return None
+
+        for pattern in self.FACTUAL_ENTITY_SEARCH_PATTERNS:
+            match = pattern.match(text)
+            if not match:
+                continue
+            subject = self._clean_entity_subject(match.group(1))
+            if self._looks_like_specific_entity(subject):
+                return {
+                    "entity_subject": subject,
+                    "search_requested": True,
+                }
+
+        for pattern in self.FACTUAL_ENTITY_LOOKUP_PATTERNS:
+            match = pattern.match(text)
+            if not match:
+                continue
+            subject = self._clean_entity_subject(match.group(1))
+            if self._looks_like_specific_entity(subject):
+                return {
+                    "entity_subject": subject,
+                    "search_requested": False,
+                }
+        return None
+
+    def entity_has_verified_grounding(
+        self,
+        workspace_id: str,
+        entity_subject: str,
+        *,
+        session_id: Optional[str] = None,
+    ) -> bool:
+        turns = self._load_recent_transcript_turns(workspace_id, session_id=session_id)
+        if not turns:
+            return False
+        subject = str(entity_subject or "").strip()
+        if not subject:
+            return False
+        subject_lower = subject.lower()
+        tokens = [token for token in re.findall(r"[a-z0-9]{3,}", subject_lower) if token not in {"the", "and"}]
+        if not tokens:
+            tokens = [subject_lower]
+        for turn in turns[-24:]:
+            role = str(turn.get("role") or "").strip().lower()
+            text = str(turn.get("text") or "").strip()
+            if not text:
+                continue
+            lowered = text.lower()
+            if subject_lower not in lowered and not all(token in lowered for token in tokens):
+                continue
+            if role == "user":
+                if "?" not in text or re.search(
+                    r"\b(is|was|are|were|sold|located|based|founded|operate|operated|started|start|had|have|work|live)\b",
+                    lowered,
+                ):
+                    return True
+                continue
+            if role in {"assistant", "system"} and any(
+                marker in text for marker in ("URL:", "Source:", "Address:", "Web results for", "Review-oriented results", "Place results")
+            ):
+                return True
+        return False
+
+    def route_factual_entity_request(
+        self,
+        workspace_id: str,
+        request_text: str,
+        *,
+        session_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        entity_request = self.extract_factual_entity_request(request_text)
+        if entity_request is None:
+            return None
+        entity_subject = str(entity_request["entity_subject"])
+        if entity_request["search_requested"]:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                "capability": "search.web",
+                "tool": "office.search_web",
+                "arguments": {
+                    "query": entity_subject,
+                    "limit": 5,
+                },
+                "reason": "Explicit search requested for a specific entity.",
+                "grounding_required": True,
+                "entity_subject": entity_subject,
+            }
+        if self.entity_has_verified_grounding(workspace_id, entity_subject, session_id=session_id):
+            return None
+        return {
+            "route_kind": "clarify",
+            "workspace_id": workspace_id,
+            "request": request_text,
+            "capability": "clarification.entity_grounding",
+            "tool": "office.capability_info",
+            "arguments": {
+                "response_text": f"I do not have verified information about {entity_subject} in this workspace. I can search for it if you want.",
+                "entity_subject": entity_subject,
+            },
+            "reason": "Specific entity lookup has no verified grounding in the current workspace/session context.",
+        }
+
+    def place_search_signals(self, request_text: str) -> Dict[str, Any]:
+        text = str(request_text or "").strip()
+        lowered = text.lower().strip()
+        place_query = self.normalize_place_query(request_text)
+        has_place_hint = any(hint in lowered for hint in self.SEARCH_PLACE_HINTS)
+        discovery_signal = bool(
+            re.match(r"^(?:find|show me|list|recommend|give me)\b", lowered)
+            or re.search(r"\b(?:near me|nearby|nearest)\b", lowered)
+            or re.match(r"^(?:where is|where are)\b", lowered)
+            or "reviews for" in lowered
+        )
+        explicit_review_signal = any(hint in lowered for hint in self.SEARCH_REVIEW_HINTS)
+        review_signal = bool(
+            explicit_review_signal or re.search(r"\b(?:best|top|highest rated|top rated|best rated)\b", lowered)
+        )
+        location_signal = bool(
+            place_query["location"]
+            or re.search(r"\b(?:near me|nearby|nearest)\b", lowered)
+            or re.search(r"\baround\s+[A-Za-z]", text, re.IGNORECASE)
+        )
+        return {
+            "has_place_hint": has_place_hint,
+            "discovery_signal": discovery_signal,
+            "explicit_review_signal": explicit_review_signal,
+            "review_signal": review_signal,
+            "location_signal": location_signal,
+            "place_query": place_query,
+        }
+
     def classify_intent(self, request_text: str) -> str:
         text = request_text.lower().strip()
         if not text:
@@ -1195,6 +1447,8 @@ class RequestPipeline:
 
     def is_advice_intent(self, text: str) -> bool:
         if any(hint in text for hint in self.INTENT_ADVICE_HINTS):
+            return True
+        if re.search(r"\bwhat\s+companies\s+should\s+i\s+study\b", text):
             return True
         if re.search(r"\bwhat\s+makes\b", text):
             return True
@@ -1237,19 +1491,16 @@ class RequestPipeline:
             return True
         if any(hint in text for hint in self.SEARCH_WEB_HINTS):
             return True
+        entity_request = self.extract_factual_entity_request(request_text)
+        if entity_request is not None and entity_request.get("search_requested"):
+            return True
 
-        starts_with_discovery = re.match(r"^(?:find|show me|list|recommend|give me)\b", text) is not None
-        has_place_hint = any(hint in text for hint in self.SEARCH_PLACE_HINTS)
-        if has_place_hint:
-            place_query = self.normalize_place_query(request_text)
-            review_signal = any(hint in text for hint in self.SEARCH_REVIEW_HINTS) or bool(
-                re.search(r"\b(?:best|top|highest rated|top rated|best rated)\b", text)
+        place_signals = self.place_search_signals(request_text)
+        if place_signals["has_place_hint"]:
+            return bool(
+                (place_signals["discovery_signal"] or place_signals["review_signal"])
+                and (place_signals["location_signal"] or place_signals["explicit_review_signal"])
             )
-            has_location_or_nearby = bool(place_query["location"] or place_query["needs_location"])
-            if starts_with_discovery or review_signal or has_location_or_nearby:
-                if self.is_advice_intent(text) and not starts_with_discovery and not place_query["location"]:
-                    return False
-                return True
 
         return False
 
@@ -1259,6 +1510,20 @@ class RequestPipeline:
             return None
         if self.is_search_capability_question(text):
             return None
+        entity_request = self.extract_factual_entity_request(request_text)
+        if entity_request is not None and entity_request.get("search_requested"):
+            entity_subject = str(entity_request["entity_subject"])
+            return {
+                "capability": "search.web",
+                "tool": "office.search_web",
+                "arguments": {
+                    "query": entity_subject,
+                    "limit": 5,
+                },
+                "reason": "Matched explicit search intent for a specific entity.",
+                "grounding_required": True,
+                "entity_subject": entity_subject,
+            }
 
         if any(hint in text for hint in self.SEARCH_BUSINESS_ADVICE_HINTS):
             if not any(hint in text for hint in self.SEARCH_WEB_HINTS) and not any(
@@ -1266,17 +1531,17 @@ class RequestPipeline:
             ):
                 return None
 
-        place_query = self.normalize_place_query(request_text)
+        place_signals = self.place_search_signals(request_text)
+        place_query = place_signals["place_query"]
         time_window = self.extract_time_window(text)
-        review_signal = any(hint in text for hint in self.SEARCH_REVIEW_HINTS) or any(
-            hint in text for hint in ("top rated", "best rated", "highest rated", "top 5", "top 10")
-        ) or bool(
-            re.search(r"\bbest\b", text)
-            and any(hint in text for hint in self.SEARCH_PLACE_HINTS)
-            and not any(hint in text for hint in self.INTENT_ADVICE_HINTS)
+        review_signal = place_signals["review_signal"]
+        place_task = bool(
+            place_signals["has_place_hint"]
+            and (place_signals["discovery_signal"] or review_signal)
+            and (place_signals["location_signal"] or place_signals["explicit_review_signal"])
         )
 
-        if review_signal and any(hint in text for hint in self.SEARCH_PLACE_HINTS) and place_query["needs_location"]:
+        if review_signal and place_signals["has_place_hint"] and place_query["needs_location"]:
             return {
                 "capability": "search.places",
                 "tool": "office.search_places",
@@ -1290,7 +1555,7 @@ class RequestPipeline:
                 "reason": "Matched place lookup intent but needs a location.",
             }
 
-        if review_signal and any(hint in text for hint in self.SEARCH_PLACE_HINTS):
+        if review_signal and place_signals["has_place_hint"] and place_task:
             return {
                 "capability": "search.reviews",
                 "tool": "office.search_reviews",
@@ -1314,9 +1579,7 @@ class RequestPipeline:
                 "reason": "Matched explicit web search intent.",
             }
 
-        if any(hint in text for hint in self.SEARCH_PLACE_HINTS) and (
-            place_query["is_explicit"] or place_query["location"] is not None or place_query["needs_location"]
-        ):
+        if place_task:
             return {
                 "capability": "search.places",
                 "tool": "office.search_places",
@@ -1628,6 +1891,19 @@ class RequestPipeline:
         match = re.match(r"^(?:what|how)\s+about\s+(.+?)\??$", text, re.IGNORECASE)
         recent_text = "\n".join(str(turn.get("text") or "") for turn in recent_turns[-8:])
         recent_lower = recent_text.lower()
+        followup_response = grounded_entity_followup_response(request_text, recent_text)
+        if followup_response is not None and "search results" in recent_lower:
+            return {
+                "route_kind": "clarify",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                "capability": "clarification.entity_followup",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": followup_response,
+                },
+                "reason": "Answered an entity follow-up from the latest grounded search evidence.",
+            }
         if match:
             subject = re.sub(r"\s+", " ", match.group(1).strip(" .?!")).strip()
             if len(subject) >= 3 and any(
@@ -1674,15 +1950,43 @@ class RequestPipeline:
         text = request_text.lower().strip()
         if not text:
             return None
+        activate_match = self.SESSION_ACTIVATE_RE.match(request_text.strip())
+        if activate_match:
+            session_ref = re.sub(r"\s+", " ", str(activate_match.group(1) or "").strip(" .,:;"))
+            if session_ref:
+                return {
+                    "capability": "session.activate",
+                    "tool": "office.session_activate",
+                    "arguments": {
+                        "session_ref": session_ref,
+                    },
+                    "reason": "Matched a session switch request.",
+                }
+        if any(hint in text for hint in self.SESSION_LIST_HINTS):
+            return {
+                "capability": "session.list",
+                "tool": "office.sessions_list",
+                "arguments": {},
+                "reason": "Matched a session list request.",
+            }
         if not any(hint in text for hint in self.SESSION_CREATE_HINTS):
             return None
-        title = re.sub(r"^(?:new|start|create)(?:\s+a|\s+an|\s+the)?\s+session", "", request_text, flags=re.IGNORECASE).strip(" .,:;")
+        match = self.SESSION_REQUEST_RE.match(request_text.strip())
+        title = str(match.group(1) if match else "").strip(" .,:;")
         if title.lower().startswith("for "):
             title = title[4:].strip(" .,:;")
         if title.lower().startswith("about "):
             title = title[6:].strip(" .,:;")
         if not title:
-            title = "New Session"
+            return {
+                "route_kind": "clarify",
+                "capability": "session.create.name_required",
+                "tool": "office.session_create",
+                "arguments": {
+                    "response_text": "What should I name the new session?",
+                },
+                "reason": "Need a session name before creating a new session.",
+            }
         return {
             "capability": "session.create",
             "tool": "office.session_create",
@@ -1692,6 +1996,21 @@ class RequestPipeline:
                 "request_text": request_text,
             },
             "reason": "Matched a new session request.",
+        }
+
+    def route_session_thread_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip().lower())
+        if not text:
+            return None
+        if not any(hint in text for hint in self.SESSION_THREAD_HINTS):
+            return None
+        return {
+            "capability": "workspace.transcript.get",
+            "tool": "office.transcript_get",
+            "arguments": {
+                "limit": 24,
+            },
+            "reason": "Matched a request to show the current session thread.",
         }
 
     def route_ocr_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:

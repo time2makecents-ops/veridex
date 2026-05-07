@@ -178,6 +178,8 @@ class ReceptionistContextService:
     MODEL_CONTEXT_TURN_CHARS = 700
     MODEL_CONTEXT_HISTORY_CHARS = 5000
     MODEL_CONTEXT_SUMMARY_CHARS = 1400
+    MODEL_CONTEXT_SESSION_FACT_LIMIT = 6
+    MODEL_CONTEXT_SESSION_FACT_CHARS = 240
 
     def __init__(self, *, kernel, runtime_dir: Path, utc_now_fn):
         self.kernel = kernel
@@ -448,6 +450,60 @@ class ReceptionistContextService:
             return text
         return text[: max(0, max_chars - 1)].rstrip() + "…"
 
+    @staticmethod
+    def _clean_fact_value(value: str) -> str:
+        value = re.sub(r"\s+", " ", str(value or "").strip())
+        return value.rstrip(" .,!?:;")
+
+    def _extract_session_facts(self, transcript_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        fact_patterns = [
+            (
+                re.compile(r"\b(?:i\s+live\s+in|i\s+am\s+in|i['’]m\s+in)\s+([A-Za-z][A-Za-z0-9 .,'&-]{1,80})\b", re.IGNORECASE),
+                "location",
+                "User lives in {value}.",
+            ),
+            (
+                re.compile(r"\b(?:my\s+company\s+is|i\s+work\s+at|i\s+work\s+for|i\s+helped\s+start)\s+([A-Za-z][A-Za-z0-9 .,'&-]{1,80})\b", re.IGNORECASE),
+                "organization",
+                "User is associated with {value}.",
+            ),
+            (
+                re.compile(r"\b(?:my\s+name\s+is|i\s+am\s+called)\s+([A-Za-z][A-Za-z0-9 .,'&-]{1,60})\b", re.IGNORECASE),
+                "name",
+                "User name is {value}.",
+            ),
+        ]
+        facts: List[Dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for turn in transcript_rows[-self.MODEL_CONTEXT_TURN_LIMIT * 2 :]:
+            if str(turn.get("role") or "").strip().lower() != "user":
+                continue
+            text = str(turn.get("text") or "").strip()
+            if not text:
+                continue
+            for regex, fact_type, template in fact_patterns:
+                match = regex.search(text)
+                if not match:
+                    continue
+                value = self._clean_fact_value(match.group(1))
+                if not value:
+                    continue
+                fact_text = template.format(value=value)
+                key = (fact_type, fact_text.casefold())
+                if key in seen:
+                    continue
+                seen.add(key)
+                facts.append(
+                    {
+                        "type": fact_type,
+                        "fact": self._truncate_text(fact_text, self.MODEL_CONTEXT_SESSION_FACT_CHARS),
+                        "source_text": self._truncate_text(text, self.MODEL_CONTEXT_SESSION_FACT_CHARS),
+                    }
+                )
+                if len(facts) >= self.MODEL_CONTEXT_SESSION_FACT_LIMIT:
+                    return facts
+        return facts
+
     def record_turn(
         self,
         *,
@@ -510,6 +566,8 @@ class ReceptionistContextService:
             " | ".join(recent_turns[-6:]),
             self.MODEL_CONTEXT_SUMMARY_CHARS,
         )
+        session_facts = self._extract_session_facts(transcript_rows)
+        session_facts_text = "\n".join(f"- {fact['fact']}" for fact in session_facts)
         merged = {
             "workspace_id": workspace_id,
             "active_room": active_room,
@@ -518,6 +576,8 @@ class ReceptionistContextService:
             "recent_turns_text": recent_turns,
             "recent_turns": recent_turn_records,
             "conversation_history_text": conversation_history_text,
+            "session_facts": session_facts,
+            "session_facts_text": session_facts_text,
             "room_behavior_memory_refs": self.room_behavior_memory_refs(
                 workspace_id=workspace_id,
                 room_id=active_room,

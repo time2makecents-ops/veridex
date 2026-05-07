@@ -219,6 +219,7 @@ def build_file_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         }
         lines = [f"{item['index']}. {item['description']}" for item in items]
         text = "\n".join(lines) if lines else f"No room behavior memory objects are saved for {room_title}."
+        structured["response_text"] = text
         return {
             "structuredContent": structured,
             "content": [{"type": "text", "text": text}],

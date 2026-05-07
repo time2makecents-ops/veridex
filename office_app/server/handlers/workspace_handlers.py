@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import Any, Dict
 
@@ -104,14 +105,23 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         except (TypeError, ValueError):
             limit = 100
         rows = deps.store.load_transcript(workspace_id, limit=max(1, min(limit, 500)), session_id=session_id)
+        lines = ["Current session thread:"]
+        for row in rows:
+            speaker = str(row.get("speaker") or row.get("role") or "Unknown").strip() or "Unknown"
+            text = re.sub(r"\s+", " ", str(row.get("text") or "").strip())
+            if not text:
+                continue
+            lines.append(f"{speaker}: {text}")
+        response_text = "\n".join(lines) if len(lines) > 1 else "Current session thread is empty."
         return {
             "structuredContent": {
                 "workspace_id": workspace_id,
                 "session_id": session_id,
                 "count": len(rows),
                 "entries": rows,
+                "response_text": response_text,
             },
-            "content": [{"type": "text", "text": f"Loaded {len(rows)} transcript entries."}],
+            "content": [{"type": "text", "text": response_text}],
         }
 
     def handle_commands_list(args: Dict[str, Any]) -> Dict[str, Any]:
