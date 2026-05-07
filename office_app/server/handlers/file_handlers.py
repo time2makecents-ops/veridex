@@ -5,6 +5,7 @@ from typing import Any, Dict
 from fastapi.responses import FileResponse
 
 from office_app.server.artifact_request_helpers import resolve_file_workspace
+from office_app.server.room_router import validate_room
 
 from .dependencies import HandlerDeps
 
@@ -120,6 +121,140 @@ def build_file_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "content": [{"type": "text", "text": f"Updated receptionist context for {workspace_id}."}],
         }
 
+    def handle_room_memory_remember(args: Dict[str, Any]) -> Dict[str, Any]:
+        workspace_id = deps.resolve_workspace_id("office.room_memory_remember", args)
+        instruction = str(args.get("instruction") or args.get("content") or "").strip()
+        if not instruction:
+            raise deps.error_missing_required_field("instruction")
+
+        state = deps.kernel.get_state(workspace_id)
+        room_id = str(args.get("room_id") or state.get("active_room") or "lobby").strip()
+        room = validate_room(room_id)
+        room_id = str(room["id"])
+        room_title = str(room.get("title") or room_id)
+        source_room = str(state.get("active_room") or "lobby")
+        source_persona = str(state.get("active_persona") or "Receptionist")
+        session_id = str(args.get("session_id") or "").strip() or None
+
+        record = deps.archive_service.create_artifact(
+            workspace_id=workspace_id,
+            type="room_behavior_memory",
+            title=f"{room_title} behavior memory",
+            content=instruction,
+            format="text/plain",
+            status="active",
+            created_by="user",
+            metadata={
+                "memory_kind": "room_behavior",
+                "target_room": room_id,
+                "target_room_title": room_title,
+                "source_room": source_room,
+                "source_persona": source_persona,
+                "session_id": session_id,
+            },
+            source_refs=[],
+        )
+        ref_result = deps.receptionist_context_service.remember_room_behavior_ref(
+            workspace_id=workspace_id,
+            room_id=room_id,
+            artifact_id=str(record["artifact_id"]),
+            artifact_workspace_id=workspace_id,
+            preview=instruction,
+        )
+        structured = {
+            "workspace_id": workspace_id,
+            "room_id": room_id,
+            "room_title": room_title,
+            "artifact": record,
+            "room_behavior_memory_refs": ref_result["room_behavior_memory_refs"],
+        }
+        return {
+            "structuredContent": structured,
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"Saved behavior memory for {room_title} in Records Archive as {record['artifact_id']}.",
+                }
+            ],
+        }
+
+    def handle_room_memory_list(args: Dict[str, Any]) -> Dict[str, Any]:
+        workspace_id = deps.resolve_workspace_id("office.room_memory_list", args)
+        state = deps.kernel.get_state(workspace_id)
+        room_id = str(args.get("room_id") or state.get("active_room") or "lobby").strip()
+        room = validate_room(room_id)
+        room_id = str(room["id"])
+        room_title = str(room.get("title") or room_id)
+        refs = deps.receptionist_context_service.room_behavior_memory_refs(
+            workspace_id=workspace_id,
+            room_id=room_id,
+        )
+        items = []
+        for ref in refs:
+            artifact_id = str(ref.get("artifact_id") or "").strip()
+            if not artifact_id:
+                continue
+            artifact_workspace_id = str(ref.get("workspace_id") or workspace_id).strip() or workspace_id
+            try:
+                artifact = deps.archive_service.get_artifact(artifact_workspace_id, artifact_id)
+            except Exception:
+                continue
+            items.append(
+                {
+                    "artifact_id": artifact_id,
+                    "title": artifact.get("title"),
+                    "content": artifact.get("content"),
+                    "description": str(artifact.get("content") or "").strip(),
+                    "metadata": artifact.get("metadata"),
+                    "linked_at": ref.get("linked_at"),
+                }
+            )
+        structured = {
+            "workspace_id": workspace_id,
+            "room_id": room_id,
+            "room_title": room_title,
+            "count": len(items),
+            "items": items,
+        }
+        lines = [f"{idx}. {item['title']} - {item['description']}" for idx, item in enumerate(items, start=1)]
+        text = "\n".join(lines) if lines else f"No room behavior memory objects are saved for {room_title}."
+        return {
+            "structuredContent": structured,
+            "content": [{"type": "text", "text": text}],
+        }
+
+    def handle_room_memory_forget(args: Dict[str, Any]) -> Dict[str, Any]:
+        workspace_id = deps.resolve_workspace_id("office.room_memory_forget", args)
+        state = deps.kernel.get_state(workspace_id)
+        room_id = str(args.get("room_id") or state.get("active_room") or "lobby").strip()
+        if room_id in {"*", "all"}:
+            room_title = "all rooms"
+        else:
+            room = validate_room(room_id)
+            room_id = str(room["id"])
+            room_title = str(room.get("title") or room_id)
+        match_text = str(args.get("match_text") or "").strip()
+        artifact_id = str(args.get("artifact_id") or "").strip() or None
+        result = deps.receptionist_context_service.forget_room_behavior_refs(
+            workspace_id=workspace_id,
+            room_id=room_id,
+            artifact_id=artifact_id,
+            match_text=match_text,
+        )
+        structured = {
+            **result,
+            "room_title": room_title,
+        }
+        return {
+            "structuredContent": structured,
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"Removed {result['removed_count']} behavior memory reference(s) for {structured['room_title']}.",
+                }
+            ],
+        }
+
     return {
         "office.file_upload": handle_file_upload,
         "office.file_list": handle_file_list,
@@ -130,5 +265,8 @@ def build_file_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         "office.private_file_get": handle_private_file_get,
         "office.receptionist_context_get": handle_receptionist_context_get,
         "office.receptionist_context_update": handle_receptionist_context_update,
+        "office.room_memory_remember": handle_room_memory_remember,
+        "office.room_memory_list": handle_room_memory_list,
+        "office.room_memory_forget": handle_room_memory_forget,
         "__file_download_response__": handle_file_download_response,
     }

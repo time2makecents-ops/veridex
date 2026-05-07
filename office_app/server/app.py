@@ -335,6 +335,7 @@ def handle_natural_language_request(
         raise HTTPException(status_code=401, detail="Invalid session")
     request_text = str(payload.text or "").strip()
     ensure_artifact_workspace(workspace_id)
+    user_service.restore_session_room(session_id)
     user_profile = _session_user_profile(session_id)
     current_state = kernel.get_state(workspace_id)
     pending_navigation = pending_room_navigation(current_state)
@@ -903,6 +904,9 @@ def refresh_handler_bindings() -> None:
     global handle_private_file_get
     global handle_receptionist_context_get
     global handle_receptionist_context_update
+    global handle_room_memory_remember
+    global handle_room_memory_list
+    global handle_room_memory_forget
     global handle_ai_generate
     global handle_search_web
     global handle_search_reviews
@@ -976,6 +980,9 @@ def refresh_handler_bindings() -> None:
     handle_private_file_get = file_handlers["office.private_file_get"]
     handle_receptionist_context_get = file_handlers["office.receptionist_context_get"]
     handle_receptionist_context_update = file_handlers["office.receptionist_context_update"]
+    handle_room_memory_remember = file_handlers["office.room_memory_remember"]
+    handle_room_memory_list = file_handlers["office.room_memory_list"]
+    handle_room_memory_forget = file_handlers["office.room_memory_forget"]
 
     handle_ai_generate = ai_handlers["office.ai_generate"]
     handle_search_web = ai_handlers["office.search_web"]
@@ -1024,6 +1031,9 @@ register_tools(
         "office.nancy_workspace_briefing": handle_nancy_workspace_briefing,
         "office.receptionist_context_get": handle_receptionist_context_get,
         "office.receptionist_context_update": handle_receptionist_context_update,
+        "office.room_memory_remember": handle_room_memory_remember,
+        "office.room_memory_list": handle_room_memory_list,
+        "office.room_memory_forget": handle_room_memory_forget,
         "office.file_upload": handle_file_upload,
         "office.file_list": handle_file_list,
         "office.file_get": handle_file_get,

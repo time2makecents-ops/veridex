@@ -212,6 +212,34 @@ class UserServiceTests(unittest.TestCase):
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 
+    def test_restore_session_room_syncs_workspace_state(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_restore_session_room"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            service = UserService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+
+            created = service.onboard_user(name="Mina", pin_code="1144")
+            workspace_id = created["workspace_id"]
+            session_id = created["session_id"]
+            service.remember_session_room(session_id, active_room="sales_department", active_persona="Sales Director")
+            state = kernel.get_state(workspace_id)
+            state["active_room"] = "lobby"
+            state["active_persona"] = "Receptionist"
+            store.save_state(workspace_id, state)
+
+            service.restore_session_room(session_id)
+
+            restored = kernel.get_state(workspace_id)
+            self.assertEqual(restored["active_room"], "sales_department")
+            self.assertEqual(restored["active_persona"], "Sales Director")
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
     def test_activate_workspace_creates_or_restores_session_in_workspace(self) -> None:
         runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_workspace_activate"
         workspaces_dir = runtime_dir / "workspaces"

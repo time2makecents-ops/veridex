@@ -86,9 +86,16 @@ class FakeSearchService:
 
 
 class FakeReceptionistContextService:
-    def __init__(self, *, summary: str = "", recent_turns: Optional[List[str]] = None) -> None:
+    def __init__(
+        self,
+        *,
+        summary: str = "",
+        recent_turns: Optional[List[str]] = None,
+        room_memory_refs: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         self.summary = summary
         self.recent_turns = recent_turns or []
+        self.room_memory_refs = room_memory_refs or []
 
     def build_model_context(self, *, workspace_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         return {
@@ -97,6 +104,7 @@ class FakeReceptionistContextService:
             "session_id": session_id,
             "session_summary_text": self.summary,
             "recent_turns_text": list(self.recent_turns),
+            "room_behavior_memory_refs": list(self.room_memory_refs),
         }
 
 
@@ -147,6 +155,42 @@ class SequenceModelRouter:
             fallback_used=False,
             attempts=[],
         )
+
+
+class CapturingModelRouter:
+    def __init__(self, text: str = "Default model response.") -> None:
+        self.text = text
+        self.contexts: List[Dict[str, Any]] = []
+
+    def generate_response(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        context: Optional[Dict[str, Any]] = None,
+        settings: Optional[Dict[str, Any]] = None,
+        task_type: str = "conversation",
+    ) -> ModelRouteResult:
+        self.contexts.append(dict(context or {}))
+        return ModelRouteResult(
+            provider="gemini",
+            model="gemini-2.5-flash-lite",
+            text=self.text,
+            task_type=task_type,
+            fallback_used=False,
+            attempts=[],
+        )
+
+
+class FakeArchiveService:
+    def get_artifact(self, workspace_id: str, artifact_id: str) -> Dict[str, Any]:
+        return {
+            "artifact_id": artifact_id,
+            "workspace_id": workspace_id,
+            "type": "room_behavior_memory",
+            "content": "Sales questions pertain to Oregon businesses.",
+            "metadata": {"memory_kind": "room_behavior", "target_room": "sales_department"},
+        }
 
 
 class PartialThenFailingModelRouter:
@@ -206,6 +250,7 @@ class AiHandlerTests(unittest.TestCase):
         model_text: Optional[str] = None,
         receptionist_summary: str = "",
         receptionist_recent_turns: Optional[List[str]] = None,
+        receptionist_room_memory_refs: Optional[List[Dict[str, Any]]] = None,
     ) -> HandlerDeps:
         workspace_service = FakeFileService(
             rows=workspace_rows,
@@ -222,6 +267,7 @@ class AiHandlerTests(unittest.TestCase):
             receptionist_context_service=FakeReceptionistContextService(
                 summary=receptionist_summary,
                 recent_turns=receptionist_recent_turns,
+                room_memory_refs=receptionist_room_memory_refs,
             ),
             workspace_file_service=workspace_service,
             private_file_service=private_service,
@@ -357,6 +403,29 @@ class AiHandlerTests(unittest.TestCase):
         )
         text = result["content"][0]["text"]
         self.assertNotIn("Compliance note:", text)
+
+    def test_ai_generate_resolves_room_behavior_memory_refs_into_context(self) -> None:
+        router = CapturingModelRouter()
+        deps = self._deps(
+            [],
+            receptionist_room_memory_refs=[{"workspace_id": "ws_1", "artifact_id": "art_oregon"}],
+        )
+        deps = HandlerDeps(
+            **{
+                **deps.__dict__,
+                "archive_service": FakeArchiveService(),
+                "model_router": router,
+            }
+        )
+        handlers = build_ai_handlers(deps)
+        handlers["office.ai_generate"](
+            {
+                "workspace_id": "ws_1",
+                "user_prompt": "what are the main ways bars increase repeat customers?",
+                "session_id": "sess_1",
+            }
+        )
+        self.assertIn("Sales questions pertain to Oregon businesses.", router.contexts[0]["room_behavior_memory_text"])
 
     def test_ai_generate_ignores_generic_risk_instruction_for_cellphone_plan(self) -> None:
         handlers = build_ai_handlers(

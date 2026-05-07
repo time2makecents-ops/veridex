@@ -67,6 +67,62 @@ class ReceptionistContextServiceTests(unittest.TestCase):
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 
+    def test_room_behavior_memory_refs_are_scoped_to_active_room(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_receptionist_context_memory_test"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-21T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-21T12:00:00Z")
+            kernel.create_workspace("ws_test", "Test")
+            service = ReceptionistContextService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-21T12:00:00Z")
+
+            service.remember_room_behavior_ref(
+                workspace_id="ws_test",
+                room_id="sales_department",
+                artifact_id="art_oregon",
+                artifact_workspace_id="ws_test",
+                preview="Sales questions pertain to Oregon businesses.",
+            )
+
+            kernel.enter_room("ws_test", "sales_department")
+            sales_context = service.build_model_context(workspace_id="ws_test", session_id="sess_alpha")
+            self.assertEqual(sales_context["active_room"], "sales_department")
+            self.assertEqual(sales_context["room_behavior_memory_refs"][0]["artifact_id"], "art_oregon")
+            self.assertIn("Oregon businesses", sales_context["room_behavior_memory_refs"][0]["preview"])
+
+            kernel.enter_room("ws_test", "marketing_room")
+            marketing_context = service.build_model_context(workspace_id="ws_test", session_id="sess_alpha")
+            self.assertEqual(marketing_context["active_room"], "marketing_room")
+            self.assertEqual(marketing_context["room_behavior_memory_refs"], [])
+
+            removed = service.forget_room_behavior_refs(
+                workspace_id="ws_test",
+                room_id="sales_department",
+                match_text="Oregon",
+            )
+            self.assertEqual(removed["removed_count"], 1)
+            self.assertEqual(service.room_behavior_memory_refs(workspace_id="ws_test", room_id="sales_department"), [])
+
+            service.remember_room_behavior_ref(
+                workspace_id="ws_test",
+                room_id="sales_department",
+                artifact_id="art_carnegie",
+                artifact_workspace_id="ws_test",
+                preview="Answer my sales questions from now on with the book How to Win Friends and Influence People in mind.",
+            )
+            removed_current = service.forget_room_behavior_refs(
+                workspace_id="ws_test",
+                room_id="sales_department",
+                match_text="using how to win friends and influence people",
+            )
+            self.assertEqual(removed_current["removed_count"], 1)
+            self.assertEqual(service.room_behavior_memory_refs(workspace_id="ws_test", room_id="sales_department"), [])
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

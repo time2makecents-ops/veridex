@@ -68,6 +68,30 @@ class RequestPipeline:
         r"(?P<name>[A-Za-z0-9_().-]{1,120}\.(?:txt|rtf|pdf|png|jpg|jpeg|webp|gif|bmp|tif|tiff|md|csv|json|xml|html|htm|doc|docx))",
         re.IGNORECASE,
     )
+    ROOM_MEMORY_PATTERNS = (
+        re.compile(r"^(?:i\s+want\s+you\s+to\s+)?(?P<instruction>answer\s+my\s+(?P<domain>[a-z0-9 '&-]{2,40})\s+questions\s+from\s+now\s+on\s+.+)$", re.IGNORECASE),
+        re.compile(r"^(?:i\s+want\s+you\s+to\s+)?remember\s+to\s+(?P<instruction>.+)$", re.IGNORECASE),
+        re.compile(r"^(?:please\s+)?remember\s+(?:in|for)\s+(?P<room>.+?)\s+that\s+(?P<instruction>.+)$", re.IGNORECASE),
+        re.compile(r"^(?:please\s+)?(?:in|for)\s+(?P<room>.+?)[, ]+remember\s+that\s+(?P<instruction>.+)$", re.IGNORECASE),
+        re.compile(r"^(?:please\s+)?remember\s+that\s+(?P<instruction>.+)$", re.IGNORECASE),
+    )
+    ROOM_MEMORY_FORGET_PATTERNS = (
+        re.compile(r"^(?:please\s+)?(?:forget|stop remembering|remove)\s+(?:in|for)\s+(?P<room>.+?)\s+that\s+(?P<match>.+)$", re.IGNORECASE),
+        re.compile(r"^(?:please\s+)?(?:forget|stop remembering|remove)\s+(?P<match>.+?)\s+(?:in|for)\s+(?P<room>.+)$", re.IGNORECASE),
+        re.compile(r"^(?:please\s+)?(?:forget|stop remembering|remove)\s+(?P<match>.+)$", re.IGNORECASE),
+    )
+    ROOM_MEMORY_LIST_HINTS = (
+        "what memory objects do you have saved",
+        "what memory objects are saved",
+        "what memories do you have saved",
+        "what memories are saved",
+        "what do you remember",
+        "what do you remember in",
+        "show memory objects",
+        "list memory objects",
+        "list saved memories",
+        "show saved memories",
+    )
     ROOM_NAVIGATION_PREFIXES = (
         "go to ",
         "go back to ",
@@ -191,6 +215,7 @@ class RequestPipeline:
         "You can only answer with information available in this response. If a tool or missing detail is needed, say so directly."
     )
     MODEL_CONTEXT_RULE = (
+        "Apply active-room behavior memory as durable room-specific instructions when present. "
         "Use the provided session conversation history as the current chat thread. "
         "When the user asks a follow-up, comparison, pronoun-based question, 'what about ...', or 'how about ...', "
         "resolve it against the immediately relevant prior turns instead of treating it as a blank new chat. "
@@ -636,6 +661,30 @@ class RequestPipeline:
         return None
 
     def route_user_request(self, workspace_id: str, request_text: str) -> Dict[str, Any]:
+        room_memory_list_route = self.route_room_memory_list_request(workspace_id, request_text)
+        if room_memory_list_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **room_memory_list_route,
+            }
+
+        room_memory_route = self.route_room_memory_request(workspace_id, request_text)
+        if room_memory_route is not None:
+            if "route_kind" in room_memory_route:
+                return {
+                    "workspace_id": workspace_id,
+                    "request": request_text,
+                    **room_memory_route,
+                }
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **room_memory_route,
+            }
+
         capability_route = self.route_capability_question(workspace_id, request_text)
         if capability_route is not None:
             return capability_route
@@ -756,6 +805,144 @@ class RequestPipeline:
             request_text,
             reason="No explicit tool or room command found. Using the model route.",
         )
+
+    def resolve_room_reference(self, room_text: str) -> Optional[Dict[str, Any]]:
+        normalized = normalize_room_text(room_text)
+        if not normalized:
+            return None
+
+        for room in rooms_payload():
+            room_id = str(room.get("id") or "").strip()
+            title = str(room.get("title") or room_id).strip()
+            aliases = {
+                normalize_room_text(room_id),
+                normalize_room_text(title),
+                normalize_room_text(title.replace("&", "and")),
+                normalize_room_text(title.replace("Department", "").replace("department", "")),
+                normalize_room_text(room_id.replace("_department", "").replace("_room", "")),
+            }
+            if normalized in aliases:
+                return room
+
+        route = self.recommend_room(room_text)
+        if route.get("matched"):
+            return validate_room(str(route["room_id"]))
+        return None
+
+    def route_room_memory_list_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip().lower())
+        if not text:
+            return None
+        if not any(hint in text for hint in self.ROOM_MEMORY_LIST_HINTS):
+            return None
+        ctx = self.current_context(workspace_id)
+        room_id = str(ctx.get("active_room") or "lobby")
+        room = validate_room(room_id)
+        return {
+            "capability": "room.memory.list",
+            "tool": "office.room_memory_list",
+            "arguments": {
+                "workspace_id": workspace_id,
+                "room_id": str(room["id"]),
+            },
+            "reason": f"Matched a room behavior memory list request for {room['title']}.",
+        }
+
+    def route_room_memory_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip())
+        if not text:
+            return None
+        for pattern in self.ROOM_MEMORY_FORGET_PATTERNS:
+            match = pattern.match(text)
+            if not match:
+                continue
+            match_text = re.sub(r"\s+", " ", str(match.groupdict().get("match") or "").strip(" ."))
+            if not match_text or normalize_room_text(match_text) in {"memory", "behavior", "behaviour", "that", "it", "this"}:
+                return {
+                    "route_kind": "clarify",
+                    "capability": "clarification.room_memory",
+                    "tool": "office.capability_info",
+                    "arguments": {
+                        "response_text": "Which remembered behavior should I remove from this room?",
+                        "match_text": match_text,
+                    },
+                    "reason": "Room memory removal request did not identify what to forget.",
+                }
+            room_text = str(match.groupdict().get("room") or "").strip(" .")
+            room_id = ""
+            if room_text:
+                room = self.resolve_room_reference(room_text)
+                if room is None:
+                    return {
+                        "route_kind": "clarify",
+                        "capability": "clarification.room_memory",
+                        "tool": "office.capability_info",
+                        "arguments": {
+                            "response_text": f"I can remove room behavior memory, but I could not identify the room: {room_text}.",
+                            "room_text": room_text,
+                        },
+                        "reason": "Room memory removal request included an unknown room reference.",
+                    }
+                room_id = str(room["id"])
+            else:
+                ctx = self.current_context(workspace_id)
+                room_id = str(ctx.get("active_room") or "lobby")
+            room = validate_room(room_id)
+            return {
+                "capability": "room.memory.forget",
+                "tool": "office.room_memory_forget",
+                "arguments": {
+                    "workspace_id": workspace_id,
+                    "room_id": str(room["id"]),
+                    "match_text": match_text,
+                },
+                "reason": f"Matched a room behavior memory removal request for {room['title']}.",
+            }
+
+        if not re.search(r"\b(remember|from now on)\b", text, re.IGNORECASE):
+            return None
+        for pattern in self.ROOM_MEMORY_PATTERNS:
+            match = pattern.match(text)
+            if not match:
+                continue
+            instruction = re.sub(r"\s+", " ", str(match.groupdict().get("instruction") or "").strip(" ."))
+            if not instruction:
+                continue
+            room_id = ""
+            room_text = str(match.groupdict().get("room") or "").strip(" .")
+            if not room_text:
+                domain = str(match.groupdict().get("domain") or "").strip(" .")
+                if domain:
+                    room_text = domain
+            if room_text:
+                room = self.resolve_room_reference(room_text)
+                if room is None:
+                    return {
+                        "route_kind": "clarify",
+                        "capability": "clarification.room_memory",
+                        "tool": "office.capability_info",
+                        "arguments": {
+                            "response_text": f"I can store that as room behavior memory, but I could not identify the room: {room_text}.",
+                            "room_text": room_text,
+                        },
+                        "reason": "Room memory request included an unknown room reference.",
+                    }
+                room_id = str(room["id"])
+            else:
+                ctx = self.current_context(workspace_id)
+                room_id = str(ctx.get("active_room") or "lobby")
+            room = validate_room(room_id)
+            return {
+                "capability": "room.memory.remember",
+                "tool": "office.room_memory_remember",
+                "arguments": {
+                    "workspace_id": workspace_id,
+                    "room_id": str(room["id"]),
+                    "instruction": instruction,
+                },
+                "reason": f"Matched a room behavior memory request for {room['title']}.",
+            }
+        return None
 
     def model_route(self, workspace_id: str, request_text: str, *, reason: str, apply_conversation_plan: bool = True) -> Dict[str, Any]:
         ctx = self.current_context(workspace_id)

@@ -114,7 +114,12 @@ class BaseProvider(ABC):
 
         lines: list[str] = []
         for key in sorted(context.keys()):
-            if key == "recent_turns":
+            if key in {"recent_turns", "room_behavior_memory_refs"}:
+                continue
+            if key == "room_behavior_memory_text":
+                memory_text = _scalar_text(context[key]).strip()
+                if memory_text:
+                    lines.append(f"Active room behavior memory:\n{memory_text[:3000]}")
                 continue
             if key == "conversation_history_text":
                 history_text = _scalar_text(context[key]).strip()

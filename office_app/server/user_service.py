@@ -218,6 +218,15 @@ class UserService:
         self.kernel.store.save_state(workspace_id, state)
         self.kernel.store.touch_workspace(workspace_id, active_room)
 
+    def restore_session_room(self, session_id: Optional[str]) -> None:
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            return
+        session = self.sessions.fetch_session(session_id)
+        if session is None:
+            return
+        self._restore_session_room(session)
+
     def remember_session_room(self, session_id: Optional[str], *, active_room: str, active_persona: str) -> None:
         session_id = str(session_id or "").strip()
         if not session_id:

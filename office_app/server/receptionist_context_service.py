@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -171,6 +172,8 @@ class ReceptionistContextStore:
 
 
 class ReceptionistContextService:
+    ROOM_BEHAVIOR_MEMORY_REFS_KEY = "room_behavior_memory_refs"
+    MAX_ROOM_BEHAVIOR_NOTES = 20
     MODEL_CONTEXT_TURN_LIMIT = 12
     MODEL_CONTEXT_TURN_CHARS = 700
     MODEL_CONTEXT_HISTORY_CHARS = 5000
@@ -262,7 +265,7 @@ class ReceptionistContextService:
         current = self._ensure_context(workspace_id)
         merged = dict(current)
         for key, value in updates.items():
-            if key in {"room_directory", "persona_directory", "receptionist_script", "policy_summary", "known_user_profile"}:
+            if value is not None and key in {"room_directory", "persona_directory", "receptionist_script", "policy_summary", "known_user_profile"}:
                 merged[key] = value
         payload = {
             "workspace_id": workspace_id,
@@ -277,6 +280,157 @@ class ReceptionistContextService:
             "updated_at": self.utc_now(),
         }
         return self.store.upsert_context(payload)
+
+    def remember_room_behavior_ref(
+        self,
+        *,
+        workspace_id: str,
+        room_id: str,
+        artifact_id: str,
+        artifact_workspace_id: Optional[str] = None,
+        preview: str = "",
+    ) -> Dict[str, Any]:
+        room = str(room_id or "").strip()
+        artifact = str(artifact_id or "").strip()
+        if not room:
+            raise ValueError("room_id is required")
+        if not artifact:
+            raise ValueError("artifact_id is required")
+
+        current = self._ensure_context(workspace_id)
+        profile = current.get("known_user_profile")
+        profile = dict(profile) if isinstance(profile, dict) else {}
+        refs_by_room = profile.get(self.ROOM_BEHAVIOR_MEMORY_REFS_KEY)
+        refs_by_room = dict(refs_by_room) if isinstance(refs_by_room, dict) else {}
+        refs = refs_by_room.get(room)
+        refs = list(refs) if isinstance(refs, list) else []
+
+        entry = {
+            "artifact_id": artifact,
+            "workspace_id": str(artifact_workspace_id or workspace_id).strip() or workspace_id,
+            "linked_at": self.utc_now(),
+        }
+        preview_text = self._truncate_text(preview, 240)
+        if preview_text:
+            entry["preview"] = preview_text
+
+        refs = [
+            ref
+            for ref in refs
+            if not (
+                isinstance(ref, dict)
+                and str(ref.get("artifact_id") or "").strip() == artifact
+                and str(ref.get("workspace_id") or workspace_id).strip() == entry["workspace_id"]
+            )
+        ]
+        refs.append(entry)
+        refs = refs[-self.MAX_ROOM_BEHAVIOR_NOTES :]
+        refs_by_room[room] = refs
+        profile[self.ROOM_BEHAVIOR_MEMORY_REFS_KEY] = refs_by_room
+        self.update_context(workspace_id, {"known_user_profile": profile})
+        return {
+            "workspace_id": workspace_id,
+            "room_id": room,
+            "room_behavior_memory_refs": refs,
+        }
+
+    def room_behavior_memory_refs(self, *, workspace_id: str, room_id: str) -> List[Dict[str, Any]]:
+        current = self._ensure_context(workspace_id)
+        profile = current.get("known_user_profile")
+        profile = profile if isinstance(profile, dict) else {}
+        refs_by_room = profile.get(self.ROOM_BEHAVIOR_MEMORY_REFS_KEY)
+        refs_by_room = refs_by_room if isinstance(refs_by_room, dict) else {}
+        refs = refs_by_room.get(str(room_id or "").strip())
+        return [dict(ref) for ref in refs if isinstance(ref, dict)] if isinstance(refs, list) else []
+
+    def forget_room_behavior_refs(
+        self,
+        *,
+        workspace_id: str,
+        room_id: str,
+        artifact_id: Optional[str] = None,
+        match_text: str = "",
+    ) -> Dict[str, Any]:
+        current = self._ensure_context(workspace_id)
+        profile = current.get("known_user_profile")
+        profile = dict(profile) if isinstance(profile, dict) else {}
+        refs_by_room = profile.get(self.ROOM_BEHAVIOR_MEMORY_REFS_KEY)
+        refs_by_room = dict(refs_by_room) if isinstance(refs_by_room, dict) else {}
+        room = str(room_id or "").strip()
+        needle = str(match_text or "").strip().casefold()
+        artifact = str(artifact_id or "").strip()
+
+        target_rooms = list(refs_by_room.keys()) if room in {"*", "all"} else [room]
+        kept_for_room: List[Dict[str, Any]] = []
+        removed: List[Dict[str, Any]] = []
+        for target_room in target_rooms:
+            refs = refs_by_room.get(target_room)
+            refs = list(refs) if isinstance(refs, list) else []
+            kept: List[Dict[str, Any]] = []
+            for ref in refs:
+                if not isinstance(ref, dict):
+                    continue
+                ref_artifact = str(ref.get("artifact_id") or "").strip()
+                preview = str(ref.get("preview") or "")
+                should_remove = bool(
+                    (artifact and ref_artifact == artifact)
+                    or (needle and self._memory_text_matches(needle, preview))
+                    or (not artifact and not needle)
+                )
+                if should_remove:
+                    removed_ref = dict(ref)
+                    removed_ref["room_id"] = target_room
+                    removed.append(removed_ref)
+                else:
+                    kept.append(dict(ref))
+            refs_by_room[target_room] = kept
+            if target_room == room:
+                kept_for_room = kept
+
+        profile[self.ROOM_BEHAVIOR_MEMORY_REFS_KEY] = refs_by_room
+        self.update_context(workspace_id, {"known_user_profile": profile})
+        return {
+            "workspace_id": workspace_id,
+            "room_id": room,
+            "removed_count": len(removed),
+            "removed_refs": removed,
+            "room_behavior_memory_refs": kept_for_room if room not in {"*", "all"} else [],
+        }
+
+    @staticmethod
+    def _memory_text_matches(needle: str, haystack: str) -> bool:
+        def normalize(value: str) -> str:
+            return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.casefold())).strip()
+
+        normalized_needle = normalize(needle)
+        normalized_haystack = normalize(haystack)
+        if not normalized_needle:
+            return False
+        if normalized_needle in normalized_haystack:
+            return True
+        stopwords = {
+            "answer",
+            "book",
+            "from",
+            "in",
+            "mind",
+            "my",
+            "now",
+            "on",
+            "questions",
+            "that",
+            "the",
+            "to",
+            "use",
+            "using",
+            "with",
+            "you",
+        }
+        tokens = [token for token in normalized_needle.split() if token not in stopwords]
+        if not tokens:
+            return False
+        haystack_tokens = set(normalized_haystack.split())
+        return all(token in haystack_tokens for token in tokens)
 
     @staticmethod
     def _trim_turns(turns: List[Dict[str, Any]], max_turns: int = 4) -> List[Dict[str, Any]]:
@@ -317,6 +471,7 @@ class ReceptionistContextService:
     ) -> Dict[str, Any]:
         self._ensure_context(workspace_id)
         state = self.kernel.get_state(workspace_id)
+        active_room = str(state.get("active_room") or "lobby")
         transcript_rows: List[Dict[str, Any]] = []
         if session_id:
             transcript_rows = self.kernel.store.load_transcript(
@@ -354,12 +509,16 @@ class ReceptionistContextService:
         )
         merged = {
             "workspace_id": workspace_id,
-            "active_room": state.get("active_room", "lobby"),
+            "active_room": active_room,
             "active_persona": state.get("active_persona", "Receptionist"),
             "session_summary_text": session_summary_text,
             "recent_turns_text": recent_turns,
             "recent_turns": recent_turn_records,
             "conversation_history_text": conversation_history_text,
+            "room_behavior_memory_refs": self.room_behavior_memory_refs(
+                workspace_id=workspace_id,
+                room_id=active_room,
+            ),
             "session_id": session_id,
         }
         return merged

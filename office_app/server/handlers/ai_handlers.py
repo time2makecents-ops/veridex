@@ -44,6 +44,9 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
 
     def _combined_context_text(context: Dict[str, Any]) -> str:
         parts: List[str] = []
+        room_memory = str(context.get("room_behavior_memory_text") or "").strip()
+        if room_memory:
+            parts.append(room_memory)
         summary = str(context.get("session_summary_text") or "").strip()
         if summary:
             parts.append(summary)
@@ -63,6 +66,32 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         text = GENERIC_RISK_INSTRUCTION_RE.sub("", text)
         text = GENERIC_RISK_PHRASE_RE.sub("", text)
         return re.sub(r"\s+", " ", text).strip()
+
+    def _room_behavior_memory_text(*, workspace_id: str, refs: Any) -> str:
+        if deps.archive_service is None or not isinstance(refs, list):
+            return ""
+        lines: List[str] = []
+        seen: set[Tuple[str, str]] = set()
+        for ref in refs[-20:]:
+            if not isinstance(ref, dict):
+                continue
+            artifact_id = str(ref.get("artifact_id") or "").strip()
+            artifact_workspace_id = str(ref.get("workspace_id") or workspace_id).strip() or workspace_id
+            key = (artifact_workspace_id, artifact_id)
+            if not artifact_id or key in seen:
+                continue
+            seen.add(key)
+            try:
+                record = deps.archive_service.get_artifact(artifact_workspace_id, artifact_id)
+            except Exception:
+                continue
+            metadata = record.get("metadata")
+            if isinstance(metadata, dict) and str(metadata.get("memory_kind") or "") != "room_behavior":
+                continue
+            content = re.sub(r"\s+", " ", str(record.get("content") or "").strip())
+            if content:
+                lines.append(f"- {content}")
+        return "\n".join(lines)
 
     def _risk_caution_note(*, user_prompt: str, context: Dict[str, Any], response_text: str) -> str:
         if not response_text.strip():
@@ -225,6 +254,7 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                 f"The active persona is {state.get('active_persona', 'Receptionist')}. "
                 "If the user asks about uploading or downloading files or images, answer with the Veridex file workflow and do not redirect them to IT unless they explicitly ask for troubleshooting. "
                 "Never expose raw JSON, internal tool names, hidden schemas, or backend metadata in your response. "
+                "Apply active-room behavior memory as durable room-specific instructions when present. "
                 "Use the provided session conversation history as the current chat thread. When the user asks a follow-up, comparison, pronoun-based question, 'what about ...', or 'how about ...', resolve it against the immediately relevant prior turns instead of treating it as a blank new chat. For broad help or capability questions like 'what can you help me with here?', answer from the active room and persona instead of continuing the previous topic. Do not ask for details already present in recent context. If the user asks a reflective follow-up like 'how did you come to that conclusion?' or 'what makes you say that?', explain the immediately previous answer instead of asking the user for more context. "
                 "Do not claim you are searching, processing, working in the background, or that you will send results later. You can only answer with information available in this response. If a tool or missing detail is needed, say so directly. "
                 "Respond clearly, concisely, and stay within Veridex governance."
@@ -251,7 +281,12 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "recent_turns_text": receptionist_context.get("recent_turns_text", []),
             "recent_turns": receptionist_context.get("recent_turns", []),
             "conversation_history_text": receptionist_context.get("conversation_history_text", ""),
+            "room_behavior_memory_refs": receptionist_context.get("room_behavior_memory_refs", []),
         }
+        context["room_behavior_memory_text"] = _room_behavior_memory_text(
+            workspace_id=workspace_id,
+            refs=context.get("room_behavior_memory_refs"),
+        )
 
         settings = args.get("settings")
         if not isinstance(settings, dict):

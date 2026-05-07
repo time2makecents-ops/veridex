@@ -260,6 +260,9 @@ class SessionRoutingTests(unittest.TestCase):
                     "office.nancy_artifacts_list": app_module.handle_nancy_artifacts_list,
                     "office.nancy_artifact_open": app_module.handle_nancy_artifact_open,
                     "office.nancy_workspace_briefing": app_module.handle_nancy_workspace_briefing,
+                    "office.room_memory_remember": app_module.handle_room_memory_remember,
+                    "office.room_memory_list": app_module.handle_room_memory_list,
+                    "office.room_memory_forget": app_module.handle_room_memory_forget,
                 },
             )
             temp_pipeline.tool_names = temp_router.tool_names()
@@ -303,6 +306,19 @@ class SessionRoutingTests(unittest.TestCase):
                     if row.get("role") == "assistant" and "Across Veridex" in str(row.get("text") or "")
                 ]
             )
+
+            temp_user.remember_session_room(session_id, active_room="sales_department", active_persona="Sales Director")
+            stale_state = temp_kernel.get_state(workspace_id)
+            stale_state["active_room"] = "lobby"
+            stale_state["active_persona"] = "Receptionist"
+            temp_store.save_state(workspace_id, stale_state)
+
+            memory_response = handle_natural_language_request(
+                NaturalLanguageRequest(text="remember that Sales questions pertain to Oregon businesses.", session_id=session_id)
+            )
+            memory_payload = memory_response["structuredContent"]
+            self.assertEqual(memory_payload["room_id"], "sales_department")
+            self.assertEqual(memory_payload["artifact"]["metadata"]["target_room"], "sales_department")
         finally:
             app_module.store = original["store"]
             app_module.kernel = original["kernel"]

@@ -932,6 +932,114 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "ai.respond")
         self.assertIn("answer from the active room and persona", routed["arguments"]["system_prompt"])
         self.assertIn("Do not deny these Veridex capabilities", routed["arguments"]["system_prompt"])
+        self.assertIn("Apply active-room behavior memory", routed["arguments"]["system_prompt"])
+
+    def test_remember_in_sales_routes_to_room_memory_tool(self) -> None:
+        routed = self.pipeline.route_user_request(
+            "default",
+            "remember in sales that the sales questions I'm asking pertain to businesses in Oregon",
+        )
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "room.memory.remember")
+        self.assertEqual(routed["tool"], "office.room_memory_remember")
+        self.assertEqual(routed["arguments"]["room_id"], "sales_department")
+        self.assertEqual(
+            routed["arguments"]["instruction"],
+            "the sales questions I'm asking pertain to businesses in Oregon",
+        )
+
+    def test_remember_that_defaults_to_active_room(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="sales_department", active_persona="Sales Director"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request(
+            "default",
+            "remember that sales questions pertain to Oregon businesses",
+        )
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "room.memory.remember")
+        self.assertEqual(routed["arguments"]["room_id"], "sales_department")
+
+    def test_from_now_on_sales_instruction_routes_to_room_memory_tool(self) -> None:
+        routed = self.pipeline.route_user_request(
+            "default",
+            "i want you to answer my sales questions from now on with the book how to win friends and influence people in mind",
+        )
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "room.memory.remember")
+        self.assertEqual(routed["tool"], "office.room_memory_remember")
+        self.assertEqual(routed["arguments"]["room_id"], "sales_department")
+        self.assertIn("how to win friends", routed["arguments"]["instruction"])
+
+    def test_remember_to_filter_advice_routes_to_room_memory_tool(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="sales_department", active_persona="Sales Director"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request(
+            "default",
+            "i want you to remember to filter your advice with the book 48 laws of power in mind",
+        )
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "room.memory.remember")
+        self.assertEqual(routed["tool"], "office.room_memory_remember")
+        self.assertEqual(routed["arguments"]["room_id"], "sales_department")
+        self.assertIn("48 laws of power", routed["arguments"]["instruction"])
+
+    def test_forget_sales_behavior_routes_to_room_memory_forget(self) -> None:
+        routed = self.pipeline.route_user_request(
+            "default",
+            "forget in sales that how to win friends",
+        )
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "room.memory.forget")
+        self.assertEqual(routed["tool"], "office.room_memory_forget")
+        self.assertEqual(routed["arguments"]["room_id"], "sales_department")
+        self.assertEqual(routed["arguments"]["match_text"], "how to win friends")
+
+    def test_forget_without_room_uses_current_room(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="sales_department", active_persona="Sales Director"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request(
+            "default",
+            "forget using how to win friends and influence people",
+        )
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "room.memory.forget")
+        self.assertEqual(routed["arguments"]["room_id"], "sales_department")
+        self.assertEqual(routed["arguments"]["match_text"], "using how to win friends and influence people")
+
+    def test_ambiguous_forget_memory_asks_for_clarification(self) -> None:
+        routed = self.pipeline.route_user_request("default", "forget that")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "clarification.room_memory")
+        self.assertIn("Which remembered behavior", routed["arguments"]["response_text"])
+
+    def test_memory_objects_question_routes_to_room_memory_list(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="sales_department", active_persona="Sales Director"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "what memory objects do you have saved?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "room.memory.list")
+        self.assertEqual(routed["tool"], "office.room_memory_list")
+        self.assertEqual(routed["arguments"]["room_id"], "sales_department")
 
     def test_read_file_alone_stays_in_model_route(self) -> None:
         routed = self.pipeline.route_user_request("default", "read file")
