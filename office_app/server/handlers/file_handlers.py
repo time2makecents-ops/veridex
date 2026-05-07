@@ -201,6 +201,7 @@ def build_file_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                 continue
             items.append(
                 {
+                    "index": len(items) + 1,
                     "artifact_id": artifact_id,
                     "title": artifact.get("title"),
                     "content": artifact.get("content"),
@@ -216,7 +217,7 @@ def build_file_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "count": len(items),
             "items": items,
         }
-        lines = [f"{idx}. {item['title']} - {item['description']}" for idx, item in enumerate(items, start=1)]
+        lines = [f"{item['index']}. {item['description']}" for item in items]
         text = "\n".join(lines) if lines else f"No room behavior memory objects are saved for {room_title}."
         return {
             "structuredContent": structured,
@@ -235,10 +236,16 @@ def build_file_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             room_title = str(room.get("title") or room_id)
         match_text = str(args.get("match_text") or "").strip()
         artifact_id = str(args.get("artifact_id") or "").strip() or None
+        raw_memory_index = args.get("memory_index")
+        try:
+            memory_index = int(raw_memory_index) if raw_memory_index is not None else None
+        except (TypeError, ValueError):
+            memory_index = None
         result = deps.receptionist_context_service.forget_room_behavior_refs(
             workspace_id=workspace_id,
             room_id=room_id,
             artifact_id=artifact_id,
+            memory_index=memory_index,
             match_text=match_text,
         )
         structured = {

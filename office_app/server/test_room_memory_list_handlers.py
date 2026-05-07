@@ -61,9 +61,10 @@ class RoomMemoryListHandlerTests(unittest.TestCase):
         handlers = build_file_handlers(deps)
         result = handlers["office.room_memory_list"]({"workspace_id": "ws_1", "room_id": "sales_department"})
         text = result["content"][0]["text"]
-        self.assertIn("Sales guidance", text)
+        self.assertTrue(text.startswith("1. "))
         self.assertIn("How to Win Friends and Influence People", text)
         self.assertEqual(archive.requested_workspace_id, "ws_archive")
+        self.assertEqual(result["structuredContent"]["items"][0]["index"], 1)
 
 
 if __name__ == "__main__":

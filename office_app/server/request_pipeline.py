@@ -80,10 +80,44 @@ class RequestPipeline:
         re.compile(r"^(?:please\s+)?(?:forget|stop remembering|remove)\s+(?P<match>.+?)\s+(?:in|for)\s+(?P<room>.+)$", re.IGNORECASE),
         re.compile(r"^(?:please\s+)?(?:forget|stop remembering|remove)\s+(?P<match>.+)$", re.IGNORECASE),
     )
+    ROOM_MEMORY_INDEX_WORDS = {
+        "1": 1,
+        "#1": 1,
+        "first": 1,
+        "first one": 1,
+        "the first": 1,
+        "the first one": 1,
+        "2": 2,
+        "#2": 2,
+        "second": 2,
+        "second one": 2,
+        "the second": 2,
+        "the second one": 2,
+        "3": 3,
+        "#3": 3,
+        "third": 3,
+        "third one": 3,
+        "the third": 3,
+        "the third one": 3,
+        "4": 4,
+        "#4": 4,
+        "fourth": 4,
+        "fourth one": 4,
+        "the fourth": 4,
+        "the fourth one": 4,
+        "5": 5,
+        "#5": 5,
+        "fifth": 5,
+        "fifth one": 5,
+        "the fifth": 5,
+        "the fifth one": 5,
+    }
     ROOM_MEMORY_LIST_HINTS = (
         "what memory objects do you have saved",
+        "what memory objects do i have saved",
         "what memory objects are saved",
         "what memories do you have saved",
+        "what memories do i have saved",
         "what memories are saved",
         "what do you remember",
         "what do you remember in",
@@ -857,7 +891,8 @@ class RequestPipeline:
             if not match:
                 continue
             match_text = re.sub(r"\s+", " ", str(match.groupdict().get("match") or "").strip(" ."))
-            if not match_text or normalize_room_text(match_text) in {"memory", "behavior", "behaviour", "that", "it", "this"}:
+            memory_index = self.ROOM_MEMORY_INDEX_WORDS.get(normalize_room_text(match_text))
+            if not match_text or (memory_index is None and normalize_room_text(match_text) in {"memory", "behavior", "behaviour", "that", "it", "this"}):
                 return {
                     "route_kind": "clarify",
                     "capability": "clarification.room_memory",
@@ -873,6 +908,8 @@ class RequestPipeline:
             if room_text:
                 room = self.resolve_room_reference(room_text)
                 if room is None:
+                    if normalize_room_text(room_text) == "mind":
+                        continue
                     return {
                         "route_kind": "clarify",
                         "capability": "clarification.room_memory",
@@ -895,6 +932,7 @@ class RequestPipeline:
                     "workspace_id": workspace_id,
                     "room_id": str(room["id"]),
                     "match_text": match_text,
+                    "memory_index": memory_index,
                 },
                 "reason": f"Matched a room behavior memory removal request for {room['title']}.",
             }

@@ -1021,6 +1021,37 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["arguments"]["room_id"], "sales_department")
         self.assertEqual(routed["arguments"]["match_text"], "using how to win friends and influence people")
 
+    def test_forget_first_one_routes_to_numbered_room_memory_forget(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="sales_department", active_persona="Sales Director"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "forget the first one")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "room.memory.forget")
+        self.assertEqual(routed["arguments"]["room_id"], "sales_department")
+        self.assertEqual(routed["arguments"]["memory_index"], 1)
+
+    def test_forget_phrase_ending_in_mind_does_not_treat_mind_as_room(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="sales_department", active_persona="Sales Director"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request(
+            "default",
+            "forget answer my sales questions from now on with the book how to win friends and influence people in mind",
+        )
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "room.memory.forget")
+        self.assertEqual(routed["arguments"]["room_id"], "sales_department")
+        self.assertIn("in mind", routed["arguments"]["match_text"])
+
     def test_ambiguous_forget_memory_asks_for_clarification(self) -> None:
         routed = self.pipeline.route_user_request("default", "forget that")
         self.assertEqual(routed["route_kind"], "clarify")
@@ -1035,11 +1066,12 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
             tool_names=[],
             app_version="1.3.0",
         )
-        routed = pipeline.route_user_request("default", "what memory objects do you have saved?")
-        self.assertEqual(routed["route_kind"], "tool")
-        self.assertEqual(routed["capability"], "room.memory.list")
-        self.assertEqual(routed["tool"], "office.room_memory_list")
-        self.assertEqual(routed["arguments"]["room_id"], "sales_department")
+        for text in ("what memory objects do you have saved?", "what memory objects do i have saved?"):
+            routed = pipeline.route_user_request("default", text)
+            self.assertEqual(routed["route_kind"], "tool")
+            self.assertEqual(routed["capability"], "room.memory.list")
+            self.assertEqual(routed["tool"], "office.room_memory_list")
+            self.assertEqual(routed["arguments"]["room_id"], "sales_department")
 
     def test_read_file_alone_stays_in_model_route(self) -> None:
         routed = self.pipeline.route_user_request("default", "read file")

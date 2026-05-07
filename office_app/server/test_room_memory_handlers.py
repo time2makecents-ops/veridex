@@ -139,8 +139,10 @@ class RoomMemoryHandlerTests(unittest.TestCase):
                 "workspace_id": "ws_1",
                 "room_id": "*",
                 "match_text": "Oregon",
+                "memory_index": 1,
             }
         )
+        self.assertEqual(context.linked["memory_index"], 1)
         self.assertEqual(result["structuredContent"]["removed_count"], 1)
         self.assertEqual(result["structuredContent"]["room_title"], "all rooms")
         self.assertIn("Removed 1", result["content"][0]["text"])

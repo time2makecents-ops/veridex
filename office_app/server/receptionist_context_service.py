@@ -349,6 +349,7 @@ class ReceptionistContextService:
         workspace_id: str,
         room_id: str,
         artifact_id: Optional[str] = None,
+        memory_index: Optional[int] = None,
         match_text: str = "",
     ) -> Dict[str, Any]:
         current = self._ensure_context(workspace_id)
@@ -359,6 +360,7 @@ class ReceptionistContextService:
         room = str(room_id or "").strip()
         needle = str(match_text or "").strip().casefold()
         artifact = str(artifact_id or "").strip()
+        index = memory_index if isinstance(memory_index, int) and memory_index > 0 else None
 
         target_rooms = list(refs_by_room.keys()) if room in {"*", "all"} else [room]
         kept_for_room: List[Dict[str, Any]] = []
@@ -367,15 +369,16 @@ class ReceptionistContextService:
             refs = refs_by_room.get(target_room)
             refs = list(refs) if isinstance(refs, list) else []
             kept: List[Dict[str, Any]] = []
-            for ref in refs:
+            for ref_index, ref in enumerate(refs, start=1):
                 if not isinstance(ref, dict):
                     continue
                 ref_artifact = str(ref.get("artifact_id") or "").strip()
                 preview = str(ref.get("preview") or "")
                 should_remove = bool(
-                    (artifact and ref_artifact == artifact)
+                    (index is not None and target_room == room and ref_index == index)
+                    or (artifact and ref_artifact == artifact)
                     or (needle and self._memory_text_matches(needle, preview))
-                    or (not artifact and not needle)
+                    or (not artifact and index is None and not needle)
                 )
                 if should_remove:
                     removed_ref = dict(ref)

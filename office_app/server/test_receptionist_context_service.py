@@ -120,6 +120,30 @@ class ReceptionistContextServiceTests(unittest.TestCase):
             )
             self.assertEqual(removed_current["removed_count"], 1)
             self.assertEqual(service.room_behavior_memory_refs(workspace_id="ws_test", room_id="sales_department"), [])
+
+            service.remember_room_behavior_ref(
+                workspace_id="ws_test",
+                room_id="sales_department",
+                artifact_id="art_first",
+                artifact_workspace_id="ws_test",
+                preview="First memory.",
+            )
+            service.remember_room_behavior_ref(
+                workspace_id="ws_test",
+                room_id="sales_department",
+                artifact_id="art_second",
+                artifact_workspace_id="ws_test",
+                preview="Second memory.",
+            )
+            removed_by_index = service.forget_room_behavior_refs(
+                workspace_id="ws_test",
+                room_id="sales_department",
+                memory_index=1,
+            )
+            remaining = service.room_behavior_memory_refs(workspace_id="ws_test", room_id="sales_department")
+            self.assertEqual(removed_by_index["removed_count"], 1)
+            self.assertEqual(removed_by_index["removed_refs"][0]["artifact_id"], "art_first")
+            self.assertEqual(remaining[0]["artifact_id"], "art_second")
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 
