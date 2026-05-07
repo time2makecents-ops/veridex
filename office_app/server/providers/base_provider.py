@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
@@ -30,6 +31,7 @@ class ProviderResult:
 
 class BaseProvider(ABC):
     provider_name: str = "provider"
+    default_user_agent: str = "Veridex/0.1 (+https://veridex.local)"
 
     def __init__(self, *, api_key: Optional[str], model_name: str, timeout_seconds: int = 30):
         self.api_key = (api_key or "").strip()
@@ -50,16 +52,43 @@ class BaseProvider(ABC):
     ) -> ProviderResult:
         raise NotImplementedError
 
-    def _post_json(self, url: str, payload: Dict[str, Any], headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-        body = json.dumps(payload).encode("utf-8")
+    @staticmethod
+    def _has_header(headers: Dict[str, str], name: str) -> bool:
+        target = name.casefold()
+        return any(str(key).casefold() == target for key in headers.keys())
+
+    @staticmethod
+    def _sanitize_error_detail(detail: str) -> str:
+        text = str(detail or "").strip()
+        if not text:
+            return ""
+        text = re.sub(r"(Bearer\s+)[A-Za-z0-9._\-]+", r"\1***", text, flags=re.IGNORECASE)
+        text = re.sub(r"([?&]api[_-]?key=)[^&\s]+", r"\1***", text, flags=re.IGNORECASE)
+        text = re.sub(r"(api[_-]?key=)[^&\s\"'}]+", r"\1***", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:2000]
+
+    def _request_json(
+        self,
+        url: str,
+        *,
+        method: str,
+        payload: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        merged_headers = dict(headers or {})
+        if not self._has_header(merged_headers, "User-Agent"):
+            merged_headers["User-Agent"] = self.default_user_agent
+        body = None
+        if payload is not None:
+            if not self._has_header(merged_headers, "Content-Type"):
+                merged_headers["Content-Type"] = "application/json"
+            body = json.dumps(payload).encode("utf-8")
         req = urllib_request.Request(
             url,
             data=body,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                **(headers or {}),
-            },
+            method=method,
+            headers=merged_headers,
         )
 
         try:
@@ -67,10 +96,21 @@ class BaseProvider(ABC):
                 raw = response.read().decode("utf-8")
                 return json.loads(raw) if raw else {}
         except urllib_error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise ProviderRequestError(f"{self.provider_name} request failed: {exc.code} {detail}") from exc
+            detail = self._sanitize_error_detail(exc.read().decode("utf-8", errors="replace"))
+            model_suffix = f" model={self.model_name}" if self.model_name else ""
+            message = f"{self.provider_name} request failed{model_suffix} status={exc.code}"
+            if detail:
+                message += f" body={detail}"
+            raise ProviderRequestError(message) from exc
         except urllib_error.URLError as exc:
-            raise ProviderRequestError(f"{self.provider_name} request failed: {exc.reason}") from exc
+            model_suffix = f" model={self.model_name}" if self.model_name else ""
+            raise ProviderRequestError(f"{self.provider_name} request failed{model_suffix}: {exc.reason}") from exc
+
+    def _post_json(self, url: str, payload: Dict[str, Any], headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        return self._request_json(url, method="POST", payload=payload, headers=headers)
+
+    def _get_json(self, url: str, headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        return self._request_json(url, method="GET", headers=headers)
 
     @staticmethod
     def _context_summary(context: Optional[Dict[str, Any]]) -> str:

@@ -14,6 +14,7 @@ from office_app.server.providers.base_provider import (
 class GroqProvider(BaseProvider):
     provider_name = "groq"
     default_model = "llama-3.1-8b-instant"
+    models_url = "https://api.groq.com/openai/v1/models"
 
     def __init__(self, *, api_key: Optional[str] = None, model_name: str = default_model, timeout_seconds: int = 30):
         super().__init__(api_key=api_key, model_name=model_name, timeout_seconds=timeout_seconds)
@@ -55,6 +56,56 @@ class GroqProvider(BaseProvider):
         )
         text = self._extract_text(data)
         return ProviderResult(provider=self.provider_name, model=self.model_name, text=text, raw=data)
+
+    def connectivity_diagnostic(self) -> Dict[str, Any]:
+        if not self.available():
+            raise ProviderUnavailableError("Groq API key is not configured.")
+
+        try:
+            data = self._get_json(
+                self.models_url,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+            )
+        except ProviderRequestError as exc:
+            message = str(exc)
+            lowered = message.lower()
+            kind = "request_blocked"
+            if "status=401" in lowered or "invalid api key" in lowered or "unauthorized" in lowered:
+                kind = "bad_key"
+            elif "status=403" in lowered and ("1010" in lowered or "access denied" in lowered or "forbidden" in lowered):
+                kind = "request_blocked"
+            return {
+                "ok": False,
+                "provider": self.provider_name,
+                "model": self.model_name,
+                "kind": kind,
+                "message": message,
+            }
+
+        rows = data.get("data")
+        rows = rows if isinstance(rows, list) else []
+        available_models = [
+            str(item.get("id") or "").strip()
+            for item in rows
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        ]
+        if self.model_name not in available_models:
+            return {
+                "ok": False,
+                "provider": self.provider_name,
+                "model": self.model_name,
+                "kind": "model_permission_problem",
+                "message": f"groq model permission problem model={self.model_name}",
+                "available_models": available_models[:50],
+            }
+        return {
+            "ok": True,
+            "provider": self.provider_name,
+            "model": self.model_name,
+            "kind": "ok",
+            "message": f"groq connectivity ok model={self.model_name}",
+            "available_models": available_models[:50],
+        }
 
     @staticmethod
     def _extract_text(data: Dict[str, Any]) -> str:
