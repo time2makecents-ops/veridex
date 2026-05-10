@@ -240,8 +240,8 @@ export default function ChatPage() {
         {
           id: "welcome",
           role: "assistant",
-          speaker: "Receptionist",
-          text: "Receptionist ready. How may I help you today?",
+          speaker: nextPersona,
+          text: `${nextPersona} ready.`,
           sessionId: hydratedSessionId || sessionId,
         },
       ]);
@@ -541,10 +541,26 @@ export default function ChatPage() {
     try {
       const response = await request(value, outgoingSessionId);
       const assistantText = requestText(response);
-      const nextWorkspaceId = String(response.workspace_id || response.structuredContent?.workspace_id || workspaceId);
-      const nextSessionId = String(response.session_id || response.structuredContent?.session_id || outgoingSessionId);
-      const nextRoom = String((response.structuredContent as { active_room?: string } | undefined)?.active_room || activeRoom);
-      const nextPersona = String((response.structuredContent as { active_persona?: string } | undefined)?.active_persona || activePersona);
+      const structuredResponse = response.structuredContent as {
+        workspace_id?: string;
+        session_id?: string;
+        active_room?: string;
+        active_persona?: string;
+        speaker?: string;
+        navigator_activation?: { activated?: boolean };
+        routing?: { route_kind?: string };
+      } | undefined;
+      const nextWorkspaceId = String(response.workspace_id || structuredResponse?.workspace_id || workspaceId);
+      const nextSessionId = String(response.session_id || structuredResponse?.session_id || outgoingSessionId);
+      const nextRoom = String(structuredResponse?.active_room || activeRoom);
+      const nextPersona = String(structuredResponse?.active_persona || activePersona);
+      const nextSpeaker = String(
+        (
+          structuredResponse?.routing?.route_kind === "clarify" || structuredResponse?.navigator_activation?.activated
+            ? "Navigator"
+            : structuredResponse?.speaker
+        ) || nextPersona,
+      );
       if (nextSessionId && nextSessionId !== outgoingSessionId) {
         setStoredSessionId(nextSessionId);
         setSessionId(nextSessionId);
@@ -565,7 +581,7 @@ export default function ChatPage() {
       setRecentRooms((current) => pushRecentRoom(current, nextRoom));
       setMessages((current) => [
         ...current,
-        { id: crypto.randomUUID(), role: "assistant", speaker: nextPersona, text: assistantText, room: nextRoom, sessionId: nextSessionId },
+        { id: crypto.randomUUID(), role: "assistant", speaker: nextSpeaker, text: assistantText, room: nextRoom, sessionId: nextSessionId },
       ]);
       if (nextRoom !== activeRoom || nextPersona !== activePersona) {
         appendRoomTransition(nextRoom, nextPersona);
@@ -744,7 +760,7 @@ export default function ChatPage() {
         <div className="stack">
           <div className="lobby-title-row">
             <div className="stack" style={{ gap: 4 }}>
-              <div className="terminal-label">Veridex Lobby</div>
+              <div className="terminal-label">Veridex</div>
               <h1 className="title">{currentTitle}</h1>
               <div className="muted">{currentSessionDescription || "No session description yet."}</div>
             </div>
@@ -1129,14 +1145,18 @@ export default function ChatPage() {
           </button>
         </div>
         <section ref={logRef} className="chat lobby-chat-window">
-          {visibleMessages.map((message) => (
+          {visibleMessages.map((message) => {
+            const speakerLabel = message.role === "user" ? "You" : message.role === "system" ? "System" : message.speaker || activePersona;
+            const isNavigator = message.role === "assistant" && speakerLabel === "Navigator";
+            return (
             <div key={message.id} className={`bubble ${message.role === "system" ? "assistant" : message.role}`}>
-              <div className="chat-role">
-                {message.role === "user" ? "You" : message.role === "system" ? "System" : message.speaker || activePersona}
+              <div className={`chat-role ${isNavigator ? "navigator-role" : ""}`}>
+                {isNavigator ? <strong>Navigator</strong> : speakerLabel}
               </div>
               <div className="chat-text">{message.text}</div>
               </div>
-            ))}
+            );
+          })}
           {loading ? <div className="muted">Processing...</div> : null}
         </section>
         {error ? <div className="error">{error}</div> : null}
@@ -1164,7 +1184,7 @@ export default function ChatPage() {
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={handleDraftKeyDown}
-              placeholder="Speak to the receptionist..."
+              placeholder={`Message ${activePersona}...`}
               rows={3}
             />
             <button className="primary" type="submit" disabled={loading || !draft.trim()}>

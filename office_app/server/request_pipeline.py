@@ -7,10 +7,12 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 
 from office_app.server.conversation_planner import ConversationPlanner
+from office_app.server.request_followup import RequestFollowupRouter
+from office_app.server.request_grounding import EntityGroundingRouter
 from office_app.server.persona_registry import persona_profile_for_name
+from office_app.server.request_intent import RequestIntentAnalyzer, RequestIntentConfig
 from office_app.server.room_policy_registry import load_room_policies
 from office_app.server.room_router import rooms_payload, validate_room
-from office_app.server.search_response_synthesis import grounded_entity_followup_response
 
 
 def normalize_room_text(value: str) -> str:
@@ -368,6 +370,25 @@ class RequestPipeline:
         r"^(?:go(?:\s+back)?\s+to|switch\s+to|activate|open|return\s+to)\s+session\s+(.+?)\??$",
         re.IGNORECASE,
     )
+    SESSION_SEARCH_RE = re.compile(
+        r"^(?:search|look(?:\s+through)?|check|scan)\s+(?:my\s+|the\s+)?(?:(other|all)\s+)?sessions\s+(?:for|about)\s+(.+?)\??$",
+        re.IGNORECASE,
+    )
+    SESSION_SEARCH_DETAIL_RE = re.compile(
+        r"^(?:display|show|list|summarize|tell\s+me)\s+(?:the\s+)?"
+        r"(?:information|details|results|responses|answers)\s+"
+        r"(?:the\s+)?sessions\s+(?:gave|said|had)\s+(?:about|for)\s+(.+?)\??$",
+        re.IGNORECASE,
+    )
+    WORKSPACE_REFERENCE_SEARCH_RE = re.compile(
+        r"^(?:can\s+you\s+)?(?:search|check|scan|look(?:\s+through)?)\s+"
+        r"(?:the\s+)?(?:current\s+)?workspace\b.*\b(?:references?|mentions?|info(?:rmation)?)\b.*\b(?:to|for|about)\s+(.+?)\??$",
+        re.IGNORECASE,
+    )
+    PREVIOUS_SESSIONS_ENTITY_RE = re.compile(
+        r"^(?:what|which|can\s+you(?:\s+give|\s+show|\s+tell)\s+me).*\b(?:previous|other|past)\s+sessions\b.*$",
+        re.IGNORECASE,
+    )
     SESSION_THREAD_HINTS = (
         "show this sessions thread",
         "show this session thread",
@@ -441,6 +462,52 @@ class RequestPipeline:
         self.tool_catalog = tool_catalog or []
         self.app_version = app_version or "0.0.0"
         self.conversation_planner = ConversationPlanner()
+        self.intent_analyzer = RequestIntentAnalyzer(
+            RequestIntentConfig(
+                artifact_create_triggers=self.ARTIFACT_CREATE_TRIGGERS,
+                artifact_list_triggers=self.ARTIFACT_LIST_TRIGGERS,
+                artifact_open_triggers=self.ARTIFACT_OPEN_TRIGGERS,
+                factual_entity_lookup_patterns=self.FACTUAL_ENTITY_LOOKUP_PATTERNS,
+                factual_entity_search_patterns=self.FACTUAL_ENTITY_SEARCH_PATTERNS,
+                file_id_re=self.FILE_ID_RE,
+                file_name_re=self.FILE_NAME_RE,
+                intent_advice_hints=self.INTENT_ADVICE_HINTS,
+                intent_meta_hints=self.INTENT_META_HINTS,
+                ocr_explicit_hints=self.OCR_EXPLICIT_HINTS,
+                room_status_hints=self.ROOM_STATUS_HINTS,
+                search_business_advice_hints=self.SEARCH_BUSINESS_ADVICE_HINTS,
+                search_place_hints=self.SEARCH_PLACE_HINTS,
+                search_review_hints=self.SEARCH_REVIEW_HINTS,
+                search_web_hints=self.SEARCH_WEB_HINTS,
+                session_create_hints=self.SESSION_CREATE_HINTS,
+            ),
+            normalize_place_query=self.normalize_place_query,
+            is_explicit_room_navigation=self.is_explicit_room_navigation,
+        )
+        self.entity_grounding = EntityGroundingRouter(
+            extract_factual_entity_request=self.intent_analyzer.extract_factual_entity_request,
+            load_recent_transcript_turns=lambda workspace_id, session_id=None: self._load_recent_transcript_turns(
+                workspace_id,
+                session_id=session_id,
+            ),
+            resolve_active_room_title=lambda workspace_id: self.room_title_for_id(
+                str(self.current_context(workspace_id).get("active_room") or "lobby")
+            ),
+        )
+        self.followup_router = RequestFollowupRouter(
+            conversation_planner=self.conversation_planner,
+            model_route=lambda workspace_id, user_prompt, **kwargs: self.model_route(
+                workspace_id,
+                user_prompt,
+                reason=str(kwargs.get("reason") or ""),
+                apply_conversation_plan=bool(kwargs.get("apply_conversation_plan", True)),
+            ),
+            extract_location=self.extract_location,
+            load_grounded_search_context=lambda workspace_id, session_id=None: self._load_grounded_search_context(
+                workspace_id,
+                session_id=session_id,
+            ),
+        )
 
     def health_response(self) -> Dict[str, Any]:
         return {"ok": True, "ts": self.utc_now()}
@@ -743,6 +810,8 @@ class RequestPipeline:
         return None
 
     def route_user_request(self, workspace_id: str, request_text: str, *, session_id: Optional[str] = None) -> Dict[str, Any]:
+        recent_turns = self._load_recent_transcript_turns(workspace_id, session_id=session_id)
+
         room_memory_list_route = self.route_room_memory_list_request(workspace_id, request_text)
         if room_memory_list_route is not None:
             return {
@@ -775,6 +844,30 @@ class RequestPipeline:
                 "request": request_text,
                 **session_thread_route,
             }
+
+        session_route = self.route_session_request(workspace_id, request_text)
+        if session_route is not None:
+            if "route_kind" in session_route:
+                return {
+                    "workspace_id": workspace_id,
+                    "request": request_text,
+                    **session_route,
+                }
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **session_route,
+            }
+
+        contextual_followup_route = self.route_contextual_followup(
+            workspace_id,
+            request_text,
+            recent_turns,
+            session_id=session_id,
+        )
+        if contextual_followup_route is not None:
+            return contextual_followup_route
 
         capability_route = self.route_capability_question(workspace_id, request_text)
         if capability_route is not None:
@@ -830,21 +923,6 @@ class RequestPipeline:
                 "workspace_id": workspace_id,
                 "request": request_text,
                 **status_route,
-            }
-
-        session_route = self.route_session_request(workspace_id, request_text)
-        if session_route is not None:
-            if "route_kind" in session_route:
-                return {
-                    "workspace_id": workspace_id,
-                    "request": request_text,
-                    **session_route,
-                }
-            return {
-                "route_kind": "tool",
-                "workspace_id": workspace_id,
-                "request": request_text,
-                **session_route,
             }
 
         navigation_room = self.extract_navigation_room(request_text)
@@ -1252,68 +1330,27 @@ class RequestPipeline:
         except Exception:
             return []
 
+    def _load_grounded_search_context(self, workspace_id: str, *, session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        if not session_id:
+            return None
+        try:
+            state = self.kernel.get_state(workspace_id)
+        except Exception:
+            return None
+        contexts = state.get("grounded_search_by_session")
+        if not isinstance(contexts, dict):
+            return None
+        context = contexts.get(session_id)
+        return context if isinstance(context, dict) else None
+
     def _clean_entity_subject(self, subject: str) -> str:
-        cleaned = re.sub(r"\s+", " ", str(subject or "").strip(" .?!,:;"))
-        cleaned = re.sub(
-            r"\s+(?:and\s+give\s+me\s+information(?:\s+about\s+the\s+company)?|and\s+tell\s+me\s+about\s+the\s+company|please)$",
-            "",
-            cleaned,
-            flags=re.IGNORECASE,
-        )
-        cleaned = re.sub(r"\s+(?:company|business|brand)\s*$", "", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"^(?:the\s+)?(?:company|business|brand)\s+", "", cleaned, flags=re.IGNORECASE)
-        return cleaned.strip(" .?!,:;")
+        return self.intent_analyzer.clean_entity_subject(subject)
 
     def _looks_like_specific_entity(self, subject: str) -> bool:
-        text = re.sub(r"\s+", " ", str(subject or "").strip()).lower()
-        if not text:
-            return False
-        if self.FILE_ID_RE.search(text) or self.FILE_NAME_RE.search(text):
-            return False
-        if len(text.split()) > 6:
-            return False
-        if re.search(
-            r"\b(restaurant marketing|customer retention|sales process|strong brand|brand strategy|marketing strategy|"
-            r"marketing ideas|ideas|strategy|branding|brand|marketing|sales|retention|process|successful|success|"
-            r"file|document|session|workspace|room|response)\b",
-            text,
-        ):
-            return False
-        if text in {"company", "business", "brand", "restaurant", "restaurants"}:
-            return False
-        return True
+        return self.intent_analyzer.looks_like_specific_entity(subject)
 
     def extract_factual_entity_request(self, request_text: str) -> Optional[Dict[str, Any]]:
-        text = str(request_text or "").strip()
-        lowered = text.lower()
-        if not text or self.is_advice_intent(lowered):
-            return None
-        place_signals = self.place_search_signals(request_text)
-        if place_signals["has_place_hint"] and (place_signals["discovery_signal"] or place_signals["review_signal"]):
-            return None
-
-        for pattern in self.FACTUAL_ENTITY_SEARCH_PATTERNS:
-            match = pattern.match(text)
-            if not match:
-                continue
-            subject = self._clean_entity_subject(match.group(1))
-            if self._looks_like_specific_entity(subject):
-                return {
-                    "entity_subject": subject,
-                    "search_requested": True,
-                }
-
-        for pattern in self.FACTUAL_ENTITY_LOOKUP_PATTERNS:
-            match = pattern.match(text)
-            if not match:
-                continue
-            subject = self._clean_entity_subject(match.group(1))
-            if self._looks_like_specific_entity(subject):
-                return {
-                    "entity_subject": subject,
-                    "search_requested": False,
-                }
-        return None
+        return self.intent_analyzer.extract_factual_entity_request(request_text)
 
     def entity_has_verified_grounding(
         self,
@@ -1322,36 +1359,11 @@ class RequestPipeline:
         *,
         session_id: Optional[str] = None,
     ) -> bool:
-        turns = self._load_recent_transcript_turns(workspace_id, session_id=session_id)
-        if not turns:
-            return False
-        subject = str(entity_subject or "").strip()
-        if not subject:
-            return False
-        subject_lower = subject.lower()
-        tokens = [token for token in re.findall(r"[a-z0-9]{3,}", subject_lower) if token not in {"the", "and"}]
-        if not tokens:
-            tokens = [subject_lower]
-        for turn in turns[-24:]:
-            role = str(turn.get("role") or "").strip().lower()
-            text = str(turn.get("text") or "").strip()
-            if not text:
-                continue
-            lowered = text.lower()
-            if subject_lower not in lowered and not all(token in lowered for token in tokens):
-                continue
-            if role == "user":
-                if "?" not in text or re.search(
-                    r"\b(is|was|are|were|sold|located|based|founded|operate|operated|started|start|had|have|work|live)\b",
-                    lowered,
-                ):
-                    return True
-                continue
-            if role in {"assistant", "system"} and any(
-                marker in text for marker in ("URL:", "Source:", "Address:", "Web results for", "Review-oriented results", "Place results")
-            ):
-                return True
-        return False
+        return self.entity_grounding.entity_has_verified_grounding(
+            workspace_id,
+            entity_subject,
+            session_id=session_id,
+        )
 
     def route_factual_entity_request(
         self,
@@ -1360,149 +1372,26 @@ class RequestPipeline:
         *,
         session_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        entity_request = self.extract_factual_entity_request(request_text)
-        if entity_request is None:
-            return None
-        entity_subject = str(entity_request["entity_subject"])
-        if entity_request["search_requested"]:
-            return {
-                "route_kind": "tool",
-                "workspace_id": workspace_id,
-                "request": request_text,
-                "capability": "search.web",
-                "tool": "office.search_web",
-                "arguments": {
-                    "query": entity_subject,
-                    "limit": 5,
-                },
-                "reason": "Explicit search requested for a specific entity.",
-                "grounding_required": True,
-                "entity_subject": entity_subject,
-            }
-        if self.entity_has_verified_grounding(workspace_id, entity_subject, session_id=session_id):
-            return None
-        return {
-            "route_kind": "clarify",
-            "workspace_id": workspace_id,
-            "request": request_text,
-            "capability": "clarification.entity_grounding",
-            "tool": "office.capability_info",
-            "arguments": {
-                "response_text": f"I do not have verified information about {entity_subject} in this workspace. I can search for it if you want.",
-                "entity_subject": entity_subject,
-            },
-            "reason": "Specific entity lookup has no verified grounding in the current workspace/session context.",
-        }
+        return self.entity_grounding.route_factual_entity_request(
+            workspace_id,
+            request_text,
+            session_id=session_id,
+        )
 
     def place_search_signals(self, request_text: str) -> Dict[str, Any]:
-        text = str(request_text or "").strip()
-        lowered = text.lower().strip()
-        place_query = self.normalize_place_query(request_text)
-        has_place_hint = any(hint in lowered for hint in self.SEARCH_PLACE_HINTS)
-        discovery_signal = bool(
-            re.match(r"^(?:find|show me|list|recommend|give me)\b", lowered)
-            or re.search(r"\b(?:near me|nearby|nearest)\b", lowered)
-            or re.match(r"^(?:where is|where are)\b", lowered)
-            or "reviews for" in lowered
-        )
-        explicit_review_signal = any(hint in lowered for hint in self.SEARCH_REVIEW_HINTS)
-        review_signal = bool(
-            explicit_review_signal or re.search(r"\b(?:best|top|highest rated|top rated|best rated)\b", lowered)
-        )
-        location_signal = bool(
-            place_query["location"]
-            or re.search(r"\b(?:near me|nearby|nearest)\b", lowered)
-            or re.search(r"\baround\s+[A-Za-z]", text, re.IGNORECASE)
-        )
-        return {
-            "has_place_hint": has_place_hint,
-            "discovery_signal": discovery_signal,
-            "explicit_review_signal": explicit_review_signal,
-            "review_signal": review_signal,
-            "location_signal": location_signal,
-            "place_query": place_query,
-        }
+        return self.intent_analyzer.place_search_signals(request_text)
 
     def classify_intent(self, request_text: str) -> str:
-        text = request_text.lower().strip()
-        if not text:
-            return "task"
-        if self.is_meta_intent(text):
-            return "meta"
-        if self.is_explicit_task_intent(request_text):
-            return "task"
-        if self.is_advice_intent(text):
-            return "advice"
-        return "task"
+        return self.intent_analyzer.classify_intent(request_text)
 
     def is_meta_intent(self, text: str) -> bool:
-        if any(hint in text for hint in self.INTENT_META_HINTS):
-            return True
-        return bool(
-            re.search(
-                r"\b(?:why|how|what)\s+(?:did|do|are)\s+you\s+(?:respond|answer|decide|choos|think|reason)",
-                text,
-            )
-        )
+        return self.intent_analyzer.is_meta_intent(text)
 
     def is_advice_intent(self, text: str) -> bool:
-        if any(hint in text for hint in self.INTENT_ADVICE_HINTS):
-            return True
-        if re.search(r"\bwhat\s+companies\s+should\s+i\s+study\b", text):
-            return True
-        if re.search(r"\bwhat\s+makes\b", text):
-            return True
-        if re.match(r"^(?:how|why)\s+(?:do|does|can|could|should|would|is|are)\b", text):
-            return True
-        if re.match(r"^(?:what|which)\s+is\s+the\s+best\s+way\b", text):
-            return True
-        advice_terms = (
-            "advice",
-            "approach",
-            "best practice",
-            "criteria",
-            "explain",
-            "idea",
-            "improve",
-            "increase",
-            "marketing",
-            "model",
-            "plan",
-            "strategy",
-            "successful",
-            "tip",
-        )
-        question_starter = re.match(r"^(?:what|which|tell me|can you explain|help me)\b", text)
-        return bool(question_starter and any(term in text for term in advice_terms))
+        return self.intent_analyzer.is_advice_intent(text)
 
     def is_explicit_task_intent(self, request_text: str) -> bool:
-        text = request_text.lower().strip()
-        if not text:
-            return False
-        if self.is_explicit_room_navigation(text):
-            return True
-        if any(hint in text for hint in self.ROOM_STATUS_HINTS):
-            return True
-        if any(hint in text for hint in self.SESSION_CREATE_HINTS):
-            return True
-        if any(trigger in text for trigger in self.ARTIFACT_CREATE_TRIGGERS + self.ARTIFACT_LIST_TRIGGERS + self.ARTIFACT_OPEN_TRIGGERS):
-            return True
-        if any(hint in text for hint in self.OCR_EXPLICIT_HINTS):
-            return True
-        if any(hint in text for hint in self.SEARCH_WEB_HINTS):
-            return True
-        entity_request = self.extract_factual_entity_request(request_text)
-        if entity_request is not None and entity_request.get("search_requested"):
-            return True
-
-        place_signals = self.place_search_signals(request_text)
-        if place_signals["has_place_hint"]:
-            return bool(
-                (place_signals["discovery_signal"] or place_signals["review_signal"])
-                and (place_signals["location_signal"] or place_signals["explicit_review_signal"])
-            )
-
-        return False
+        return self.intent_analyzer.is_explicit_task_intent(request_text)
 
     def route_search_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         text = request_text.lower().strip()
@@ -1596,14 +1485,7 @@ class RequestPipeline:
         return None
 
     def is_search_capability_question(self, text: str) -> bool:
-        return bool(
-            re.match(
-                r"^(?:can|could|do)\s+you\s+(?:actually\s+|really\s+)?"
-                r"(?:search(?:\s+the)?\s+(?:internet|web)|search\s+online|look\s+things\s+up|check\s+online|"
-                r"use(?:\s+the)?\s+(?:internet|web)|access(?:\s+the)?\s+(?:internet|web)|browse(?:\s+the)?\s+web)\??$",
-                text,
-            )
-        )
+        return self.intent_analyzer.is_search_capability_question(text)
 
     def route_room_status_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         text = request_text.lower().strip()
@@ -1620,336 +1502,80 @@ class RequestPipeline:
             "reason": "Matched a room status query.",
         }
 
-    def _recent_assistant_turn(self, recent_turns: List[Dict[str, Any]], *, require_numbered_list: bool = False) -> Optional[str]:
-        for turn in reversed(recent_turns[-8:]):
-            if str(turn.get("role") or "").strip().lower() == "assistant":
-                text = str(turn.get("text") or "").strip()
-                if text and (not require_numbered_list or self.NUMBERED_LIST_ITEM_RE.search(text)):
-                    return text
-        return None
-
-    def _recent_user_turn_before_assistant(self, recent_turns: List[Dict[str, Any]]) -> Optional[str]:
-        seen_assistant = False
-        for turn in reversed(recent_turns[-8:]):
-            role = str(turn.get("role") or "").strip().lower()
-            text = str(turn.get("text") or "").strip()
-            if not text:
-                continue
-            if role == "assistant" and not seen_assistant:
-                seen_assistant = True
-                continue
-            if seen_assistant and role == "user":
-                return text
-        return None
-
-    def _recent_user_turns(self, recent_turns: List[Dict[str, Any]]) -> List[str]:
-        rows: List[str] = []
-        for turn in recent_turns[-8:]:
-            if str(turn.get("role") or "").strip().lower() != "user":
-                continue
-            text = str(turn.get("text") or "").strip()
-            if text:
-                rows.append(text)
-        return rows
-
-    def _infer_followup_subject(self, recent_turns: List[Dict[str, Any]]) -> tuple[Optional[str], str]:
-        assistant_text = self._recent_assistant_turn(recent_turns, require_numbered_list=True) or self._recent_assistant_turn(recent_turns) or ""
-        user_text = self._recent_user_turn_before_assistant(recent_turns) or ""
-        user_turns = self._recent_user_turns(recent_turns)
-        combined = f"{user_text}\n{assistant_text}".lower()
-
-        if "maslow" in combined:
-            return "Maslow's hierarchy of needs", "level"
-
-        for candidate_text in [user_text, *reversed(user_turns)]:
-            if not candidate_text:
-                continue
-            for pattern in self.STRATEGY_TOPIC_PATTERNS:
-                match = pattern.search(candidate_text)
-                if match:
-                    subject = re.sub(r"\s+", " ", match.group(1).strip(" .?!"))
-                    if subject:
-                        return subject, "option"
-
-        for pattern in self.PRIOR_TOPIC_PATTERNS:
-            match = pattern.search(user_text)
-            if match:
-                subject = re.sub(r"\s+", " ", match.group(1).strip(" .?!"))
-                if subject:
-                    return subject, "item"
-
-        if assistant_text and self.NUMBERED_LIST_ITEM_RE.search(assistant_text):
-            first_sentence = assistant_text.split("\n", 1)[0].strip()
-            if first_sentence:
-                return first_sentence.rstrip(".:"), "item"
-
-        return None, "item"
-
-    def _looks_like_contextual_followup(self, request_text: str) -> bool:
-        lowered = re.sub(r"\s+", " ", request_text.strip().lower())
-        if not lowered:
-            return False
-        if any(hint in lowered for hint in self.CONTEXTUAL_REFERENCE_HINTS):
-            return True
-        if len(lowered.split()) <= 8 and re.search(r"\b(it|that|those|them|one|ones|level)\b", lowered):
-            return True
-        return False
-
-    def _extract_ordinal_reference(self, lowered: str) -> Optional[str]:
-        if "first" in lowered:
-            return "first"
-        if "second" in lowered:
-            return "second"
-        if "third" in lowered:
-            return "third"
-        if "last" in lowered:
-            return "last"
-        return None
-
-    def _extract_list_items(self, assistant_text: str) -> List[str]:
-        text = re.sub(r"\s+", " ", assistant_text.strip())
-        if not text:
-            return []
-        first_sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0].strip()
-        working = re.sub(
-            r"^.*?(?:through a combination of|include|includes|including|are|is)\s+",
-            "",
-            first_sentence,
-            flags=re.IGNORECASE,
-        )
-        working = working.strip(" .")
-        if "," not in working and " and " not in working:
-            return []
-        working = re.sub(r",\s*(?:and|or)\s+", ", ", working, flags=re.IGNORECASE)
-        parts = [re.sub(r"^(?:by|a|an|the)\s+", "", part.strip(" .")) for part in working.split(",")]
-        cleaned = []
-        for part in parts:
-            if len(part) < 4:
-                continue
-            if part.lower().startswith(("this is because", "for example", "such as")):
-                continue
-            cleaned.append(part)
-        unique: List[str] = []
-        seen = set()
-        for item in cleaned:
-            key = item.casefold()
-            if key in seen:
-                continue
-            seen.add(key)
-            unique.append(item)
-        return unique if len(unique) >= 3 else []
-
-    def _extract_primary_claim(
-        self,
-        assistant_text: str,
-        *,
-        subject: Optional[str] = None,
-        unit: Optional[str] = None,
-    ) -> Optional[str]:
-        text = re.sub(r"\s+", " ", assistant_text.strip())
-        if not text:
-            return None
-
-        bold_match = re.search(r"\*\*(.+?)\*\*", assistant_text)
-        if bold_match:
-            bold_value = re.sub(r"\s+", " ", bold_match.group(1).strip(" .,:;"))
-            if subject == "Maslow's hierarchy of needs" and bold_value:
-                return f"{bold_value} is the most powerful single {unit} of {subject} in marketing"
-            return bold_value
-
-        first_sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0].strip()
-        short_label = first_sentence.strip(" .,:;")
-        if subject == "Maslow's hierarchy of needs" and unit == "level" and short_label:
-            if re.fullmatch(r"[A-Za-z][A-Za-z -]{1,40}", short_label):
-                return f"{short_label} is the most powerful single {unit} of {subject} in marketing"
-        if unit == "option" and short_label:
-            if re.fullmatch(r"[A-Za-z][A-Za-z '&-]{1,50}", short_label):
-                return short_label
-        if len(first_sentence) >= 12:
-            return first_sentence.rstrip(".")
-        return None
-
-    def _normalize_option_subject(self, subject: str) -> str:
-        text = re.sub(r"\s+", " ", str(subject or "").strip())
-        return text
-
-    def _extract_option_label(self, claim: str) -> str:
-        text = re.sub(r"\s+", " ", str(claim or "").strip()).strip(" .")
-        if not text:
-            return text
-        head = re.split(r"\s+is\s+", text, maxsplit=1, flags=re.IGNORECASE)[0].strip(" .,:;")
-        return head or text
-
-    def _rewrite_meta_reference_followup(
-        self,
-        request_text: str,
-        recent_turns: List[Dict[str, Any]],
-    ) -> Optional[str]:
-        text = re.sub(r"\s+", " ", request_text.strip())
-        if not text:
-            return None
-        if not any(pattern.match(text) for pattern in self.META_REFERENCE_PATTERNS):
-            return None
-
-        assistant_text = self._recent_assistant_turn(recent_turns)
-        if not assistant_text:
-            return None
-
-        subject, unit = self._infer_followup_subject(recent_turns)
-        claim = self._extract_primary_claim(
-            assistant_text,
-            subject=subject,
-            unit=unit,
-        )
-        if not claim:
-            return None
-
-        if unit == "option" and subject:
-            option_subject = self._normalize_option_subject(subject)
-            option_label = self._extract_option_label(claim)
-            return (
-                f"Explain why you concluded that {option_label} is the strongest option for {option_subject}. "
-                "Keep the explanation tied to the immediately previous answer, compare it briefly with the next strongest option, "
-                "and keep it concrete to customer behavior."
-            )
-        return (
-            f"Explain why you concluded that {claim}. "
-            "Keep the explanation tied to the immediately previous answer, compare it briefly with the next strongest level, "
-            "and keep it concrete to marketing behavior."
-        )
-
-    def _rewrite_contextual_reference_followup(
-        self,
-        request_text: str,
-        recent_turns: List[Dict[str, Any]],
-    ) -> Optional[str]:
-        assistant_text = self._recent_assistant_turn(recent_turns, require_numbered_list=True) or self._recent_assistant_turn(recent_turns) or ""
-        if not assistant_text:
-            return None
-
-        text = re.sub(r"\s+", " ", request_text.strip())
-        lowered = text.lower()
-        if not self._looks_like_contextual_followup(text):
-            return None
-
-        subject, unit = self._infer_followup_subject(recent_turns)
-        if not subject:
-            return None
-        list_items = self._extract_list_items(assistant_text)
-
-        if (
-            any(phrase in lowered for phrase in ("most powerful one", "most powerful level", "which level", "what level"))
-            and "marketing" in lowered
-        ):
-            return (
-                f"Which single {unit} of {subject} is most powerful in marketing? "
-                "Answer with one level first, then a brief reason."
-            )
-        if "how does that compare" in lowered:
-            return f"How does that compare with the other {unit}s in {subject}?"
-        if "would that work" in lowered or "does that work" in lowered:
-            target_match = re.search(r"\bfor\s+([A-Za-z][A-Za-z0-9 '&-]{1,60})\??$", text, re.IGNORECASE)
-            if target_match:
-                target = re.sub(r"\s+too$", "", target_match.group(1).strip(), flags=re.IGNORECASE).strip()
-                return f"Would that {unit} from {subject} also work for {target}?"
-            return f"Would that {unit} from {subject} also work in a similar context?"
-        if "strongest one" in lowered:
-            return f"Which {unit} of {subject} is strongest?"
-        if "best one" in lowered:
-            return f"Which {unit} of {subject} is most effective?"
-        if list_items and any(
-            phrase in lowered
-            for phrase in (
-                "which one",
-                "what one",
-                "most effective one",
-                "most powerful one",
-                "strongest one",
-                "best one",
-            )
-        ):
-            items_text = ", ".join(list_items[:-1]) + f", or {list_items[-1]}" if len(list_items) > 1 else list_items[0]
-            return (
-                f"For {subject}, which single option is most effective out of these: {items_text}? "
-                "Name one first, then briefly explain why."
-            )
-        ordinal = self._extract_ordinal_reference(lowered)
-        if ordinal is not None and (self.NUMBERED_LIST_ITEM_RE.search(assistant_text) or list_items):
-            return f"Tell me more about the {ordinal} {unit} in {subject}."
-        if "which one" in lowered or "what one" in lowered:
-            return f"Which single {unit} of {subject} is the best fit here? Answer with one {unit} first, then a brief reason."
-        return None
-
     def route_contextual_followup(
         self,
         workspace_id: str,
         request_text: str,
         recent_turns: List[Dict[str, Any]],
+        *,
+        session_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        text = request_text.strip()
-        lowered = re.sub(r"\s+", " ", text.lower())
-        match = re.match(r"^(?:what|how)\s+about\s+(.+?)\??$", text, re.IGNORECASE)
-        recent_text = "\n".join(str(turn.get("text") or "") for turn in recent_turns[-8:])
-        recent_lower = recent_text.lower()
-        followup_response = grounded_entity_followup_response(request_text, recent_text)
-        if followup_response is not None and "search results" in recent_lower:
-            return {
-                "route_kind": "clarify",
-                "workspace_id": workspace_id,
-                "request": request_text,
-                "capability": "clarification.entity_followup",
-                "tool": "office.capability_info",
-                "arguments": {
-                    "response_text": followup_response,
-                },
-                "reason": "Answered an entity follow-up from the latest grounded search evidence.",
-            }
-        if match:
-            subject = re.sub(r"\s+", " ", match.group(1).strip(" .?!")).strip()
-            if len(subject) >= 3 and any(
-                marker in recent_lower for marker in ("restaurant", "restaurants", "review-oriented results", "place results")
-            ):
-                location = None
-                for turn in reversed(recent_turns[-8:]):
-                    location = self.extract_location(str(turn.get("text") or ""))
-                    if location:
-                        break
-                if location:
-                    category = "restaurant"
-                    if "italian" in recent_lower:
-                        category = "italian restaurant"
-                    elif "thai" in recent_lower:
-                        category = "thai restaurant"
-
-                    return {
-                        "route_kind": "tool",
-                        "workspace_id": workspace_id,
-                        "request": request_text,
-                        "capability": "search.reviews",
-                        "tool": "office.search_reviews",
-                        "arguments": {
-                            "query": f"{subject} {category}",
-                            "location": location,
-                            "time_window": None,
-                            "limit": 5,
-                        },
-                        "reason": "Resolved a short follow-up against the recent restaurant search context.",
-                    }
-
-        plan = self.conversation_planner.rewrite_followup(request_text, recent_turns)
-        if plan is None:
-            return None
-        return self.model_route(
+        return self.followup_router.route_contextual_followup(
             workspace_id,
-            plan.user_prompt,
-            reason=f"Resolved a short follow-up against the recent session thread: {request_text}",
-            apply_conversation_plan=False,
+            request_text,
+            recent_turns,
+            session_id=session_id,
         )
 
     def route_session_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         text = request_text.lower().strip()
         if not text:
             return None
+        entity_request = self.intent_analyzer.extract_factual_entity_request(request_text)
+        if self.PREVIOUS_SESSIONS_ENTITY_RE.match(request_text.strip()) and entity_request is not None:
+            query = self._normalize_session_search_query(str(entity_request.get("entity_subject") or ""))
+            if query:
+                return {
+                    "capability": "session.search",
+                    "tool": "office.sessions_search",
+                    "arguments": {
+                        "query": query,
+                        "include_current": False,
+                        "detail": True,
+                    },
+                    "reason": "Matched a request for topic information from previous sessions.",
+                }
+        workspace_search_match = self.WORKSPACE_REFERENCE_SEARCH_RE.match(request_text.strip())
+        if workspace_search_match:
+            query = self._normalize_session_search_query(str(workspace_search_match.group(1) or ""))
+            if query:
+                return {
+                    "capability": "session.search",
+                    "tool": "office.sessions_search",
+                    "arguments": {
+                        "query": query,
+                        "include_current": True,
+                        "detail": True,
+                    },
+                    "reason": "Matched a request to search current workspace session references for a topic.",
+                }
+        detail_match = self.SESSION_SEARCH_DETAIL_RE.match(request_text.strip())
+        if detail_match:
+            query = self._normalize_session_search_query(str(detail_match.group(1) or ""))
+            if query:
+                return {
+                    "capability": "session.search",
+                    "tool": "office.sessions_search",
+                    "arguments": {
+                        "query": query,
+                        "include_current": False,
+                        "detail": True,
+                    },
+                    "reason": "Matched a request to display detailed session transcript information about a topic.",
+                }
+        search_match = self.SESSION_SEARCH_RE.match(request_text.strip())
+        if search_match:
+            query = self._normalize_session_search_query(str(search_match.group(2) or ""))
+            if query:
+                return {
+                    "capability": "session.search",
+                    "tool": "office.sessions_search",
+                    "arguments": {
+                        "query": query,
+                        "include_current": str(search_match.group(1) or "").strip().lower() != "other",
+                    },
+                    "reason": "Matched a request to search session transcripts.",
+                }
         activate_match = self.SESSION_ACTIVATE_RE.match(request_text.strip())
         if activate_match:
             session_ref = re.sub(r"\s+", " ", str(activate_match.group(1) or "").strip(" .,:;"))
@@ -2076,6 +1702,14 @@ class RequestPipeline:
         if "today" in text:
             return "today"
         return None
+
+    @staticmethod
+    def _normalize_session_search_query(query: str) -> str:
+        text = re.sub(r"\s+", " ", str(query or "").strip(" .,:;?!"))
+        text = re.sub(r"^(?:info(?:rmation)?|references?|mentions?)\s+(?:about|for|to)\s+", "", text, flags=re.IGNORECASE)
+        if text.lower().endswith(" information"):
+            text = text[:-12].rstrip(" .,:;?!")
+        return text
 
     def extract_place_category(self, text: str) -> Optional[str]:
         for candidate in (

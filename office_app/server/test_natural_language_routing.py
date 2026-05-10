@@ -11,10 +11,12 @@ class DummyKernel:
         active_room: str = "lobby",
         active_persona: str = "Receptionist",
         transcript_rows: list[dict[str, str]] | None = None,
+        grounded_search_by_session: dict[str, dict[str, object]] | None = None,
     ):
         self.active_room = active_room
         self.active_persona = active_persona
         self.store = DummyStore(transcript_rows or [])
+        self.grounded_search_by_session = grounded_search_by_session or {}
 
     def current_context(self, workspace_id: str):
         return {
@@ -25,6 +27,13 @@ class DummyKernel:
 
     def list_workspaces(self):
         return {"workspaces": []}
+
+    def get_state(self, workspace_id: str):
+        return {
+            "active_room": self.active_room,
+            "active_persona": self.active_persona,
+            "grounded_search_by_session": self.grounded_search_by_session,
+        }
 
 
 class DummyStore:
@@ -240,6 +249,150 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "clarification.entity_followup")
         self.assertIn("Yes, search results describe it as a music venue/arcade", routed["arguments"]["response_text"])
         self.assertIn("Check the current event calendar for specific dates.", routed["arguments"]["response_text"])
+
+    def test_entity_hours_followup_uses_preserved_grounded_search_context(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="sales_department",
+                active_persona="Sales Director",
+                grounded_search_by_session={
+                    "sess_sales": {
+                        "entity_subject": "blairally",
+                        "results": [
+                            {
+                                "title": "Blairally Vintage Arcade",
+                                "source": "Example",
+                                "snippet": "Hours: Monday through Thursday 4 PM to 2 AM; Friday through Sunday 2 PM to 2 AM.",
+                                "url": "https://example.com/blairally",
+                            }
+                        ],
+                    }
+                },
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_contextual_followup(
+            "default",
+            "what are the hours again?",
+            [],
+            session_id="sess_sales",
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertIn("4 PM to 2 AM", routed["arguments"]["response_text"])
+
+    def test_entity_location_followup_uses_preserved_grounded_search_context(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="sales_department",
+                active_persona="Sales Director",
+                grounded_search_by_session={
+                    "sess_sales": {
+                        "entity_subject": "blairally",
+                        "results": [
+                            {
+                                "title": "Blairally Vintage Arcade",
+                                "source": "Example",
+                                "snippet": "Blairally is a music venue/arcade in Eugene, Oregon.",
+                                "url": "https://example.com/blairally",
+                            }
+                        ],
+                    }
+                },
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_contextual_followup(
+            "default",
+            "what state is it in?",
+            [],
+            session_id="sess_sales",
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertIn("Eugene, Oregon", routed["arguments"]["response_text"])
+
+    def test_entity_provenance_followup_reports_wrong_time_was_not_grounded(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="sales_department",
+                active_persona="Sales Director",
+                grounded_search_by_session={
+                    "sess_sales": {
+                        "entity_subject": "blairally",
+                        "results": [
+                            {
+                                "title": "Blairally Vintage Arcade",
+                                "source": "Example",
+                                "snippet": "Hours: Monday through Thursday 4 PM to 2 AM; Friday through Sunday 2 PM to 2 AM.",
+                                "url": "https://example.com/blairally",
+                            }
+                        ],
+                    }
+                },
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_contextual_followup(
+            "default",
+            "what search result said 4am instead of 4pm?",
+            [],
+            session_id="sess_sales",
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertIn("I do not have a preserved search result snippet that says 4 AM", routed["arguments"]["response_text"])
+        self.assertIn("The preserved result I have says 4 PM", routed["arguments"]["response_text"])
+
+    def test_entity_unsupported_attribute_followup_fails_closed(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="sales_department",
+                active_persona="Sales Director",
+                grounded_search_by_session={
+                    "sess_sales": {
+                        "entity_subject": "blairally",
+                        "results": [
+                            {
+                                "title": "Blairally Vintage Arcade",
+                                "source": "Example",
+                                "snippet": "Blairally is a music venue/arcade in Eugene, Oregon.",
+                                "url": "https://example.com/blairally",
+                            }
+                        ],
+                    }
+                },
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_contextual_followup(
+            "default",
+            "who owns it?",
+            [],
+            session_id="sess_sales",
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(
+            routed["arguments"]["response_text"],
+            "I do not have a preserved search result snippet that answers that ownership question.",
+        )
 
     def test_numbered_list_followup_rewrites_to_model_question(self) -> None:
         routed = self.pipeline.route_contextual_followup(
@@ -935,6 +1088,54 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "search.web")
         self.assertEqual(routed["tool"], "office.search_web")
 
+    def test_contextual_search_the_internet_uses_recent_entity_before_capability_info(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="sales_department",
+                active_persona="Sales Director",
+                transcript_rows=[
+                    {"role": "user", "text": "tell me about blairally"},
+                    {
+                        "role": "assistant",
+                        "text": "Veridex doesn't have any verified information about blairally. Have the Sales Department do an internet search or search your other sessions if you want to know more.",
+                    },
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "search the internet", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.web")
+        self.assertEqual(routed["tool"], "office.search_web")
+        self.assertEqual(routed["arguments"]["query"], "blairally")
+
+    def test_contextual_yes_after_search_offer_routes_to_web_search(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="sales_department",
+                active_persona="Sales Director",
+                transcript_rows=[
+                    {"role": "user", "text": "tell me about blairally"},
+                    {
+                        "role": "assistant",
+                        "text": "I can search the web for more information about blairally if you'd like.",
+                    },
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "yes", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.web")
+        self.assertEqual(routed["tool"], "office.search_web")
+        self.assertEqual(routed["arguments"]["query"], "blairally")
+
     def test_ocr_request_routes_to_document_ocr(self) -> None:
         routed = self.pipeline.route_user_request("default", "extract text from file_abc123")
         self.assertEqual(routed["route_kind"], "tool")
@@ -1156,7 +1357,10 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         )
         self.assertEqual(routed["route_kind"], "clarify")
         self.assertEqual(routed["capability"], "clarification.entity_grounding")
-        self.assertIn("I do not have verified information about blairally", routed["arguments"]["response_text"])
+        self.assertEqual(
+            routed["arguments"]["response_text"],
+            "Veridex doesn't have any verified information about blairally. Have the Sales Department do an internet search or search your other sessions if you want to know more.",
+        )
 
     def test_unknown_entity_lookup_does_not_trust_prior_hallucinated_assistant_turn(self) -> None:
         pipeline = RequestPipeline(
@@ -1181,7 +1385,10 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
             session_id="sess_sales",
         )
         self.assertEqual(routed["route_kind"], "clarify")
-        self.assertIn("I do not have verified information about blairally", routed["arguments"]["response_text"])
+        self.assertEqual(
+            routed["arguments"]["response_text"],
+            "Veridex doesn't have any verified information about blairally. Have the Sales Department do an internet search or search your other sessions if you want to know more.",
+        )
 
     def test_search_for_entity_routes_to_web_search_with_grounding_required(self) -> None:
         routed = self.sales_pipeline.route_user_request(
@@ -1234,6 +1441,130 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "session.activate")
         self.assertEqual(routed["tool"], "office.session_activate")
         self.assertEqual(routed["arguments"]["session_ref"], "3")
+
+    def test_search_other_sessions_routes_to_sessions_search(self) -> None:
+        routed = self.pipeline.route_user_request("default", "search other sessions for blairally")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "session.search")
+        self.assertEqual(routed["tool"], "office.sessions_search")
+        self.assertEqual(routed["arguments"]["query"], "blairally")
+        self.assertFalse(routed["arguments"]["include_current"])
+
+    def test_search_all_sessions_routes_to_sessions_search(self) -> None:
+        routed = self.pipeline.route_user_request("default", "search all sessions for blairally information")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "session.search")
+        self.assertEqual(routed["tool"], "office.sessions_search")
+        self.assertEqual(routed["arguments"]["query"], "blairally")
+        self.assertTrue(routed["arguments"]["include_current"])
+
+    def test_direct_session_search_detail_request_routes_to_detailed_search(self) -> None:
+        routed = self.pipeline.route_user_request("default", "display the information the sessions gave about blairally")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "session.search")
+        self.assertEqual(routed["tool"], "office.sessions_search")
+        self.assertEqual(routed["arguments"]["query"], "blairally")
+        self.assertFalse(routed["arguments"]["include_current"])
+        self.assertTrue(routed["arguments"]["detail"])
+
+    def test_workspace_reference_search_routes_to_detailed_session_search(self) -> None:
+        routed = self.pipeline.route_user_request("default", "can you search the current workspace for references to blairally?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "session.search")
+        self.assertEqual(routed["tool"], "office.sessions_search")
+        self.assertEqual(routed["arguments"]["query"], "blairally")
+        self.assertTrue(routed["arguments"]["include_current"])
+        self.assertTrue(routed["arguments"]["detail"])
+
+    def test_explicit_session_search_wins_over_grounded_followup(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                transcript_rows=[
+                    {"role": "user", "text": "search for blairally and give me information"},
+                    {"role": "assistant", "text": "Search results describe blairally as a music venue/arcade."},
+                ],
+                grounded_search_by_session={
+                    "sess_1": {
+                        "entity_subject": "blairally",
+                        "results": [
+                            {
+                                "title": "Blairally",
+                                "snippet": "Blairally is a music venue/arcade in Eugene, Oregon.",
+                                "url": "https://example.com/blairally",
+                                "source": "Example",
+                            }
+                        ],
+                    }
+                },
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "search all sessions for blairally information", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "session.search")
+        self.assertEqual(routed["tool"], "office.sessions_search")
+        self.assertEqual(routed["arguments"]["query"], "blairally")
+
+    def test_session_search_detail_followup_routes_to_detailed_session_search(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                transcript_rows=[
+                    {"role": "user", "text": "search other sessions"},
+                    {
+                        "role": "assistant",
+                        "text": (
+                            "I found 3 matching session(s) for \"blairally\":\n"
+                            "1. Nav test (sess_99a66e8dfc21) - Navigator: Veridex doesn't have any verified information about blairally.\n"
+                            "2. Session_A (sess_66c6c2f0dfd3) - Sales Director: Blairally is a music venue and arcade."
+                        ),
+                    },
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "can you list the information it gave in those sessions", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "session.search")
+        self.assertEqual(routed["tool"], "office.sessions_search")
+        self.assertEqual(routed["arguments"]["query"], "blairally")
+        self.assertFalse(routed["arguments"]["include_current"])
+        self.assertTrue(routed["arguments"]["detail"])
+
+    def test_show_me_the_rest_of_numbered_session_result_routes_to_full_answer(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                transcript_rows=[
+                    {"role": "user", "text": "search other sessions"},
+                    {
+                        "role": "assistant",
+                        "text": (
+                            "I found 3 matching session(s) for \"blairally\":\n"
+                            "1. Nav test (sess_99a66e8dfc21) - Navigator: Veridex doesn't have any verified information about blairally.\n"
+                            "2. Session_A (sess_66c6c2f0dfd3) - Sales Director: Blairally is a music venue and arcade...\n"
+                            "3. Session_B (sess_0772e3abaec1) - Sales Director: Blairally has live music."
+                        ),
+                    },
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "show me the rest of 2", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "session.search")
+        self.assertEqual(routed["tool"], "office.sessions_search")
+        self.assertEqual(routed["arguments"]["query"], "blairally")
+        self.assertEqual(routed["arguments"]["target_session_id"], "sess_66c6c2f0dfd3")
+        self.assertTrue(routed["arguments"]["detail"])
+        self.assertTrue(routed["arguments"]["expand_full"])
 
     def test_show_this_session_thread_routes_to_transcript(self) -> None:
         routed = self.pipeline.route_user_request("default", "can you show this sessions thread?")

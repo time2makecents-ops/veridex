@@ -4,7 +4,9 @@ import unittest
 
 from office_app.server.request_response_helpers import request_text_from_response
 from office_app.server.search_response_synthesis import (
+    build_grounded_search_context,
     grounded_entity_followup_response,
+    grounded_search_followup_response,
     synthesize_search_response,
 )
 
@@ -143,6 +145,135 @@ class SearchResponseSynthesisTests(unittest.TestCase):
             "Search results describe Blairally as a music venue/arcade in Eugene, Oregon.",
         )
         self.assertIsNone(response)
+
+    def test_build_grounded_search_context_preserves_result_rows(self) -> None:
+        routed = {
+            "capability": "search.web",
+            "request": "search for blairally and give me information about the company",
+            "grounding_required": True,
+            "entity_subject": "blairally",
+        }
+        result = {
+            "structuredContent": {
+                "provider": "serpapi",
+                "summary_text": "Web results for 'blairally'",
+                "response_text": "Search results describe Blairally as a music venue/arcade.",
+                "results": [
+                    {
+                        "title": "Blairally Vintage Arcade",
+                        "source": "Example",
+                        "snippet": "Hours: Monday through Thursday 4 PM to 2 AM.",
+                        "url": "https://example.com/blairally",
+                    }
+                ],
+            }
+        }
+        context = build_grounded_search_context(routed=routed, result=result)
+        self.assertEqual(context["entity_subject"], "blairally")
+        self.assertEqual(context["provider"], "serpapi")
+        self.assertEqual(context["results"][0]["title"], "Blairally Vintage Arcade")
+        self.assertIn("4 PM to 2 AM", context["results"][0]["snippet"])
+
+    def test_grounded_search_followup_can_answer_hours_from_preserved_results(self) -> None:
+        response = grounded_search_followup_response(
+            "what are the hours again?",
+            {
+                "entity_subject": "blairally",
+                "results": [
+                    {
+                        "title": "Blairally Vintage Arcade",
+                        "source": "Example",
+                        "snippet": "Hours: Monday through Thursday 4 PM to 2 AM; Friday through Sunday 2 PM to 2 AM.",
+                        "url": "https://example.com/blairally",
+                    }
+                ],
+            },
+        )
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertIn("4 PM to 2 AM", response)
+        self.assertIn("Blairally Vintage Arcade", response)
+
+    def test_grounded_search_followup_reuses_preserved_summary_for_explicit_entity_request(self) -> None:
+        response = grounded_search_followup_response(
+            "what can you tell me about blairally?",
+            {
+                "entity_subject": "blairally",
+                "response_text": "Search results describe blairally as a music venue/arcade in Eugene, Oregon.",
+                "results": [
+                    {
+                        "title": "Blairally Vintage Arcade",
+                        "source": "Example",
+                        "snippet": "Blairally is a music venue/arcade in Eugene, Oregon.",
+                        "url": "https://example.com/blairally",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(
+            response,
+            "Search results describe blairally as a music venue/arcade in Eugene, Oregon.",
+        )
+
+    def test_grounded_search_followup_can_answer_location_from_preserved_results(self) -> None:
+        response = grounded_search_followup_response(
+            "what state is it in?",
+            {
+                "entity_subject": "blairally",
+                "results": [
+                    {
+                        "title": "Blairally Vintage Arcade",
+                        "source": "Example",
+                        "snippet": "Blairally is a music venue/arcade in Eugene, Oregon.",
+                        "url": "https://example.com/blairally",
+                    }
+                ],
+            },
+        )
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertIn("Eugene, Oregon", response)
+        self.assertIn("Blairally Vintage Arcade", response)
+
+    def test_grounded_search_followup_can_report_wrong_time_was_not_grounded(self) -> None:
+        response = grounded_search_followup_response(
+            "what search result said 4am instead of 4pm?",
+            {
+                "entity_subject": "blairally",
+                "results": [
+                    {
+                        "title": "Blairally Vintage Arcade",
+                        "source": "Example",
+                        "snippet": "Hours: Monday through Thursday 4 PM to 2 AM; Friday through Sunday 2 PM to 2 AM.",
+                        "url": "https://example.com/blairally",
+                    }
+                ],
+            },
+        )
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertIn("I do not have a preserved search result snippet that says 4 AM", response)
+        self.assertIn("The preserved result I have says 4 PM", response)
+
+    def test_grounded_search_followup_fails_closed_when_attribute_not_supported(self) -> None:
+        response = grounded_search_followup_response(
+            "who owns it?",
+            {
+                "entity_subject": "blairally",
+                "results": [
+                    {
+                        "title": "Blairally Vintage Arcade",
+                        "source": "Example",
+                        "snippet": "Blairally is a music venue/arcade in Eugene, Oregon.",
+                        "url": "https://example.com/blairally",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(
+            response,
+            "I do not have a preserved search result snippet that answers that ownership question.",
+        )
 
 
 if __name__ == "__main__":

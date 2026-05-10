@@ -27,7 +27,7 @@ from office_app.server.request_response_helpers import (
     request_text_from_response,
 )
 from office_app.server.search_service import SearchService
-from office_app.server.search_response_synthesis import synthesize_search_response
+from office_app.server.search_response_synthesis import build_grounded_search_context, synthesize_search_response
 from office_app.server.handlers.ai_handlers import build_ai_handlers
 from office_app.server.handlers.artifact_handlers import build_artifact_handlers
 from office_app.server.handlers.dependencies import HandlerDeps
@@ -486,29 +486,18 @@ def handle_natural_language_request(
         )
         return enriched
 
-    routed = pipeline.route_user_request(workspace_id, request_text, session_id=session_id)
-    if routed["route_kind"] == "model":
-        followup_route = pipeline.route_contextual_followup(
-            workspace_id,
-            request_text,
-            store.load_transcript(workspace_id, limit=16, session_id=session_id),
-        )
-        if followup_route is not None:
-            routed = followup_route
-
-    should_record = routed["route_kind"] in {"artifact", "model", "navigation", "tool", "clarify"}
-    if should_record:
-        current_state = kernel.get_state(workspace_id)
-        active_room_for_user = str(current_state.get("active_room") or "lobby")
-        record_user_turn(
-            workspace_id=workspace_id,
-            session_id=session_id,
-            request_text=request_text,
-            kernel=kernel,
-            store=store,
-            receptionist_context_service=receptionist_context_service,
-            user_profile=user_profile,
-        )
+    routed = _resolve_routed_request(
+        workspace_id=workspace_id,
+        session_id=session_id,
+        request_text=request_text,
+    )
+    _record_routed_user_turn(
+        routed=routed,
+        workspace_id=workspace_id,
+        session_id=session_id,
+        request_text=request_text,
+        user_profile=user_profile,
+    )
 
     if routed["route_kind"] == "artifact":
         args = dict(routed["arguments"])
@@ -573,6 +562,12 @@ def handle_natural_language_request(
                     },
                     "content": [{"type": "text", "text": response_text}],
                 }
+                response = _apply_navigator_activation(
+                    response,
+                    capability="clarification.entity_grounding",
+                    reason="Grounded factual search failed closed.",
+                )
+                enriched = attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
                 record_assistant_turn(
                     workspace_id=workspace_id,
                     session_id=session_id,
@@ -581,8 +576,9 @@ def handle_natural_language_request(
                     store=store,
                     receptionist_context_service=receptionist_context_service,
                     user_profile=user_profile,
+                    speaker=_response_speaker(enriched),
                 )
-                return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
+                return enriched
             raise
         result = synthesize_search_response(
             routed=routed,
@@ -593,6 +589,12 @@ def handle_natural_language_request(
             kernel=kernel,
             router=router,
             request_text_from_response=request_text_from_response,
+        )
+        _remember_grounded_search_context(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            routed=routed,
+            result=result,
         )
         if isinstance(result, dict):
             structured = result.get("structuredContent")
@@ -699,6 +701,14 @@ def handle_natural_language_request(
             current_state = _set_pending_session_create(current_state, session_id, request_text)
             store.save_state(workspace_id, current_state)
         response_text = str(routed.get("arguments", {}).get("response_text") or "Did you mean something else?")
+        if str(routed.get("capability") or "") == "clarification.entity_grounding":
+            entity_subject = str(routed.get("arguments", {}).get("entity_subject") or "").strip()
+            if entity_subject:
+                response_text = _entity_grounding_response_text(
+                    workspace_id=workspace_id,
+                    session_id=session_id,
+                    entity_subject=entity_subject,
+                )
         response = {
             "structuredContent": {
                 "workspace_id": workspace_id,
@@ -713,6 +723,12 @@ def handle_natural_language_request(
             },
             "content": [{"type": "text", "text": response_text}],
         }
+        response = _apply_navigator_activation(
+            response,
+            capability=str(routed.get("capability") or ""),
+            reason=str(routed.get("reason") or ""),
+        )
+        enriched = attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
         record_assistant_turn(
             workspace_id=workspace_id,
             session_id=session_id,
@@ -721,8 +737,9 @@ def handle_natural_language_request(
             store=store,
             receptionist_context_service=receptionist_context_service,
             user_profile=user_profile,
+            speaker=_response_speaker(enriched),
         )
-        return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
+        return enriched
 
     if routed["route_kind"] == "model":
         args = dict(routed["arguments"])
@@ -745,6 +762,12 @@ def handle_natural_language_request(
                     "reason": routed["reason"],
                 }
         enriched = attach_request_context(result, workspace_id=workspace_id, session_id=session_id)
+        enriched = _normalize_model_governance_response(
+            enriched,
+            workspace_id=workspace_id,
+            session_id=session_id,
+            request_text=request_text,
+        )
         record_assistant_turn(
             workspace_id=workspace_id,
             session_id=session_id,
@@ -753,6 +776,7 @@ def handle_natural_language_request(
             store=store,
             receptionist_context_service=receptionist_context_service,
             user_profile=user_profile,
+            speaker=_response_speaker(enriched),
         )
         return enriched
 
@@ -1013,6 +1037,185 @@ def _clear_pending_session_create(state: Dict[str, Any], session_id: str) -> Dic
     return state
 
 
+def _resolve_routed_request(*, workspace_id: str, session_id: str, request_text: str) -> Dict[str, Any]:
+    routed = pipeline.route_user_request(workspace_id, request_text, session_id=session_id)
+    if routed["route_kind"] != "model":
+        return routed
+    followup_route = pipeline.route_contextual_followup(
+        workspace_id,
+        request_text,
+        store.load_transcript(workspace_id, limit=16, session_id=session_id),
+        session_id=session_id,
+    )
+    return followup_route or routed
+
+
+def _record_routed_user_turn(
+    *,
+    routed: Dict[str, Any],
+    workspace_id: str,
+    session_id: str,
+    request_text: str,
+    user_profile: Dict[str, Any] | None,
+) -> None:
+    if routed["route_kind"] not in {"artifact", "model", "navigation", "tool", "clarify"}:
+        return
+    record_user_turn(
+        workspace_id=workspace_id,
+        session_id=session_id,
+        request_text=request_text,
+        kernel=kernel,
+        store=store,
+        receptionist_context_service=receptionist_context_service,
+        user_profile=user_profile,
+    )
+
+
+def _navigator_activation_for_capability(capability: str, *, reason: str = "") -> Dict[str, Any] | None:
+    normalized = str(capability or "").strip().lower()
+    if normalized.startswith("clarification."):
+        activation = {
+            **NAVIGATOR_CONTROL,
+            "visibility": "VISIBLE",
+            "activated": True,
+            "mode": "intervention",
+            "reason": reason or "Navigator intervened to keep the response grounded and on track.",
+        }
+        if normalized == "clarification.entity_grounding":
+            activation["mode"] = "verification"
+            activation["reason"] = reason or "Verification required before stating unsupported facts."
+        elif normalized == "clarification.entity_followup":
+            activation["mode"] = "grounded_followup"
+            activation["reason"] = reason or "Grounded search evidence required for this follow-up."
+        return activation
+    return None
+
+
+def _session_room_title(*, workspace_id: str, session_id: str) -> str:
+    room_id = ""
+    try:
+        session = user_service.get_session(session_id)
+        room_id = str(session.get("active_room") or "").strip()
+    except Exception:
+        room_id = ""
+    if not room_id:
+        try:
+            room_id = str(kernel.get_state(workspace_id).get("active_room") or "").strip()
+        except Exception:
+            room_id = ""
+    if not room_id:
+        return "current department"
+    return pipeline.room_title_for_id(room_id)
+
+
+def _entity_grounding_response_text(*, workspace_id: str, session_id: str, entity_subject: str) -> str:
+    room_title = str(_session_room_title(workspace_id=workspace_id, session_id=session_id) or "").strip()
+    room_phrase = room_title if room_title.lower().startswith("the ") else f"the {room_title}" if room_title else "the current department"
+    return (
+        f"Veridex doesn't have any verified information about {entity_subject}. "
+        f"Have {room_phrase} do an internet search or search your other sessions if you want to know more."
+    )
+
+
+def _apply_navigator_activation(response: Dict[str, Any], *, capability: str, reason: str = "") -> Dict[str, Any]:
+    activation = _navigator_activation_for_capability(capability, reason=reason)
+    if activation is None:
+        structured = response.get("structuredContent")
+        if isinstance(structured, dict):
+            routing = structured.get("routing")
+            if isinstance(routing, dict) and str(routing.get("route_kind") or "").strip().lower() == "clarify":
+                activation = {
+                    **NAVIGATOR_CONTROL,
+                    "visibility": "VISIBLE",
+                    "activated": True,
+                    "mode": "intervention",
+                    "reason": reason or "Navigator intervened to resolve an issue before continuing.",
+                }
+    if activation is None:
+        return response
+    enriched = dict(response)
+    structured = dict(enriched.get("structuredContent") or {})
+    structured["navigator_activation"] = activation
+    structured["speaker"] = "Navigator"
+    enriched["structuredContent"] = structured
+    return enriched
+
+
+def _normalize_model_governance_response(
+    response: Dict[str, Any],
+    *,
+    workspace_id: str,
+    session_id: str,
+    request_text: str,
+) -> Dict[str, Any]:
+    entity_request = pipeline.extract_factual_entity_request(request_text)
+    if entity_request is None or entity_request.get("search_requested"):
+        return response
+    response_text = request_text_from_response(response)
+    lowered = response_text.lower()
+    if "verified information" not in lowered and "i should not guess" not in lowered:
+        return response
+    entity_subject = str(entity_request.get("entity_subject") or "").strip()
+    if not entity_subject:
+        return response
+    normalized_text = _entity_grounding_response_text(
+        workspace_id=workspace_id,
+        session_id=session_id,
+        entity_subject=entity_subject,
+    )
+    enriched = dict(response)
+    structured = dict(enriched.get("structuredContent") or {})
+    structured["response_text"] = normalized_text
+    structured["routing"] = {
+        "route_kind": "clarify",
+        "capability": "clarification.entity_grounding",
+        "tool": "office.capability_info",
+        "reason": "Normalized a model-side unsupported entity answer into a Navigator governance response.",
+    }
+    enriched["structuredContent"] = structured
+    enriched["content"] = [{"type": "text", "text": normalized_text}]
+    return _apply_navigator_activation(
+        enriched,
+        capability="clarification.entity_grounding",
+        reason="Normalized a model-side unsupported entity answer into a Navigator governance response.",
+    )
+
+
+def _response_speaker(response: Dict[str, Any]) -> Optional[str]:
+    structured = response.get("structuredContent")
+    if isinstance(structured, dict):
+        routing = structured.get("routing")
+        if isinstance(routing, dict) and str(routing.get("route_kind") or "").strip().lower() == "clarify":
+            return "Navigator"
+        speaker = str(structured.get("speaker") or "").strip()
+        if speaker:
+            return speaker
+        activation = structured.get("navigator_activation")
+        if isinstance(activation, dict) and activation.get("activated"):
+            return "Navigator"
+    return None
+
+
+def _remember_grounded_search_context(
+    *,
+    workspace_id: str,
+    session_id: str,
+    routed: Dict[str, Any],
+    result: Dict[str, Any],
+) -> None:
+    if not session_id or not routed.get("grounding_required"):
+        return
+    grounded_context = build_grounded_search_context(routed=routed, result=result)
+    if not grounded_context.get("results"):
+        return
+    state = kernel.get_state(workspace_id)
+    session_map = dict(state.get("grounded_search_by_session") or {})
+    grounded_context["ts"] = utc_now()
+    session_map[session_id] = grounded_context
+    state["grounded_search_by_session"] = session_map
+    store.save_state(workspace_id, state)
+
+
 def refresh_handler_bindings() -> None:
     global handle_workspaces_list
     global handle_workspace_new
@@ -1022,6 +1225,7 @@ def refresh_handler_bindings() -> None:
     global handle_office_transcript_get
     global handle_commands_list
     global handle_sessions_list
+    global handle_sessions_search
     global handle_session_create
     global handle_session_activate
     global handle_office_room_set
@@ -1095,6 +1299,7 @@ def refresh_handler_bindings() -> None:
     handle_office_transcript_get = workspace_handlers["office.transcript_get"]
     handle_commands_list = workspace_handlers["office.commands_list"]
     handle_sessions_list = session_handlers["office.sessions_list"]
+    handle_sessions_search = session_handlers["office.sessions_search"]
     handle_session_create = session_handlers["office.session_create"]
     handle_session_activate = session_handlers["office.session_activate"]
     handle_office_room_set = workspace_handlers["office.room_set"]
@@ -1136,6 +1341,57 @@ def refresh_handler_bindings() -> None:
     handle_search_places = ai_handlers["office.search_places"]
     handle_ocr_extract = ai_handlers["office.ocr_extract"]
 
+    register_tools(
+        router,
+        {
+            "office.workspaces_list": handle_workspaces_list,
+            "office.workspace_new": handle_workspace_new,
+            "office.workspace_activate": handle_workspace_activate,
+            "office.bootstrap": handle_office_bootstrap,
+            "office.state_get": handle_office_state_get,
+            "office.transcript_get": handle_office_transcript_get,
+            "office.commands_list": handle_commands_list,
+            "office.sessions_list": handle_sessions_list,
+            "office.sessions_search": handle_sessions_search,
+            "office.session_create": handle_session_create,
+            "office.session_activate": handle_session_activate,
+            "office.room_set": handle_office_room_set,
+            "office.nancy_route": handle_office_nancy_route,
+            "office.ai_generate": handle_ai_generate,
+            "office.search_web": handle_search_web,
+            "office.search_reviews": handle_search_reviews,
+            "office.search_places": handle_search_places,
+            "office.ocr_extract": handle_ocr_extract,
+            "mailroom.dispatch": handle_mailroom_dispatch,
+            "office.artifact_create": handle_artifact_create,
+            "office.artifact_get": handle_artifact_get,
+            "office.artifact_list": handle_artifact_list,
+            "office.artifact_update": handle_artifact_update,
+            "office.artifact_append": handle_artifact_append,
+            "office.artifact_archive": handle_artifact_archive,
+            "office.memos_list": handle_memos_list,
+            "office.memo_get": handle_memo_get,
+            "office.archive_store_text": handle_archive_store_text,
+            "office.archive_list": handle_archive_list,
+            "office.archive_get": handle_archive_get,
+            "office.nancy_artifacts_list": handle_nancy_artifacts_list,
+            "office.nancy_artifact_open": handle_nancy_artifact_open,
+            "office.nancy_workspace_briefing": handle_nancy_workspace_briefing,
+            "office.file_upload": handle_file_upload,
+            "office.file_list": handle_file_list,
+            "office.file_get": handle_file_get,
+            "office.file_download": handle_file_download_response,
+            "office.private_file_upload": handle_private_file_upload,
+            "office.private_file_list": handle_private_file_list,
+            "office.private_file_get": handle_private_file_get,
+            "office.receptionist_context_get": handle_receptionist_context_get,
+            "office.receptionist_context_update": handle_receptionist_context_update,
+            "office.room_memory_remember": handle_room_memory_remember,
+            "office.room_memory_list": handle_room_memory_list,
+            "office.room_memory_forget": handle_room_memory_forget,
+        },
+    )
+
 
 refresh_handler_bindings()
 
@@ -1151,6 +1407,7 @@ register_tools(
         "office.transcript_get": handle_office_transcript_get,
         "office.commands_list": handle_commands_list,
         "office.sessions_list": handle_sessions_list,
+        "office.sessions_search": handle_sessions_search,
         "office.session_create": handle_session_create,
         "office.session_activate": handle_session_activate,
         "office.room_set": handle_office_room_set,

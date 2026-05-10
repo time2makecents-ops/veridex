@@ -8,6 +8,8 @@ $frontendPort = 3078
 $root = "C:\Office-App"
 $backendCommand = Join-Path $root "run_server.cmd"
 $frontendDir = Join-Path $root "office_app\frontend"
+$frontendStdoutLog = Join-Path $root "frontend-https.out.log"
+$frontendStderrLog = Join-Path $root "frontend-https.err.log"
 $smokeScript = Join-Path $root "office_app\smoke_test.ps1"
 
 function Get-ListeningPids {
@@ -68,6 +70,44 @@ function Wait-Port {
   return $false
 }
 
+function Test-FrontendReady {
+  try {
+    $nodePath = (Get-Command node -ErrorAction Stop).Source
+    $nodeScript = @"
+const https = require('https');
+const req = https.get('https://127.0.0.1:3078', { rejectUnauthorized: false }, (res) => {
+  console.log(String(res.statusCode || 0));
+  res.resume();
+});
+req.on('error', () => {
+  console.log('0');
+  process.exitCode = 1;
+});
+req.setTimeout(3000, () => {
+  console.log('0');
+  req.destroy();
+  process.exitCode = 1;
+});
+"@
+    $status = ($nodeScript | & $nodePath -).Trim()
+    return ($status -match '^\d+$' -and [int]$status -ge 200 -and [int]$status -lt 400)
+  } catch {
+    return $false
+  }
+}
+
+function Wait-FrontendReady {
+  param([int]$TimeoutSeconds = 30)
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-FrontendReady) {
+      return $true
+    }
+    Start-Sleep -Milliseconds 500
+  }
+  return $false
+}
+
 function Show-StartupHelp {
   Write-Host ""
   Write-Host "Recommended start command:" -ForegroundColor Yellow
@@ -91,7 +131,17 @@ function Start-Backend {
 
 function Start-Frontend {
   $nodePath = (Get-Command node -ErrorAction Stop).Source
-  Start-Process -FilePath "cmd.exe" -ArgumentList "/k", "`"$nodePath`" server.cjs" -WorkingDirectory $frontendDir
+  foreach ($logPath in @($frontendStdoutLog, $frontendStderrLog)) {
+    if (Test-Path $logPath) {
+      Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    }
+  }
+  Start-Process `
+    -FilePath $nodePath `
+    -ArgumentList "server.cjs" `
+    -WorkingDirectory $frontendDir `
+    -RedirectStandardOutput $frontendStdoutLog `
+    -RedirectStandardError $frontendStderrLog | Out-Null
 }
 
 switch ($Action) {
@@ -100,7 +150,7 @@ switch ($Action) {
   }
   "status" {
     $backendUp = Test-NetConnection 127.0.0.1 -Port $backendPort -InformationLevel Quiet
-    $frontendUp = Test-NetConnection 127.0.0.1 -Port $frontendPort -InformationLevel Quiet
+    $frontendUp = Test-FrontendReady
     Write-Host "Backend ($backendPort): $backendUp"
     Write-Host "Frontend ($frontendPort): $frontendUp"
     if ($backendUp -and $frontendUp -and (Test-Path $smokeScript)) {
@@ -119,9 +169,9 @@ switch ($Action) {
       throw "Backend failed to start on port $backendPort."
     }
     Start-Frontend
-    if (-not (Wait-Port -Port $frontendPort -TimeoutSeconds 30)) {
+    if (-not (Wait-FrontendReady -TimeoutSeconds 30)) {
       Show-StartupHelp
-      throw "Frontend failed to start on port $frontendPort."
+      throw "Frontend failed to start on port $frontendPort. Check $frontendStdoutLog and $frontendStderrLog."
     }
     Write-Host "Veridex restarted."
     if (Test-Path $smokeScript) {
@@ -131,7 +181,7 @@ switch ($Action) {
   }
   default {
     $backendUp = Test-NetConnection 127.0.0.1 -Port $backendPort -InformationLevel Quiet
-    $frontendUp = Test-NetConnection 127.0.0.1 -Port $frontendPort -InformationLevel Quiet
+    $frontendUp = Test-FrontendReady
     if ($backendUp -and $frontendUp) {
       Write-Host "Veridex is already running."
       return
@@ -145,9 +195,9 @@ switch ($Action) {
     }
     if (-not $frontendUp) {
       Start-Frontend
-      if (-not (Wait-Port -Port $frontendPort -TimeoutSeconds 30)) {
+      if (-not (Wait-FrontendReady -TimeoutSeconds 30)) {
         Show-StartupHelp
-        throw "Frontend failed to start on port $frontendPort."
+        throw "Frontend failed to start on port $frontendPort. Check $frontendStdoutLog and $frontendStderrLog."
       }
     }
     Write-Host "Veridex started."

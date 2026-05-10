@@ -108,6 +108,348 @@ def grounded_entity_followup_response(question_text: str, evidence_text: str) ->
     return None
 
 
+HOURS_QUESTION_RE = re.compile(r"\b(hours?|open|opening|closing|close|when\s+(?:is|are)\s+(?:it|they)\s+open)\b", re.IGNORECASE)
+RESULT_PROVENANCE_RE = re.compile(r"\b(?:what|which)\s+(?:search\s+)?(?:result|source)\s+said\b", re.IGNORECASE)
+TIME_TOKEN_RE = re.compile(r"\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b", re.IGNORECASE)
+HOURS_EVIDENCE_RE = re.compile(
+    r"(?:hours?|open|mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday|sat|saturday|sun|sunday|daily).{0,120}?\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b.{0,120}",
+    re.IGNORECASE,
+)
+LOCATION_QUESTION_RE = re.compile(r"\b(where|located|location|address|state|city|based)\b", re.IGNORECASE)
+LOCATION_EVIDENCE_RE = re.compile(
+    r"\b(?:located\s+(?:in|at)|in|at|address:?)[^.\n]{0,140}",
+    re.IGNORECASE,
+)
+CONTACT_QUESTION_RE = re.compile(r"\b(phone|call|contact|number|email)\b", re.IGNORECASE)
+CONTACT_EVIDENCE_RE = re.compile(
+    r"\b(?:phone|call|contact|tel|telephone|email)\b[^.\n]{0,140}",
+    re.IGNORECASE,
+)
+WEBSITE_QUESTION_RE = re.compile(r"\b(website|site|url|web\s*site|webpage)\b", re.IGNORECASE)
+WEBSITE_EVIDENCE_RE = re.compile(r"(https?://\S+|www\.\S+)", re.IGNORECASE)
+FOUNDING_QUESTION_RE = re.compile(r"\b(founded|started|established|opened|launch(?:ed)?)\b", re.IGNORECASE)
+FOUNDING_EVIDENCE_RE = re.compile(
+    r"\b(?:founded|started|established|opened|launched)\b[^.\n]{0,140}",
+    re.IGNORECASE,
+)
+OWNER_QUESTION_RE = re.compile(r"\b(owner|owns|owned by|founder)\b", re.IGNORECASE)
+OWNER_EVIDENCE_RE = re.compile(
+    r"\b(?:owner|owns|owned by|founder)\b[^.\n]{0,140}",
+    re.IGNORECASE,
+)
+PRICE_QUESTION_RE = re.compile(r"\b(price|pricing|cost|expensive|cheap)\b", re.IGNORECASE)
+PRICE_EVIDENCE_RE = re.compile(
+    r"\b(?:price|pricing|cost|\$\d)\b[^.\n]{0,140}",
+    re.IGNORECASE,
+)
+
+ATTRIBUTE_RULES = (
+    ("hours", HOURS_QUESTION_RE, HOURS_EVIDENCE_RE),
+    ("location", LOCATION_QUESTION_RE, LOCATION_EVIDENCE_RE),
+    ("contact", CONTACT_QUESTION_RE, CONTACT_EVIDENCE_RE),
+    ("website", WEBSITE_QUESTION_RE, WEBSITE_EVIDENCE_RE),
+    ("founding", FOUNDING_QUESTION_RE, FOUNDING_EVIDENCE_RE),
+    ("ownership", OWNER_QUESTION_RE, OWNER_EVIDENCE_RE),
+    ("pricing", PRICE_QUESTION_RE, PRICE_EVIDENCE_RE),
+)
+
+ENTITY_SUMMARY_REQUEST_RE = re.compile(
+    r"^(?:what\s+can\s+you\s+tell\s+me\s+about|tell\s+me\s+about|what\s+do\s+you\s+know\s+about|information\s+about|who\s+is|who's)\s+(.+?)\??$",
+    re.IGNORECASE,
+)
+
+
+def _context_results(search_context: Dict[str, Any]) -> List[Dict[str, str]]:
+    results = search_context.get("results")
+    rows: List[Dict[str, str]] = []
+    if not isinstance(results, list):
+        return rows
+    for item in results[:8]:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "title": str(item.get("title") or "").strip(),
+                "source": str(item.get("source") or "").strip(),
+                "url": str(item.get("url") or "").strip(),
+                "snippet": str(item.get("snippet") or item.get("address") or "").strip(),
+            }
+        )
+    return rows
+
+
+def _search_context_evidence_text(search_context: Dict[str, Any]) -> str:
+    parts: List[str] = []
+    for item in _context_results(search_context):
+        for value in (item.get("title"), item.get("snippet"), item.get("url")):
+            text = str(value or "").strip()
+            if text:
+                parts.append(text)
+    return "\n".join(parts)
+
+
+def build_grounded_search_context(*, routed: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
+    structured = result.get("structuredContent")
+    if not isinstance(structured, dict):
+        return {}
+    return {
+        "request": str(routed.get("request") or "").strip(),
+        "entity_subject": str(routed.get("entity_subject") or "").strip(),
+        "capability": str(routed.get("capability") or "").strip(),
+        "provider": str(structured.get("provider") or "").strip(),
+        "summary_text": str(structured.get("summary_text") or "").strip(),
+        "response_text": str(structured.get("response_text") or "").strip(),
+        "results": _context_results(structured),
+    }
+
+
+def _compact_snippet(snippet: str, max_chars: int = 180) -> str:
+    text = re.sub(r"\s+", " ", str(snippet or "").strip())
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "..."
+
+
+def _result_label(result: Dict[str, str]) -> str:
+    title = str(result.get("title") or "").strip()
+    source = str(result.get("source") or "").strip()
+    if title and source:
+        return f"{title} ({source})"
+    return title or source or "that result"
+
+
+def _normalize_time_token(value: str) -> str:
+    token = re.sub(r"[.\s]+", "", str(value or "").strip().lower())
+    token = token.replace("a.m", "am").replace("p.m", "pm")
+    return token
+
+
+def _display_time_token(value: str) -> str:
+    normalized = _normalize_time_token(value)
+    match = re.match(r"^(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?(?P<meridiem>am|pm)$", normalized)
+    if not match:
+        return str(value or "").strip()
+    hour = match.group("hour")
+    minute = match.group("minute")
+    meridiem = match.group("meridiem").upper()
+    return f"{hour}{':' + minute if minute else ''} {meridiem}"
+
+
+def _find_result_with_time(results: List[Dict[str, str]], token: str) -> Optional[Dict[str, str]]:
+    normalized = _normalize_time_token(token)
+    for item in results:
+        snippet_tokenized = _normalize_time_token(item.get("snippet") or "")
+        if normalized and normalized in snippet_tokenized:
+            return item
+    return None
+
+
+def _find_hours_result(results: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
+    for item in results:
+        snippet = str(item.get("snippet") or "").strip()
+        if snippet and HOURS_EVIDENCE_RE.search(snippet):
+            return item
+    return None
+
+
+def _find_attribute_result(results: List[Dict[str, str]], evidence_re: re.Pattern[str]) -> Optional[Dict[str, str]]:
+    for item in results:
+        haystack = " ".join(
+            part for part in (str(item.get("title") or "").strip(), str(item.get("snippet") or "").strip()) if part
+        )
+        if haystack and evidence_re.search(haystack):
+            return item
+    return None
+
+
+def _followup_terms(question_text: str, entity_subject: str = "") -> List[str]:
+    lowered = str(question_text or "").lower()
+    tokens = re.findall(r"[a-z0-9]{3,}", lowered)
+    stopwords = {
+        "about",
+        "again",
+        "are",
+        "can",
+        "company",
+        "did",
+        "does",
+        "for",
+        "from",
+        "have",
+        "here",
+        "info",
+        "information",
+        "into",
+        "its",
+        "just",
+        "result",
+        "said",
+        "search",
+        "source",
+        "tell",
+        "that",
+        "the",
+        "their",
+        "them",
+        "they",
+        "this",
+        "those",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "you",
+    }
+    subject_tokens = set(re.findall(r"[a-z0-9]{3,}", str(entity_subject or "").lower()))
+    terms = [token for token in tokens if token not in stopwords and token not in subject_tokens]
+    return list(dict.fromkeys(terms))
+
+
+def _score_result_for_terms(result: Dict[str, str], terms: List[str]) -> int:
+    if not terms:
+        return 0
+    haystack = " ".join(
+        part.lower() for part in (str(result.get("title") or "").strip(), str(result.get("snippet") or "").strip()) if part
+    )
+    score = 0
+    for term in terms:
+        if term in haystack:
+            score += 1
+    return score
+
+
+def _find_generic_result(results: List[Dict[str, str]], question_text: str, entity_subject: str = "") -> Optional[Dict[str, str]]:
+    terms = _followup_terms(question_text, entity_subject=entity_subject)
+    if not terms:
+        return None
+    best_result: Optional[Dict[str, str]] = None
+    best_score = 0
+    for item in results:
+        score = _score_result_for_terms(item, terms)
+        if score > best_score:
+            best_score = score
+            best_result = item
+    if best_score <= 0:
+        return None
+    return best_result
+
+
+def _normalize_subject_text(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    return text.strip(" .,:;?!\"'")
+
+
+def _explicit_entity_summary_subject(question_text: str) -> str:
+    match = ENTITY_SUMMARY_REQUEST_RE.match(str(question_text or "").strip())
+    if not match:
+        return ""
+    return _normalize_subject_text(match.group(1))
+
+
+def _looks_like_grounded_search_followup(question_text: str, entity_subject: str = "") -> bool:
+    lowered = re.sub(r"\s+", " ", str(question_text or "").strip().lower())
+    if not lowered:
+        return False
+    if RESULT_PROVENANCE_RE.search(lowered):
+        return True
+    if any(rule_re.search(lowered) for _, rule_re, _ in ATTRIBUTE_RULES):
+        return True
+    if len(lowered.split()) <= 12 and re.search(r"\b(it|they|their|them|there|again)\b", lowered):
+        return True
+    return False
+
+
+def grounded_search_followup_response(question_text: str, search_context: Dict[str, Any]) -> Optional[str]:
+    question = str(question_text or "").strip()
+    if not question or not isinstance(search_context, dict):
+        return None
+
+    results = _context_results(search_context)
+    if not results:
+        return None
+    entity_subject = str(search_context.get("entity_subject") or "").strip()
+    explicit_summary_subject = _explicit_entity_summary_subject(question)
+    normalized_entity_subject = _normalize_subject_text(entity_subject)
+    if explicit_summary_subject and normalized_entity_subject and (
+        explicit_summary_subject == normalized_entity_subject
+        or explicit_summary_subject.startswith(normalized_entity_subject)
+        or normalized_entity_subject.startswith(explicit_summary_subject)
+    ):
+        preserved_response = str(search_context.get("response_text") or "").strip()
+        if preserved_response:
+            return preserved_response
+        matched = _find_generic_result(results, question, entity_subject=entity_subject) or results[0]
+        return f"The preserved result I have is {_result_label(matched)}: {_compact_snippet(matched.get('snippet') or matched.get('url') or '')}"
+    if not _looks_like_grounded_search_followup(question, entity_subject=entity_subject):
+        return None
+
+    evidence_text = _search_context_evidence_text(search_context)
+    entity_followup = grounded_entity_followup_response(question, evidence_text)
+    if entity_followup is not None:
+        return entity_followup
+
+    if RESULT_PROVENANCE_RE.search(question):
+        quoted_groups = re.findall(r'"([^"]+)"|\'([^\']+)\'', question)
+        flattened_terms = [next((part for part in group if part), "").strip() for group in quoted_groups]
+        time_terms = TIME_TOKEN_RE.findall(question)
+        if time_terms:
+            target = time_terms[0]
+            matched_target = _find_result_with_time(results, target)
+            if matched_target is not None:
+                return (
+                    f"The preserved result that mentions {_display_time_token(target)} is "
+                    f"{_result_label(matched_target)}: {_compact_snippet(matched_target.get('snippet') or '')}"
+                )
+            alternate = None
+            for term in time_terms[1:]:
+                alternate = _find_result_with_time(results, term)
+                if alternate is not None:
+                    break
+            if alternate is not None:
+                wanted = _display_time_token(time_terms[0])
+                found = _display_time_token(time_terms[1])
+                return (
+                    f"I do not have a preserved search result snippet that says {wanted}. "
+                    f"The preserved result I have says {found}: {_result_label(alternate)}: "
+                    f"{_compact_snippet(alternate.get('snippet') or '')}. "
+                    f"So the {wanted} wording came from my earlier answer, not grounded search evidence."
+                )
+            wanted = _display_time_token(time_terms[0])
+            return (
+                f"I do not have a preserved search result snippet that says {wanted}. "
+                "That wording did not come from grounded search evidence I still have."
+            )
+        for term in [term for term in flattened_terms if term]:
+            if not TIME_TOKEN_RE.search(term):
+                continue
+            matched = _find_result_with_time(results, term)
+            if matched is not None:
+                return (
+                    f"The preserved result that mentions {_display_time_token(term)} is "
+                    f"{_result_label(matched)}: {_compact_snippet(matched.get('snippet') or '')}"
+                )
+        return "I do not have a preserved search result snippet that matches that phrasing."
+
+    for attribute_name, question_re, evidence_re in ATTRIBUTE_RULES:
+        if question_re.search(question) is None:
+            continue
+        matched = _find_attribute_result(results, evidence_re)
+        if matched is None:
+            return f"I do not have a preserved search result snippet that answers that {attribute_name} question."
+        return f"The preserved result I have for that is {_result_label(matched)}: {_compact_snippet(matched.get('snippet') or matched.get('url') or '')}"
+
+    matched = _find_generic_result(results, question, entity_subject=entity_subject)
+    if matched is not None:
+        return f"The preserved result I have that best matches that is {_result_label(matched)}: {_compact_snippet(matched.get('snippet') or matched.get('url') or '')}"
+
+    if re.match(r"^(?:what|where|when|who|how|is|are|does|did|can)\b", question, re.IGNORECASE):
+        return "I do not have a preserved search result snippet that clearly answers that follow-up."
+
+    return None
+
+
 def tool_result_brief(response: Dict[str, Any]) -> str:
     structured = response.get("structuredContent")
     if not isinstance(structured, dict):

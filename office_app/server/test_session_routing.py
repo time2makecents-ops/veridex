@@ -5,6 +5,8 @@ import uuid
 from pathlib import Path
 import unittest
 
+from fastapi import HTTPException
+
 from office_app.server.app import (
     LobbyOnboardRequest,
     NaturalLanguageRequest,
@@ -118,6 +120,11 @@ class SessionRoutingTests(unittest.TestCase):
                 "I could not verify information about blairally because the search failed. I should not guess.",
             )
             self.assertEqual(response["structuredContent"]["routing"]["route_kind"], "clarify")
+            self.assertEqual(response["structuredContent"]["speaker"], "Navigator")
+            self.assertTrue(response["structuredContent"]["navigator_activation"]["activated"])
+            self.assertEqual(response["structuredContent"]["navigator_activation"]["visibility"], "VISIBLE")
+            transcript = temp_store.load_transcript(onboard_result["structuredContent"]["workspace_id"], session_id=session_id)
+            self.assertEqual(transcript[-1]["speaker"], "Navigator")
         finally:
             app_module.store = original["store"]
             app_module.kernel = original["kernel"]
@@ -129,6 +136,311 @@ class SessionRoutingTests(unittest.TestCase):
             app_module.router = original["router"]
             app_module.pipeline = original["pipeline"]
             app_module.search_service = original["search_service"]
+            app_module.refresh_handler_bindings()
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_unknown_entity_lookup_shows_visible_navigator_response_in_sales_department(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_session_routing_test_entity_grounding_navigator"
+        workspaces_dir = runtime_dir / "workspaces"
+        legacy_memos_dir = runtime_dir / "memos"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+        legacy_memos_dir.mkdir(parents=True, exist_ok=True)
+
+        original = {
+            "store": app_module.store,
+            "kernel": app_module.kernel,
+            "memo_service": app_module.memo_service,
+            "archive_service": app_module.archive_service,
+            "user_service": app_module.user_service,
+            "receptionist_context_service": app_module.receptionist_context_service,
+            "nancy_service": app_module.nancy_service,
+            "router": app_module.router,
+            "pipeline": app_module.pipeline,
+        }
+
+        try:
+            temp_store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_kernel = WorkspaceKernel(store=temp_store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_archive = ArchiveService(workspaces_dir=workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_user = app_module.UserService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_receptionist_context = app_module.ReceptionistContextService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_memo = MemoService(store=temp_store, legacy_memos_dir=legacy_memos_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_nancy = NancyService(
+                kernel=temp_kernel,
+                archive_service=temp_archive,
+                store=temp_store,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            )
+            temp_router = CommandRouter()
+            temp_pipeline = RequestPipeline(
+                kernel=temp_kernel,
+                navigator_control=NAVIGATOR_CONTROL,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+                tool_names=[],
+                app_version="1.3.0",
+            )
+
+            app_module.store = temp_store
+            app_module.kernel = temp_kernel
+            app_module.memo_service = temp_memo
+            app_module.archive_service = temp_archive
+            app_module.user_service = temp_user
+            app_module.receptionist_context_service = temp_receptionist_context
+            app_module.nancy_service = temp_nancy
+            app_module.router = temp_router
+            app_module.pipeline = temp_pipeline
+            app_module.refresh_handler_bindings()
+
+            onboard_result = None
+            for _ in range(20):
+                pin_code = f"{uuid.uuid4().int % 10000:04d}"
+                try:
+                    onboard_result = lobby_onboard(LobbyOnboardRequest(name="Mira", pin_code=pin_code))
+                    break
+                except Exception:
+                    continue
+
+            self.assertIsNotNone(onboard_result)
+            workspace_id = onboard_result["structuredContent"]["workspace_id"]
+            session_id = onboard_result["structuredContent"]["session_id"]
+            temp_user.remember_session_room(session_id, active_room="sales_department", active_persona="Sales Director")
+
+            response = handle_natural_language_request(
+                NaturalLanguageRequest(
+                    text="what can you tell me about blairally",
+                    session_id=session_id,
+                )
+            )
+
+            self.assertEqual(
+                response["structuredContent"]["response_text"],
+                "Veridex doesn't have any verified information about blairally. Have the Sales Department do an internet search or search your other sessions if you want to know more.",
+            )
+            self.assertEqual(response["structuredContent"]["speaker"], "Navigator")
+            self.assertEqual(response["structuredContent"]["routing"]["capability"], "clarification.entity_grounding")
+            self.assertTrue(response["structuredContent"]["navigator_activation"]["activated"])
+            self.assertEqual(response["structuredContent"]["navigator_activation"]["visibility"], "VISIBLE")
+            transcript = temp_store.load_transcript(workspace_id, session_id=session_id)
+            self.assertEqual(transcript[-1]["speaker"], "Navigator")
+        finally:
+            app_module.store = original["store"]
+            app_module.kernel = original["kernel"]
+            app_module.memo_service = original["memo_service"]
+            app_module.archive_service = original["archive_service"]
+            app_module.user_service = original["user_service"]
+            app_module.receptionist_context_service = original["receptionist_context_service"]
+            app_module.nancy_service = original["nancy_service"]
+            app_module.router = original["router"]
+            app_module.pipeline = original["pipeline"]
+            app_module.refresh_handler_bindings()
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_unknown_entity_lookup_shows_navigator_in_marketing_room(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_session_routing_test_entity_grounding_marketing_navigator"
+        workspaces_dir = runtime_dir / "workspaces"
+        legacy_memos_dir = runtime_dir / "memos"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+        legacy_memos_dir.mkdir(parents=True, exist_ok=True)
+
+        original = {
+            "store": app_module.store,
+            "kernel": app_module.kernel,
+            "memo_service": app_module.memo_service,
+            "archive_service": app_module.archive_service,
+            "user_service": app_module.user_service,
+            "receptionist_context_service": app_module.receptionist_context_service,
+            "nancy_service": app_module.nancy_service,
+            "router": app_module.router,
+            "pipeline": app_module.pipeline,
+        }
+
+        try:
+            temp_store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_kernel = WorkspaceKernel(store=temp_store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_archive = ArchiveService(workspaces_dir=workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_user = app_module.UserService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_receptionist_context = app_module.ReceptionistContextService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_memo = MemoService(store=temp_store, legacy_memos_dir=legacy_memos_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_nancy = NancyService(
+                kernel=temp_kernel,
+                archive_service=temp_archive,
+                store=temp_store,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            )
+            temp_router = CommandRouter()
+            temp_pipeline = RequestPipeline(
+                kernel=temp_kernel,
+                navigator_control=NAVIGATOR_CONTROL,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+                tool_names=[],
+                app_version="1.3.0",
+            )
+
+            app_module.store = temp_store
+            app_module.kernel = temp_kernel
+            app_module.memo_service = temp_memo
+            app_module.archive_service = temp_archive
+            app_module.user_service = temp_user
+            app_module.receptionist_context_service = temp_receptionist_context
+            app_module.nancy_service = temp_nancy
+            app_module.router = temp_router
+            app_module.pipeline = temp_pipeline
+            app_module.refresh_handler_bindings()
+
+            onboard_result = None
+            for _ in range(20):
+                pin_code = f"{uuid.uuid4().int % 10000:04d}"
+                try:
+                    onboard_result = lobby_onboard(LobbyOnboardRequest(name="Mira", pin_code=pin_code))
+                    break
+                except Exception:
+                    continue
+
+            self.assertIsNotNone(onboard_result)
+            workspace_id = onboard_result["structuredContent"]["workspace_id"]
+            session_id = onboard_result["structuredContent"]["session_id"]
+            temp_user.remember_session_room(session_id, active_room="marketing_room", active_persona="Marketing Director")
+
+            response = handle_natural_language_request(
+                NaturalLanguageRequest(
+                    text="what can you tell me about blairally",
+                    session_id=session_id,
+                )
+            )
+
+            self.assertEqual(
+                response["structuredContent"]["response_text"],
+                "Veridex doesn't have any verified information about blairally. Have the Marketing & Advertising do an internet search or search your other sessions if you want to know more.",
+            )
+            self.assertEqual(response["structuredContent"]["speaker"], "Navigator")
+            transcript = temp_store.load_transcript(workspace_id, session_id=session_id)
+            self.assertEqual(transcript[-1]["speaker"], "Navigator")
+        finally:
+            app_module.store = original["store"]
+            app_module.kernel = original["kernel"]
+            app_module.memo_service = original["memo_service"]
+            app_module.archive_service = original["archive_service"]
+            app_module.user_service = original["user_service"]
+            app_module.receptionist_context_service = original["receptionist_context_service"]
+            app_module.nancy_service = original["nancy_service"]
+            app_module.router = original["router"]
+            app_module.pipeline = original["pipeline"]
+            app_module.refresh_handler_bindings()
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_model_style_unsupported_entity_answer_is_normalized_to_navigator(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_session_routing_test_model_governance_normalize"
+        workspaces_dir = runtime_dir / "workspaces"
+        legacy_memos_dir = runtime_dir / "memos"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+        legacy_memos_dir.mkdir(parents=True, exist_ok=True)
+
+        original = {
+            "store": app_module.store,
+            "kernel": app_module.kernel,
+            "memo_service": app_module.memo_service,
+            "archive_service": app_module.archive_service,
+            "user_service": app_module.user_service,
+            "receptionist_context_service": app_module.receptionist_context_service,
+            "nancy_service": app_module.nancy_service,
+            "router": app_module.router,
+            "pipeline": app_module.pipeline,
+        }
+
+        try:
+            temp_store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_kernel = WorkspaceKernel(store=temp_store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_archive = ArchiveService(workspaces_dir=workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_user = app_module.UserService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_receptionist_context = app_module.ReceptionistContextService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_memo = MemoService(store=temp_store, legacy_memos_dir=legacy_memos_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_nancy = NancyService(
+                kernel=temp_kernel,
+                archive_service=temp_archive,
+                store=temp_store,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            )
+            temp_router = CommandRouter()
+            temp_pipeline = RequestPipeline(
+                kernel=temp_kernel,
+                navigator_control=NAVIGATOR_CONTROL,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+                tool_names=[],
+                app_version="1.3.0",
+            )
+
+            app_module.store = temp_store
+            app_module.kernel = temp_kernel
+            app_module.memo_service = temp_memo
+            app_module.archive_service = temp_archive
+            app_module.user_service = temp_user
+            app_module.receptionist_context_service = temp_receptionist_context
+            app_module.nancy_service = temp_nancy
+            app_module.router = temp_router
+            app_module.pipeline = temp_pipeline
+            app_module.refresh_handler_bindings()
+
+            onboard_result = None
+            for _ in range(20):
+                pin_code = f"{uuid.uuid4().int % 10000:04d}"
+                try:
+                    onboard_result = lobby_onboard(LobbyOnboardRequest(name="Mira", pin_code=pin_code))
+                    break
+                except Exception:
+                    continue
+
+            self.assertIsNotNone(onboard_result)
+            workspace_id = onboard_result["structuredContent"]["workspace_id"]
+            session_id = onboard_result["structuredContent"]["session_id"]
+            temp_user.remember_session_room(session_id, active_room="marketing_room", active_persona="Marketing Director")
+
+            response = {
+                "structuredContent": {
+                    "workspace_id": workspace_id,
+                    "session_id": session_id,
+                    "provider": "groq",
+                    "model": "llama-3.1-8b-instant",
+                    "response_text": (
+                        'As the Marketing Director in the Marketing & Advertising room, I can tell you that '
+                        'Veridex does not have any verified information about "blairally." '
+                        "If you'd like to learn more, I can ask the Lobby to perform an internet search or check your other sessions."
+                    ),
+                    "routing": {
+                        "route_kind": "model",
+                        "capability": "ai.respond",
+                        "tool": "office.ai_generate",
+                        "reason": "No explicit tool or room command found. Using the model route.",
+                    },
+                },
+                "content": [{"type": "text", "text": "placeholder"}],
+            }
+
+            normalized = app_module._normalize_model_governance_response(
+                response,
+                workspace_id=workspace_id,
+                session_id=session_id,
+                request_text="what can you tell me about blairally",
+            )
+
+            self.assertEqual(normalized["structuredContent"]["speaker"], "Navigator")
+            self.assertEqual(normalized["structuredContent"]["routing"]["route_kind"], "clarify")
+            self.assertEqual(
+                normalized["structuredContent"]["response_text"],
+                "Veridex doesn't have any verified information about blairally. Have the Marketing & Advertising do an internet search or search your other sessions if you want to know more.",
+            )
+        finally:
+            app_module.store = original["store"]
+            app_module.kernel = original["kernel"]
+            app_module.memo_service = original["memo_service"]
+            app_module.archive_service = original["archive_service"]
+            app_module.user_service = original["user_service"]
+            app_module.receptionist_context_service = original["receptionist_context_service"]
+            app_module.nancy_service = original["nancy_service"]
+            app_module.router = original["router"]
+            app_module.pipeline = original["pipeline"]
             app_module.refresh_handler_bindings()
             shutil.rmtree(runtime_dir, ignore_errors=True)
 
@@ -260,8 +572,15 @@ class SessionRoutingTests(unittest.TestCase):
             app_module.pipeline = temp_pipeline
             app_module.refresh_handler_bindings()
 
-            pin_code = "1234"
-            onboard_result = app_module.lobby_onboard(LobbyOnboardRequest(name="Mira", pin_code=pin_code))
+            onboard_result = None
+            for _ in range(20):
+                pin_code = f"{uuid.uuid4().int % 10000:04d}"
+                try:
+                    onboard_result = app_module.lobby_onboard(LobbyOnboardRequest(name="Mira", pin_code=pin_code))
+                    break
+                except Exception:
+                    continue
+            self.assertIsNotNone(onboard_result)
             session_id = str(onboard_result["structuredContent"]["session_id"])
             workspace_id = str(onboard_result["structuredContent"]["workspace_id"])
 
@@ -555,6 +874,7 @@ class SessionRoutingTests(unittest.TestCase):
             self.assertEqual(prompt_payload["session_id"], old_session_id)
             self.assertEqual(prompt_payload["routing"]["route_kind"], "clarify")
             self.assertEqual(prompt_payload["response_text"], "What should I name the new session?")
+            self.assertEqual(prompt_payload["speaker"], "Navigator")
 
             old_transcript = temp_store.load_transcript(workspace_id, limit=20, session_id=old_session_id)
             self.assertTrue(
@@ -562,6 +882,15 @@ class SessionRoutingTests(unittest.TestCase):
                     row
                     for row in old_transcript
                     if row.get("role") == "user" and row.get("text") == "start new session"
+                ]
+            )
+            self.assertTrue(
+                [
+                    row
+                    for row in old_transcript
+                    if row.get("role") == "assistant"
+                    and row.get("text") == "What should I name the new session?"
+                    and row.get("speaker") == "Navigator"
                 ]
             )
 
@@ -576,7 +905,8 @@ class SessionRoutingTests(unittest.TestCase):
             self.assertEqual(payload["workspace_id"], workspace_id)
             self.assertEqual(payload["title"], "Restaurant strategy")
 
-            new_transcript = temp_store.load_transcript(workspace_id, limit=20, session_id=new_session_id)
+            resolved_workspace_id = str(app_module.user_service.resolve_workspace_for_session(new_session_id) or workspace_id)
+            new_transcript = temp_store.load_transcript(resolved_workspace_id, limit=20, session_id=new_session_id)
             self.assertTrue(
                 [
                     row
@@ -599,7 +929,11 @@ class SessionRoutingTests(unittest.TestCase):
                 )
             )
             self.assertEqual(followup["structuredContent"]["session_id"], new_session_id)
-            updated_new_transcript = temp_store.load_transcript(workspace_id, limit=20, session_id=new_session_id)
+            try:
+                resolved_workspace_id = str(app_module.user_service.resolve_workspace_for_session(new_session_id) or workspace_id)
+            except HTTPException:
+                resolved_workspace_id = workspace_id
+            updated_new_transcript = temp_store.load_transcript(resolved_workspace_id, limit=50, session_id=new_session_id)
             self.assertTrue(
                 [
                     row
@@ -631,6 +965,172 @@ class SessionRoutingTests(unittest.TestCase):
             self.assertIn("Current session thread:", transcript_text)
             self.assertIn("start new session", transcript_text)
             self.assertIn("What should I name the new session?", transcript_text)
+        finally:
+            app_module.store = original["store"]
+            app_module.kernel = original["kernel"]
+            app_module.memo_service = original["memo_service"]
+            app_module.archive_service = original["archive_service"]
+            app_module.user_service = original["user_service"]
+            app_module.receptionist_context_service = original["receptionist_context_service"]
+            app_module.nancy_service = original["nancy_service"]
+            app_module.router = original["router"]
+            app_module.pipeline = original["pipeline"]
+            app_module.refresh_handler_bindings()
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_search_other_sessions_reads_matching_transcript_lines(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_session_routing_test_search_other_sessions"
+        workspaces_dir = runtime_dir / "workspaces"
+        legacy_memos_dir = runtime_dir / "memos"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+        legacy_memos_dir.mkdir(parents=True, exist_ok=True)
+
+        original = {
+            "store": app_module.store,
+            "kernel": app_module.kernel,
+            "memo_service": app_module.memo_service,
+            "archive_service": app_module.archive_service,
+            "user_service": app_module.user_service,
+            "receptionist_context_service": app_module.receptionist_context_service,
+            "nancy_service": app_module.nancy_service,
+            "router": app_module.router,
+            "pipeline": app_module.pipeline,
+        }
+
+        try:
+            temp_store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_kernel = WorkspaceKernel(store=temp_store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_archive = ArchiveService(workspaces_dir=workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_user = app_module.UserService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_receptionist_context = app_module.ReceptionistContextService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_memo = MemoService(store=temp_store, legacy_memos_dir=legacy_memos_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_nancy = NancyService(
+                kernel=temp_kernel,
+                archive_service=temp_archive,
+                store=temp_store,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            )
+            temp_router = CommandRouter()
+            temp_pipeline = RequestPipeline(
+                kernel=temp_kernel,
+                navigator_control=NAVIGATOR_CONTROL,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+                tool_names=[],
+                app_version="1.3.0",
+            )
+
+            app_module.store = temp_store
+            app_module.kernel = temp_kernel
+            app_module.memo_service = temp_memo
+            app_module.archive_service = temp_archive
+            app_module.user_service = temp_user
+            app_module.receptionist_context_service = temp_receptionist_context
+            app_module.nancy_service = temp_nancy
+            app_module.router = temp_router
+            app_module.pipeline = temp_pipeline
+            app_module.refresh_handler_bindings()
+
+            onboard_result = None
+            for _ in range(20):
+                pin_code = f"{uuid.uuid4().int % 10000:04d}"
+                try:
+                    onboard_result = lobby_onboard(LobbyOnboardRequest(name="Mira", pin_code=pin_code))
+                    break
+                except Exception:
+                    continue
+
+            self.assertIsNotNone(onboard_result)
+            workspace_id = onboard_result["structuredContent"]["workspace_id"]
+            current_session_id = onboard_result["structuredContent"]["session_id"]
+            temp_user.remember_session_room(current_session_id, active_room="sales_department", active_persona="Sales Director")
+
+            created = app_module.handle_session_create(
+                {
+                    "workspace_id": workspace_id,
+                    "session_id": current_session_id,
+                    "title": "Wireless History",
+                    "description": "Wireless History",
+                }
+            )
+            other_session_id = created["structuredContent"]["session_id"]
+            temp_store.append_transcript(
+                workspace_id,
+                "assistant",
+                "sales_department",
+                "I do not have verified information about Wireless Unlimited in this workspace. I can search for it if you want.",
+                speaker="Navigator",
+                session_id=other_session_id,
+            )
+            temp_store.append_transcript(
+                workspace_id,
+                "assistant",
+                "sales_department",
+                "Veridex doesn't have any verified information about Wireless Unlimited. Have the Sales Department do an internet search if you want to know more.",
+                speaker="Navigator",
+                session_id=other_session_id,
+            )
+            temp_store.append_transcript(
+                workspace_id,
+                "assistant",
+                "sales_department",
+                "Veridex does not have any verified information about Wireless Unlimited. I can initiate an internet search for you.",
+                speaker="Sales Director",
+                session_id=other_session_id,
+            )
+            temp_store.append_transcript(
+                workspace_id,
+                "assistant",
+                "sales_department",
+                (
+                    "Wireless Unlimited sold AT&T service in Oregon. "
+                    "It had retail locations in Eugene, Springfield, and Corvallis, "
+                    "and it focused on local storefront sales, handset merchandising, "
+                    "and in-person customer service for AT&T wireless plans."
+                ),
+                speaker="Sales Director",
+                session_id=other_session_id,
+            )
+
+            response = handle_natural_language_request(
+                NaturalLanguageRequest(
+                    text="search other sessions for Wireless Unlimited",
+                    session_id=current_session_id,
+                )
+            )
+
+            response_text = response["structuredContent"]["response_text"]
+            self.assertIn('I found 1 matching session(s) for "Wireless Unlimited":', response_text)
+            self.assertIn("Wireless History", response_text)
+            self.assertIn("Wireless Unlimited sold AT&T service in Oregon.", response_text)
+            self.assertNotIn("I do not have verified information about Wireless Unlimited", response_text)
+
+            detail_response = handle_natural_language_request(
+                NaturalLanguageRequest(
+                    text="can you list the information it gave in those sessions",
+                    session_id=current_session_id,
+                )
+            )
+            detail_text = detail_response["structuredContent"]["response_text"]
+            self.assertIn('I found 1 matching session(s) for "Wireless Unlimited":', detail_text)
+            self.assertIn("Sales Director: Wireless Unlimited sold AT&T service in Oregon.", detail_text)
+            self.assertTrue(detail_response["structuredContent"]["detail"])
+            full_response = app_module.handle_sessions_search(
+                {
+                    "workspace_id": workspace_id,
+                    "session_id": current_session_id,
+                    "query": "Wireless Unlimited",
+                    "include_current": False,
+                    "detail": True,
+                    "expand_full": True,
+                    "target_session_id": other_session_id,
+                }
+            )
+            full_text = full_response["structuredContent"]["response_text"]
+            self.assertIn('Here is the full response from Wireless History', full_text)
+            self.assertIn("It had retail locations in Eugene, Springfield, and Corvallis", full_text)
+            self.assertNotIn("...", full_text)
+            self.assertTrue(full_response["structuredContent"]["expand_full"])
         finally:
             app_module.store = original["store"]
             app_module.kernel = original["kernel"]

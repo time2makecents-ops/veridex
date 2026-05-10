@@ -244,6 +244,48 @@
       "created_utc": "2026-04-19T16:36:43.708353Z",
       "last_seen_utc": "2026-04-19T16:36:43.708398Z",
       "last_room": "lobby"
+    },
+    {
+      "workspace_id": "ws_81e5147f",
+      "label": "Diag User",
+      "created_utc": "2026-05-10T10:09:39.829624Z",
+      "last_seen_utc": "2026-05-10T10:09:56.604633Z",
+      "last_room": "marketing_room"
+    },
+    {
+      "workspace_id": "ws_f35842df",
+      "label": "Diag User 2",
+      "created_utc": "2026-05-10T10:12:31.749521Z",
+      "last_seen_utc": "2026-05-10T10:13:42.787889Z",
+      "last_room": "marketing_room"
+    },
+    {
+      "workspace_id": "ws_8553070c",
+      "label": "FrontDiag",
+      "created_utc": "2026-05-10T10:14:32.741301Z",
+      "last_seen_utc": "2026-05-10T10:14:33.915757Z",
+      "last_room": "marketing_room"
+    },
+    {
+      "workspace_id": "ws_95a1d987",
+      "label": "FrontDiag2",
+      "created_utc": "2026-05-10T10:16:57.714519Z",
+      "last_seen_utc": "2026-05-10T10:16:59.114720Z",
+      "last_room": "marketing_room"
+    },
+    {
+      "workspace_id": "ws_0e31f99b",
+      "label": "SeqDiag",
+      "created_utc": "2026-05-10T10:20:59.925266Z",
+      "last_seen_utc": "2026-05-10T10:21:03.414516Z",
+      "last_room": "marketing_room"
+    },
+    {
+      "workspace_id": "ws_89fd07e0",
+      "label": "SalesDiag",
+      "created_utc": "2026-05-10T10:21:24.281492Z",
+      "last_seen_utc": "2026-05-10T10:21:28.381988Z",
+      "last_room": "marketing_room"
     }
   ]
 }

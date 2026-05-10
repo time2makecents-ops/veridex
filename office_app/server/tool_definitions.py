@@ -35,6 +35,7 @@ VERIDEX_TOOL_DEFINITIONS = {
     "office.transcript_get": tool_definition("office.transcript_get", "workspace.transcript.get", "Read recent workspace transcript.", requires_workspace=True),
     "office.commands_list": tool_definition("office.commands_list", "system.commands.list", "List available Veridex commands."),
     "office.sessions_list": tool_definition("office.sessions_list", "session.list", "List workspace sessions.", requires_workspace=True),
+    "office.sessions_search": tool_definition("office.sessions_search", "session.search", "Search workspace session transcripts.", requires_workspace=True),
     "office.session_create": tool_definition("office.session_create", "session.create", "Create a new workspace session.", requires_workspace=True),
     "office.session_activate": tool_definition("office.session_activate", "session.activate", "Activate a workspace session.", requires_workspace=True),
     "office.room_set": tool_definition("office.room_set", "room.navigate", "Switch the active room.", requires_workspace=True),
