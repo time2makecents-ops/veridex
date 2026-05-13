@@ -112,6 +112,21 @@ class RequestFollowupRouterTests(unittest.TestCase):
         self.assertEqual(routed["route_kind"], "clarify")
         self.assertIn("Eugene, Oregon", routed["arguments"]["response_text"])
 
+    def test_session_location_followup_uses_recent_transcript_location(self) -> None:
+        self.grounded_context = None
+        routed = self.router.route_contextual_followup(
+            "ws1",
+            "what is my location",
+            [
+                {"role": "user", "text": "save that i am located in Oregon."},
+                {"role": "assistant", "text": "I've saved that you're located in Oregon."},
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["arguments"]["response_text"], "You are located in Oregon.")
+
     def test_source_followup_reports_when_wrong_time_was_not_grounded(self) -> None:
         self.grounded_context = {
             "entity_subject": "blairally",

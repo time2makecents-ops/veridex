@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import re
@@ -408,11 +408,12 @@ class ReceptionistContextService:
             rows.append(ref)
         return rows
 
-    def forget_room_behavior_refs(
+    def _forget_behavior_refs(
         self,
         *,
         workspace_id: str,
         room_id: str,
+        memory_kind: str,
         artifact_id: Optional[str] = None,
         memory_index: Optional[int] = None,
         match_text: str = "",
@@ -439,7 +440,7 @@ class ReceptionistContextService:
                 if not isinstance(ref, dict):
                     continue
                 ref_kind = self._ref_memory_kind(ref)
-                if ref_kind != self.ROOM_BEHAVIOR_MEMORY_KIND:
+                if ref_kind != memory_kind:
                     kept.append(dict(ref))
                     continue
                 room_ref_index += 1
@@ -470,6 +471,42 @@ class ReceptionistContextService:
             "removed_refs": removed,
             "room_behavior_memory_refs": kept_for_room if room not in {"*", "all"} else [],
         }
+
+    def forget_room_behavior_refs(
+        self,
+        *,
+        workspace_id: str,
+        room_id: str,
+        artifact_id: Optional[str] = None,
+        memory_index: Optional[int] = None,
+        match_text: str = "",
+    ) -> Dict[str, Any]:
+        return self._forget_behavior_refs(
+            workspace_id=workspace_id,
+            room_id=room_id,
+            memory_kind=self.ROOM_BEHAVIOR_MEMORY_KIND,
+            artifact_id=artifact_id,
+            memory_index=memory_index,
+            match_text=match_text,
+        )
+
+    def forget_persona_behavior_refs(
+        self,
+        *,
+        workspace_id: str,
+        room_id: str,
+        artifact_id: Optional[str] = None,
+        memory_index: Optional[int] = None,
+        match_text: str = "",
+    ) -> Dict[str, Any]:
+        return self._forget_behavior_refs(
+            workspace_id=workspace_id,
+            room_id=room_id,
+            memory_kind=self.PERSONA_BEHAVIOR_MEMORY_KIND,
+            artifact_id=artifact_id,
+            memory_index=memory_index,
+            match_text=match_text,
+        )
 
     @staticmethod
     def _memory_text_matches(needle: str, haystack: str) -> bool:
@@ -517,46 +554,94 @@ class ReceptionistContextService:
         text = str(value or "").strip()
         if len(text) <= max_chars:
             return text
-        return text[: max(0, max_chars - 1)].rstrip() + "…"
+        return text[: max(0, max_chars - 1)].rstrip() + "â€¦"
 
     @staticmethod
     def _clean_fact_value(value: str) -> str:
         value = re.sub(r"\s+", " ", str(value or "").strip())
         return value.rstrip(" .,!?:;")
 
+    @staticmethod
+    def _titlecase_location(value: str) -> str:
+        text = re.sub(r"\s+", " ", str(value or "").strip())
+        if not text:
+            return text
+        return " ".join(part[:1].upper() + part[1:] if part else part for part in text.split(" "))
+
     def _extract_session_facts(self, transcript_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         fact_patterns = [
             (
-                re.compile(r"\b(?:i\s+live\s+in|i\s+am\s+in|i['’]m\s+in)\s+([A-Za-z][A-Za-z0-9 .,'&-]{1,80})\b", re.IGNORECASE),
+                {"user", "assistant"},
                 "location",
+                "Location information",
                 "User lives in {value}.",
+                (
+                    "i live in",
+                    "i am in",
+                    "i'm in",
+                    "i am located in",
+                    "i'm located in",
+                    "my location is",
+                    "i am from",
+                    "you are located in",
+                    "your location is",
+                    "i've saved that you're located in",
+                    "i have saved that you're located in",
+                    "i?ve saved that you?re located in",
+                    "i've saved that you are located in",
+                ),
             ),
             (
-                re.compile(r"\b(?:my\s+company\s+is|i\s+work\s+at|i\s+work\s+for|i\s+helped\s+start)\s+([A-Za-z][A-Za-z0-9 .,'&-]{1,80})\b", re.IGNORECASE),
+                {"user"},
                 "organization",
+                "Organization",
                 "User is associated with {value}.",
+                ("my company is", "i work at", "i work for", "i helped start"),
             ),
             (
-                re.compile(r"\b(?:my\s+name\s+is|i\s+am\s+called)\s+([A-Za-z][A-Za-z0-9 .,'&-]{1,60})\b", re.IGNORECASE),
+                {"user"},
                 "name",
+                "Identity",
                 "User name is {value}.",
+                ("my name is", "i am called"),
             ),
         ]
+
+        def extract_marker_value(text: str, markers: tuple[str, ...]) -> str:
+            raw_text = str(text or "").strip()
+            for line in raw_text.splitlines() or [raw_text]:
+                normalized_line = re.sub(r"\s+", " ", line).strip()
+                if not normalized_line:
+                    continue
+                lowered = normalized_line.casefold()
+                for marker in markers:
+                    marker_lower = marker.casefold()
+                    index = lowered.find(marker_lower)
+                    if index == -1:
+                        continue
+                    value = normalized_line[index + len(marker):].strip(" .,:;\"'")
+                    value = re.split(r"[.?!]", value, maxsplit=1)[0].strip(" .,:;\"'")
+                    value = re.split(r"(?:,|;|\band\b|\bbut\b|\bor\b|\bso\b|\bwhile\b)", value, maxsplit=1)[0].strip(" .,:;\"'")
+                    value = re.sub(r"\s+\d+$", "", value).strip(" .,:;\"'")
+                    if value:
+                        return value
+            return ""
+
         facts: List[Dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
         for turn in transcript_rows[-self.MODEL_CONTEXT_TURN_LIMIT * 2 :]:
-            if str(turn.get("role") or "").strip().lower() != "user":
-                continue
+            role = str(turn.get("role") or "").strip().lower()
             text = str(turn.get("text") or "").strip()
             if not text:
                 continue
-            for regex, fact_type, template in fact_patterns:
-                match = regex.search(text)
-                if not match:
+            for allowed_roles, fact_type, label, template, markers in fact_patterns:
+                if role not in allowed_roles:
                     continue
-                value = self._clean_fact_value(match.group(1))
+                value = extract_marker_value(text, markers)
                 if not value:
                     continue
+                if fact_type == "location":
+                    value = self._titlecase_location(value)
                 fact_text = template.format(value=value)
                 key = (fact_type, fact_text.casefold())
                 if key in seen:
@@ -565,6 +650,7 @@ class ReceptionistContextService:
                 facts.append(
                     {
                         "type": fact_type,
+                        "label": label,
                         "fact": self._truncate_text(fact_text, self.MODEL_CONTEXT_SESSION_FACT_CHARS),
                         "source_text": self._truncate_text(text, self.MODEL_CONTEXT_SESSION_FACT_CHARS),
                     }
@@ -572,6 +658,7 @@ class ReceptionistContextService:
                 if len(facts) >= self.MODEL_CONTEXT_SESSION_FACT_LIMIT:
                     return facts
         return facts
+
 
     def record_turn(
         self,
@@ -659,3 +746,4 @@ class ReceptionistContextService:
             "session_id": session_id,
         }
         return merged
+

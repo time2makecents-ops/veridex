@@ -41,12 +41,53 @@ class RequestPipeline:
         "show artifact list",
         "show saved artifacts",
         "list saved artifacts",
+        "list all objects saved",
+        "show all objects saved",
+        "what are all the objects saved",
+        "what memory objects are saved",
+        "what are the memory objects saved",
+        "what memory objects do you have saved",
+        "what memory objects do i have saved",
+        "what memory items are saved",
+        "what are the memory items saved",
+        "what memory items do you have saved",
+        "what memory items do i have saved",
+        "what objects are saved",
+        "what are the objects saved",
+        "what objects do you have saved",
+        "what objects do i have saved",
+        "what objects are saved in the workspace",
+        "what are the objects saved in the workspace",
+        "what objects are saved in this workspace",
+        "what are the objects saved in this workspace",
+        "what workspace objects are saved",
+        "what saved objects are in the workspace",
+        "list objects",
+        "show objects",
+        "list saved objects",
+        "show saved objects",
     )
     ARTIFACT_OPEN_TRIGGERS = (
         "open artifact",
         "open the artifact",
         "view artifact",
         "read artifact",
+    )
+    ARTIFACT_DELETE_TRIGGERS = (
+        "delete",
+        "remove",
+        "trash",
+    )
+    OBJECT_SCOPE_CLARIFICATION_HINTS = (
+        "what objects are saved",
+        "what are the objects saved",
+        "what are all the objects saved",
+        "what objects do you have saved",
+        "what objects do i have saved",
+        "list objects",
+        "show objects",
+        "list saved objects",
+        "show saved objects",
     )
     ARTIFACT_GLOBAL_TRIGGERS = (
         "archive room",
@@ -69,6 +110,14 @@ class RequestPipeline:
     FILE_ID_RE = re.compile(r"\bfile_[A-Za-z0-9]+\b", re.IGNORECASE)
     FILE_NAME_RE = re.compile(
         r"(?P<name>[A-Za-z0-9_().-]{1,120}\.(?:txt|rtf|pdf|png|jpg|jpeg|webp|gif|bmp|tif|tiff|md|csv|json|xml|html|htm|doc|docx))",
+        re.IGNORECASE,
+    )
+    ARTIFACT_DELETE_NUMBER_RE = re.compile(
+        r"^(?:delete|remove|trash)\s+(?:number\s+|item\s+|artifact\s+|#)?(?P<index>\d+)\b.*$",
+        re.IGNORECASE,
+    )
+    ARTIFACT_DELETE_ID_RE = re.compile(
+        r"^(?:delete|remove|trash)\s+(?:the\s+)?(?:artifact\s+)?(?P<artifact_id>art_[A-Za-z0-9]+)\b.*$",
         re.IGNORECASE,
     )
     ROOM_MEMORY_PATTERNS = (
@@ -116,26 +165,24 @@ class RequestPipeline:
         "the fifth one": 5,
     }
     ROOM_MEMORY_LIST_HINTS = (
-        "what memory objects do you have saved",
-        "what memory objects do i have saved",
-        "what memory objects are saved",
-        "what memory items do you have saved",
-        "what memory items do i have saved",
-        "what memory items are saved",
-        "what memories do you have saved",
-        "what memories do i have saved",
-        "what memories are saved",
         "what do you remember",
         "what do you remember in",
-        "show memory objects",
-        "show memory items",
-        "list memory objects",
-        "list memory items",
-        "list saved memories",
-        "show saved memories",
-        "what memory items are saved now",
-        "what memory objects are saved now",
-        "what memories are saved now",
+        "what room behavior memories are saved",
+        "what behavior memories are saved",
+        "what behavior memories do you have saved",
+        "what behavior memories do i have saved",
+        "what behavior objects are saved",
+        "what are the behavior objects saved",
+        "what objects are saved in this room",
+        "what are the objects saved in this room",
+        "show behavior memories",
+        "show room behavior memories",
+        "list behavior memories",
+        "list room behavior memories",
+        "list saved behavior memories",
+        "show saved behavior memories",
+        "what behavior memories are saved now",
+        "what room behavior memories are saved now",
     )
     ROOM_NAVIGATION_PREFIXES = (
         "go to ",
@@ -478,6 +525,18 @@ class RequestPipeline:
         "show this session transcript",
         "show this thread history",
         "show this session history",
+    )
+    SESSION_OBJECTS_HINTS = (
+        "what objects are saved in the session",
+        "what are the objects saved in the session",
+        "what objects are saved in this session",
+        "what are the objects saved in this session",
+        "what session objects are saved",
+        "what are the session objects saved",
+        "what saved objects are in this session",
+        "what is saved in this session",
+        "show session objects",
+        "list session objects",
     )
     CONTEXTUAL_REFERENCE_HINTS = (
         "which one",
@@ -834,12 +893,69 @@ class RequestPipeline:
 
         return "workspace"
 
-    def route_artifact_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+    def route_artifact_request(
+        self,
+        workspace_id: str,
+        request_text: str,
+        *,
+        recent_turns: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
         text = request_text.lower().strip()
         if not text:
             return None
 
         retrieval_scope = self.artifact_retrieval_scope(workspace_id, request_text)
+
+        delete_id_match = self.ARTIFACT_DELETE_ID_RE.match(request_text)
+        if delete_id_match:
+            return {
+                "capability": "artifact.delete",
+                "tool": "office.artifact_delete",
+                "arguments": {
+                    "artifact_id": delete_id_match.group("artifact_id"),
+                    "retrieval_scope": retrieval_scope,
+                },
+                "reason": "Matched an artifact delete request with an explicit artifact id.",
+            }
+
+        delete_index_match = self.ARTIFACT_DELETE_NUMBER_RE.match(request_text)
+        if delete_index_match:
+            recent_list_context = self._recent_artifact_list_context(recent_turns or [])
+            if not recent_list_context:
+                return {
+                    "route_kind": "clarify",
+                    "capability": "clarification.artifact_delete",
+                    "tool": "office.capability_info",
+                    "arguments": {
+                        "response_text": "Which listed workspace artifact should I delete?",
+                    },
+                    "reason": "Artifact delete request used a number but no recent artifact list was available.",
+                }
+            index = int(delete_index_match.group("index"))
+            artifact_id = ""
+            for item in recent_list_context:
+                if int(item.get("index") or 0) == index:
+                    artifact_id = str(item.get("artifact_id") or "").strip()
+                    break
+            if not artifact_id:
+                return {
+                    "route_kind": "clarify",
+                    "capability": "clarification.artifact_delete",
+                    "tool": "office.capability_info",
+                    "arguments": {
+                        "response_text": "I could not find that numbered artifact in the most recent workspace list.",
+                    },
+                    "reason": "Artifact delete request used a number that did not match the recent list.",
+                }
+            return {
+                "capability": "artifact.delete",
+                "tool": "office.artifact_delete",
+                "arguments": {
+                    "artifact_id": artifact_id,
+                    "retrieval_scope": retrieval_scope,
+                },
+                "reason": "Matched a numbered artifact delete request against the recent workspace artifact list.",
+            }
 
         if any(trigger in text for trigger in self.ARTIFACT_CREATE_TRIGGERS):
             return {
@@ -888,8 +1004,56 @@ class RequestPipeline:
 
         return None
 
+    def _recent_artifact_list_context(self, recent_turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        for turn in reversed(recent_turns[-12:]):
+            if str(turn.get("role") or "").strip().lower() != "assistant":
+                continue
+            text = str(turn.get("text") or "").strip()
+            if not text or "artifact(s)" not in text.lower():
+                continue
+            items: List[Dict[str, Any]] = []
+            for match in re.finditer(r"(?m)^\s*(\d+)\.\s+.*?\((art_[A-Za-z0-9]+)\)", text):
+                items.append(
+                    {
+                        "index": int(match.group(1)),
+                        "artifact_id": match.group(2),
+                    }
+                )
+            if items:
+                return items
+        return []
+
+    def route_object_scope_clarification(self, request_text: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip().lower())
+        if not text:
+            return None
+        if not any(hint in text for hint in self.OBJECT_SCOPE_CLARIFICATION_HINTS):
+            return None
+        if any(scope in text for scope in ("workspace", "session", "room", "behavior", "behaviour", "memory")):
+            return None
+        return {
+            "route_kind": "clarify",
+            "capability": "clarification.object_scope",
+            "tool": "office.capability_info",
+            "arguments": {
+                "response_text": "Do you mean workspace objects, session objects, or behavior memories?",
+            },
+            "reason": "The request for saved objects was ambiguous about scope.",
+        }
+
     def route_user_request(self, workspace_id: str, request_text: str, *, session_id: Optional[str] = None) -> Dict[str, Any]:
         recent_turns = self._load_recent_transcript_turns(workspace_id, session_id=session_id)
+
+        session_objects_route = None
+        if request_text and any(hint in re.sub(r"\s+", " ", request_text.lower().strip()) for hint in self.SESSION_OBJECTS_HINTS):
+            session_objects_route = self.route_session_objects_request(workspace_id, request_text, session_id=session_id)
+        if session_objects_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **session_objects_route,
+            }
 
         room_memory_list_route = self.route_room_memory_list_request(workspace_id, request_text)
         if room_memory_list_route is not None:
@@ -937,6 +1101,14 @@ class RequestPipeline:
                 "workspace_id": workspace_id,
                 "request": request_text,
                 **session_route,
+                }
+
+        object_scope_clarification = self.route_object_scope_clarification(request_text)
+        if object_scope_clarification is not None:
+            return {
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **object_scope_clarification,
             }
 
         contextual_followup_route = self.route_contextual_followup(
@@ -977,7 +1149,7 @@ class RequestPipeline:
         if factual_entity_route is not None:
             return factual_entity_route
 
-        artifact_route = self.route_artifact_request(workspace_id, request_text)
+        artifact_route = self.route_artifact_request(workspace_id, request_text, recent_turns=recent_turns)
         if artifact_route is not None:
             return {
                 "route_kind": "artifact",
@@ -1004,7 +1176,7 @@ class RequestPipeline:
                 **status_route,
             }
 
-        search_route = self.route_search_request(workspace_id, request_text)
+        search_route = self.route_search_request(workspace_id, request_text, recent_turns=recent_turns, session_id=session_id)
         if search_route is not None:
             return {
                 "route_kind": "tool",
@@ -1106,6 +1278,8 @@ class RequestPipeline:
             return None
         if not any(hint in text for hint in self.ROOM_MEMORY_LIST_HINTS):
             return None
+        if "workspace" in text and "room" not in text and "behavior" not in text:
+            return None
         ctx = self.current_context(workspace_id)
         room_id = str(ctx.get("active_room") or "lobby")
         room = validate_room(room_id)
@@ -1115,9 +1289,47 @@ class RequestPipeline:
             "arguments": {
                 "workspace_id": workspace_id,
                 "room_id": str(room["id"]),
+                },
+                "reason": f"Matched a room behavior memory list request for {room['title']}.",
+            }
+
+    def route_session_object_list_request(
+        self,
+        workspace_id: str,
+        request_text: str,
+        *,
+        session_id: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip().lower())
+        if not text:
+            return None
+        if not any(hint in text for hint in self.SESSION_OBJECTS_HINTS):
+            return None
+        session_ref = re.sub(r"\s+", " ", str(session_id or "").strip())
+        if not session_ref:
+            return None
+        return {
+            "capability": "session.objects.list",
+            "tool": "office.session_objects_list",
+            "arguments": {
+                "workspace_id": workspace_id,
+                "session_id": session_ref,
             },
-            "reason": f"Matched a room behavior memory list request for {room['title']}.",
+            "reason": "Matched a request for session-scoped saved objects.",
         }
+
+    def route_session_objects_request(
+        self,
+        workspace_id: str,
+        request_text: str,
+        *,
+        session_id: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        return self.route_session_object_list_request(
+            workspace_id,
+            request_text,
+            session_id=session_id,
+        )
 
     def route_room_memory_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         text = re.sub(r"\s+", " ", str(request_text or "").strip())
@@ -1481,7 +1693,60 @@ class RequestPipeline:
     def is_explicit_task_intent(self, request_text: str) -> bool:
         return self.intent_analyzer.is_explicit_task_intent(request_text)
 
-    def route_search_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+    def _recent_session_location(self, workspace_id: str, *, session_id: Optional[str] = None, recent_turns: Optional[List[Dict[str, Any]]] = None) -> Optional[str]:
+        markers = (
+            "i live in",
+            "i am in",
+            "i'm in",
+            "i am located in",
+            "i'm located in",
+            "my location is",
+            "i am from",
+            "you are located in",
+            "your location is",
+            "i've saved that you're located in",
+            "i have saved that you're located in",
+            "i?ve saved that you?re located in",
+            "i've saved that you are located in",
+        )
+
+        def scan(turns: List[Dict[str, Any]]) -> Optional[str]:
+            for turn in reversed(turns[-48:]):
+                text = re.sub(r"\s+", " ", str(turn.get("text") or "").strip())
+                if not text:
+                    continue
+                lowered = text.casefold()
+                if "verified information about your current location" in lowered:
+                    continue
+                for marker in markers:
+                    marker_lower = marker.casefold()
+                    index = lowered.find(marker_lower)
+                    if index == -1:
+                        continue
+                    location = text[index + len(marker):].strip(" .,:;\"'")
+                    location = re.split(r"[.?!]", location, maxsplit=1)[0].strip(" .,:;\"'")
+                    location = re.split(r"(?:,|;|\band\b|\bbut\b|\bor\b|\bso\b|\bwhile\b)", location, maxsplit=1)[0].strip(" .,:;\"'")
+                    if location:
+                        return location
+            return None
+
+        turns = recent_turns or []
+        location = scan(turns)
+        if location:
+            return location
+        if not session_id:
+            return None
+        store = getattr(self.kernel, "store", None)
+        loader = getattr(store, "load_transcript", None)
+        if loader is None:
+            return None
+        try:
+            transcript_rows = loader(workspace_id, limit=200, session_id=session_id)
+        except Exception:
+            return None
+        return scan(list(transcript_rows or []))
+
+    def route_search_request(self, workspace_id: str, request_text: str, *, recent_turns: Optional[List[Dict[str, Any]]] = None, session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         text = request_text.lower().strip()
         if not text:
             return None
@@ -1510,6 +1775,9 @@ class RequestPipeline:
 
         place_signals = self.place_search_signals(request_text)
         place_query = dict(place_signals["place_query"])
+        session_location = self._recent_session_location(workspace_id, session_id=session_id, recent_turns=recent_turns or [])
+        if not place_query.get("location") and session_location:
+            place_query["location"] = session_location
         time_window = self.extract_time_window(text)
         review_signal = place_signals["review_signal"]
         mall_discovery_signal = bool(
@@ -1520,13 +1788,14 @@ class RequestPipeline:
             place_query["category"] = place_query.get("category") or "malls"
             if not place_query.get("normalized_query"):
                 place_query["normalized_query"] = "malls"
+        effective_location_signal = bool(place_query.get("location")) or place_signals["location_signal"]
         place_task = bool(
             place_signals["has_place_hint"]
             and (place_signals["discovery_signal"] or review_signal or mall_discovery_signal)
-            and (place_signals["location_signal"] or place_signals["explicit_review_signal"])
+            and (effective_location_signal or place_signals["explicit_review_signal"])
         )
 
-        if review_signal and place_signals["has_place_hint"] and place_query["needs_location"]:
+        if review_signal and place_signals["has_place_hint"] and place_query["needs_location"] and not effective_location_signal:
             return {
                 "capability": "search.places",
                 "tool": "office.search_places",

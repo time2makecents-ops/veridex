@@ -274,7 +274,7 @@ def build_file_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                 lines.append("")
             lines.append("Persona behavior memories:")
             lines.extend(f"{item['index']}. {item['description']}" for item in persona_items)
-        text = "\n".join(lines) if lines else f"No room behavior memory objects are saved for {room_title}."
+        text = "\n".join(lines) if lines else f"No room behavior memories are saved for {room_title}."
         structured["response_text"] = text
         return {
             "structuredContent": structured,

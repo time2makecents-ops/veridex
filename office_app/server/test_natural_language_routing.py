@@ -133,6 +133,33 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["arguments"]["artifact_id"], "art_123abc")
         self.assertEqual(routed["arguments"]["retrieval_scope"], "workspace")
 
+    def test_numbered_delete_after_artifact_list_routes_to_artifact_delete(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "text": "Found 2 artifact(s) (this workspace).\n1. room_behavior_memory: Sales Department behavior memory (art_1) - follow up with the client.\n2. room_behavior_memory: Sales Department behavior memory (art_2) - grow repeat customers.",
+                    }
+                ]
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "delete 1", session_id="sess_123")
+        self.assertEqual(routed["route_kind"], "artifact")
+        self.assertEqual(routed["capability"], "artifact.delete")
+        self.assertEqual(routed["tool"], "office.artifact_delete")
+        self.assertEqual(routed["arguments"]["artifact_id"], "art_1")
+
+    def test_numbered_delete_without_recent_artifact_list_asks_for_clarification(self) -> None:
+        routed = self.pipeline.route_user_request("default", "delete 1", session_id="sess_123")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "clarification.artifact_delete")
+        self.assertIn("Which listed workspace artifact should I delete?", routed["arguments"]["response_text"])
+
     def test_unknown_text_falls_back_to_model_route(self) -> None:
         routed = self.pipeline.route_user_request("default", "review the quarterly plan")
         self.assertEqual(routed["route_kind"], "model")
@@ -1025,6 +1052,46 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["arguments"]["category"], "bars")
         self.assertEqual(routed["arguments"]["location"], "Eugene")
 
+    def test_local_bars_with_saved_session_location_routes_to_review_search(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="sales_department",
+                active_persona="Sales Director",
+                transcript_rows=[
+                    {"role": "user", "text": "save that i am located in Oregon."},
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "what local bars have the highest reviews?", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.reviews")
+        self.assertEqual(routed["tool"], "office.search_reviews")
+        self.assertEqual(routed["arguments"]["location"], "Oregon")
+
+    def test_best_local_bars_with_saved_session_location_routes_to_review_search(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="sales_department",
+                active_persona="Sales Director",
+                transcript_rows=[
+                    {"role": "assistant", "text": "I've saved that you're located in Oregon."},
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "what are the best local bars?", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.reviews")
+        self.assertEqual(routed["tool"], "office.search_reviews")
+        self.assertEqual(routed["arguments"]["location"], "Oregon")
+
     def test_unqualified_bar_question_stays_in_model_route(self) -> None:
         routed = self.pipeline.route_user_request("default", "how do you increase food sales in a bar")
         self.assertEqual(routed["route_kind"], "model")
@@ -1361,7 +1428,7 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "clarification.room_memory")
         self.assertIn("Which remembered behavior", routed["arguments"]["response_text"])
 
-    def test_memory_objects_question_routes_to_room_memory_list(self) -> None:
+    def test_memory_objects_question_routes_to_workspace_artifact_list(self) -> None:
         pipeline = RequestPipeline(
             kernel=DummyKernel(active_room="sales_department", active_persona="Sales Director"),
             navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
@@ -1371,12 +1438,63 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         )
         for text in ("what memory objects do you have saved?", "what memory objects do i have saved?"):
             routed = pipeline.route_user_request("default", text)
-            self.assertEqual(routed["route_kind"], "tool")
-            self.assertEqual(routed["capability"], "room.memory.list")
-            self.assertEqual(routed["tool"], "office.room_memory_list")
-            self.assertEqual(routed["arguments"]["room_id"], "sales_department")
+            self.assertEqual(routed["route_kind"], "artifact")
+            self.assertEqual(routed["capability"], "artifact.list")
+            self.assertEqual(routed["tool"], "office.artifact_list")
+            self.assertEqual(routed["arguments"]["retrieval_scope"], "workspace")
 
-    def test_memory_items_saved_now_routes_to_room_memory_list(self) -> None:
+    def test_workspace_objects_question_routes_to_workspace_artifact_list(self) -> None:
+        routed = self.pipeline.route_user_request("default", "what objects are saved in the workspace")
+        self.assertEqual(routed["route_kind"], "artifact")
+        self.assertEqual(routed["capability"], "artifact.list")
+        self.assertEqual(routed["tool"], "office.artifact_list")
+        self.assertEqual(routed["arguments"]["retrieval_scope"], "workspace")
+
+    def test_room_objects_question_routes_to_room_memory_list(self) -> None:
+        routed = self.pipeline.route_user_request("default", "what objects are saved in this room")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "room.memory.list")
+        self.assertEqual(routed["tool"], "office.room_memory_list")
+        self.assertEqual(routed["arguments"]["room_id"], "lobby")
+
+    def test_behavior_objects_question_routes_to_room_memory_list(self) -> None:
+        routed = self.sales_pipeline.route_user_request("default", "what behavior objects are saved?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "room.memory.list")
+        self.assertEqual(routed["tool"], "office.room_memory_list")
+        self.assertEqual(routed["arguments"]["room_id"], "sales_department")
+
+    def test_bare_objects_saved_asks_for_scope(self) -> None:
+        routed = self.pipeline.route_user_request("default", "what are the objects saved")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "clarification.object_scope")
+        self.assertEqual(routed["tool"], "office.capability_info")
+        self.assertIn("workspace objects, session objects, or behavior memories", routed["arguments"]["response_text"])
+
+    def test_session_objects_question_routes_to_session_objects_list(self) -> None:
+        routed = self.pipeline.route_user_request(
+            "default",
+            "what objects are saved in the session",
+            session_id="sess_123",
+        )
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "session.objects.list")
+        self.assertEqual(routed["tool"], "office.session_objects_list")
+        self.assertEqual(routed["arguments"]["session_id"], "sess_123")
+
+    def test_session_objects_question_variants_route_to_session_objects_list(self) -> None:
+        for text in (
+            "what are the objects saved in this session",
+            "what are the session objects saved",
+            "show session objects",
+            "list session objects",
+        ):
+            routed = self.pipeline.route_user_request("default", text, session_id="sess_123")
+            self.assertEqual(routed["route_kind"], "tool")
+            self.assertEqual(routed["capability"], "session.objects.list")
+            self.assertEqual(routed["tool"], "office.session_objects_list")
+
+    def test_behavior_memories_saved_now_routes_to_room_memory_list(self) -> None:
         pipeline = RequestPipeline(
             kernel=DummyKernel(active_room="sales_department", active_persona="Sales Director"),
             navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
@@ -1384,7 +1502,7 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
             tool_names=[],
             app_version="1.3.0",
         )
-        routed = pipeline.route_user_request("default", "what memory items are saved now?")
+        routed = pipeline.route_user_request("default", "what behavior memories are saved now?")
         self.assertEqual(routed["route_kind"], "tool")
         self.assertEqual(routed["capability"], "room.memory.list")
         self.assertEqual(routed["tool"], "office.room_memory_list")

@@ -268,6 +268,52 @@ def build_session_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "content": [{"type": "text", "text": "\n".join(lines)}],
         }
 
+    def handle_session_objects_list(args: Dict[str, Any]) -> Dict[str, Any]:
+        current_session_id = str(args.get("session_id") or "").strip()
+        if not current_session_id:
+            raise error_missing_required_field("session_id")
+        session = deps.user_service.get_session(current_session_id)
+        workspace_id = str(session.get("active_workspace_id") or "").strip()
+        if not workspace_id:
+            raise HTTPException(status_code=404, detail="Session not found.")
+        context = deps.receptionist_context_service.build_model_context(
+            workspace_id=workspace_id,
+            session_id=current_session_id,
+        )
+        facts = list(context.get("session_facts") or [])
+        lines = ["Session objects:"]
+        items = []
+        for index, fact in enumerate(facts, start=1):
+            fact_text = str(fact.get("fact") or "").strip()
+            if not fact_text:
+                continue
+            fact_type = str(fact.get("type") or "fact").strip()
+            fact_label = str(fact.get("label") or fact_type).strip() or fact_type
+            lines.append(f"{index}. {fact_label}: {fact_text}")
+            items.append(
+                {
+                    "index": index,
+                    "type": fact_type,
+                    "label": fact_label,
+                    "fact": fact_text,
+                    "source_text": str(fact.get("source_text") or "").strip(),
+                }
+            )
+        if len(lines) == 1:
+            lines.append("No saved session objects were found.")
+        response_text = "\n".join(lines)
+        return {
+            "structuredContent": {
+                "workspace_id": workspace_id,
+                "session_id": current_session_id,
+                "count": len(items),
+                "items": items,
+                "session_facts": facts,
+                "response_text": response_text,
+            },
+            "content": [{"type": "text", "text": response_text}],
+        }
+
     def handle_sessions_search(args: Dict[str, Any]) -> Dict[str, Any]:
         current_session_id = str(args.get("session_id") or "").strip()
         if not current_session_id:
@@ -585,6 +631,7 @@ def build_session_handlers(deps: HandlerDeps) -> Dict[str, Any]:
 
     return {
         "office.sessions_list": handle_sessions_list,
+        "office.session_objects_list": handle_session_objects_list,
         "office.sessions_search": handle_sessions_search,
         "office.session_create": handle_session_create,
         "office.session_info": handle_session_info,

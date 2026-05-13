@@ -72,6 +72,13 @@ class ArtifactServiceTests(unittest.TestCase):
             self.assertEqual(len(with_archived), 1)
             self.assertTrue(with_archived[0]["archived"])
 
+            deleted = service.delete_artifact(
+                workspace_id="ws_test",
+                artifact_id=created["artifact_id"],
+            )
+            self.assertEqual(deleted["artifact_id"], created["artifact_id"])
+            self.assertEqual(service.list_artifacts("ws_test", include_archived=True), [])
+
             other = service.create_artifact(
                 workspace_id="ws_other",
                 type="document",
@@ -81,8 +88,8 @@ class ArtifactServiceTests(unittest.TestCase):
             )
 
             global_rows = service.list_artifacts_across_workspaces(["ws_test", "ws_other"], include_archived=True)
-            self.assertEqual(len(global_rows), 2)
-            self.assertEqual({row["workspace_id"] for row in global_rows}, {"ws_test", "ws_other"})
+            self.assertEqual(len(global_rows), 1)
+            self.assertEqual({row["workspace_id"] for row in global_rows}, {"ws_other"})
 
             global_fetched = service.get_artifact_across_workspaces(["ws_test", "ws_other"], other["artifact_id"])
             self.assertEqual(global_fetched["workspace_id"], "ws_other")

@@ -97,6 +97,10 @@ SESSION_ITEM_DETAIL_RE = re.compile(
     r"(?:\s+information|\s+info|\s+details|\s+results|\s+response|\s+answer)?(?:\s+from)?\s+(?:number\s+|#)(\d+)\b.*$",
     re.IGNORECASE,
 )
+LOCATION_QUESTION_RE = re.compile(
+    r"^(?:what\s+is\s+my\s+location|where\s+am\s+i\s+located|what\s+state\s+do\s+i\s+live\s+in|where\s+do\s+i\s+live)\??$",
+    re.IGNORECASE,
+)
 
 MEMORY_REFERENCE_RE = re.compile(
     r"(?:do\s+you|can\s+you|did\s+you|could\s+you)\s+remember\b|"
@@ -222,6 +226,34 @@ class RequestFollowupRouter:
             last_entity_subject=last_entity_subject,
             last_session_query=last_session_query,
         )
+
+    @staticmethod
+    def _recent_session_location(recent_turns: List[Dict[str, Any]]) -> str:
+        patterns = (
+            re.compile(r"\b(?:i\s+live\s+in|i\s+am\s+located\s+in|i['’]m\s+located\s+in)\s+([A-Za-z][A-Za-z0-9 .,'&-]{1,80})\b", re.IGNORECASE),
+            re.compile(r"\b(?:my\s+location\s+is|i\s+am\s+from)\s+([A-Za-z][A-Za-z0-9 .,'&-]{1,80})\b", re.IGNORECASE),
+            re.compile(r"\byou\s+are\s+located\s+in\s+([A-Za-z][A-Za-z0-9 .,'&-]{1,80})\b", re.IGNORECASE),
+        )
+        for turn in reversed(recent_turns[-24:]):
+            text = re.sub(r"\s+", " ", str(turn.get("text") or "").strip())
+            if not text:
+                continue
+            lowered = text.lower()
+            if "verified information about your current location" in lowered:
+                continue
+            for pattern in patterns:
+                match = pattern.search(text)
+                if not match:
+                    continue
+                location = re.sub(r"\s+", " ", str(match.group(1) or "").strip(" .,:;"))
+                location = re.split(
+                    r"[.?!,]|(?:\s+(?:and|or|but|with|who|which|that|what|can|could|would|do|does|we|you)\b)",
+                    location,
+                    maxsplit=1,
+                )[0].strip(" .,:;")
+                if location:
+                    return location
+        return ""
 
     @staticmethod
     def _normalize_session_query(query: str) -> str:
@@ -488,6 +520,31 @@ class RequestFollowupRouter:
                     },
                     "reason": "Expanded the latest session-search result into detailed session excerpts.",
                 }
+        if LOCATION_QUESTION_RE.match(text):
+            location = self._recent_session_location(recent_turns)
+            if location:
+                return {
+                    "route_kind": "clarify",
+                    "workspace_id": workspace_id,
+                    "request": request_text,
+                    "capability": "clarification.session_location",
+                    "tool": "office.capability_info",
+                    "arguments": {
+                        "response_text": f"You are located in {location}.",
+                    },
+                    "reason": "Answered a session location question from the current thread.",
+                }
+            return {
+                "route_kind": "clarify",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                "capability": "clarification.session_location",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": "I do not have a saved location for this session yet.",
+                },
+                "reason": "Session location question had no saved location fact.",
+            }
         memory_response = self._memory_reference_response(recent_turns, request_text)
         if memory_response is not None:
             return {

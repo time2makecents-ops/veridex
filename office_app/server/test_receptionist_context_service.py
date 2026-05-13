@@ -24,7 +24,8 @@ class ReceptionistContextServiceTests(unittest.TestCase):
             store.append_transcript("ws_test", "user", "lobby", "session alpha first user turn", speaker="You", session_id="sess_alpha")
             store.append_transcript("ws_test", "assistant", "lobby", "session alpha first assistant turn", speaker="Receptionist", session_id="sess_alpha")
             store.append_transcript("ws_test", "user", "lobby", "session beta only turn", speaker="You", session_id="sess_beta")
-            store.append_transcript("ws_test", "user", "sales_department", "I live in Oregon.", speaker="You", session_id="sess_alpha")
+            store.append_transcript("ws_test", "user", "sales_department", "save that i am located in Oregon.", speaker="You", session_id="sess_alpha")
+            store.append_transcript("ws_test", "assistant", "sales_department", "I've saved that you're located in Oregon.", speaker="Sales Director", session_id="sess_alpha")
             for index in range(2, 6):
                 store.append_transcript("ws_test", "user", "sales_department", f"session alpha user turn {index}", speaker="You", session_id="sess_alpha")
                 store.append_transcript("ws_test", "assistant", "sales_department", f"session alpha assistant turn {index}", speaker="Sales Director", session_id="sess_alpha")
@@ -162,6 +163,39 @@ class ReceptionistContextServiceTests(unittest.TestCase):
             self.assertEqual(removed_by_index["removed_count"], 1)
             self.assertEqual(removed_by_index["removed_refs"][0]["artifact_id"], "art_first")
             self.assertEqual(remaining[0]["artifact_id"], "art_second")
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_session_fact_extraction_does_not_bleed_across_numbered_lists(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_receptionist_context_fact_bleed_test"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-21T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-21T12:00:00Z")
+            kernel.create_workspace("ws_test", "Test")
+            service = ReceptionistContextService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-21T12:00:00Z")
+
+            store.append_transcript(
+                "ws_test",
+                "assistant",
+                "sales_department",
+                (
+                    "Found 4 artifact(s) (this workspace).\n"
+                    "1. room_behavior_memory: Sales Department behavior memory (art_1) - i am in oregon\n"
+                    "2. room_behavior_memory: Sales Department behavior memory (art_2) - i am in oregon\n"
+                    "3. room_behavior_memory: Sales Department behavior memory (art_3) - use the book 48 laws of power when giving me advice"
+                ),
+                speaker="Sales Director",
+                session_id="sess_alpha",
+            )
+            context = service.build_model_context(workspace_id="ws_test", session_id="sess_alpha")
+            facts_text = context["session_facts_text"]
+            self.assertIn("User lives in Oregon.", facts_text)
+            self.assertNotIn("Oregon 2", facts_text)
+            self.assertNotIn("Oregon 3", facts_text)
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 

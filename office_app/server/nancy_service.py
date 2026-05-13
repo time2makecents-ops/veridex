@@ -31,6 +31,24 @@ class NancyService:
     def artifacts_list_response(self, workspace_id: str, retrieval_scope: str = "workspace") -> Dict[str, Any]:
         state = self.kernel.get_state(workspace_id)
         rows = self._artifact_rows(workspace_id, retrieval_scope=retrieval_scope)
+        scope_text = "all workspaces" if retrieval_scope == "archive_global" else "this workspace"
+        lines = [f"Nancy found {len(rows)} artifact(s) ({scope_text})."]
+        for index, row in enumerate(rows[:10], start=1):
+            title = str(row.get("display_name") or row.get("title") or row.get("artifact_id") or f"Artifact {index}").strip()
+            artifact_id = str(row.get("artifact_id") or "").strip()
+            artifact_type = str(row.get("artifact_type") or row.get("type") or "").strip()
+            preview = str(row.get("content_preview") or row.get("content") or "").strip()
+            preview = " ".join(preview.split())
+            if len(preview) > 120:
+                preview = preview[:117].rstrip() + "..."
+            descriptor = title
+            if artifact_type and artifact_type.lower() != title.lower():
+                descriptor = f"{artifact_type}: {descriptor}"
+            if artifact_id and artifact_id != title:
+                descriptor = f"{descriptor} ({artifact_id})"
+            if preview:
+                descriptor = f"{descriptor} - {preview}"
+            lines.append(f"{index}. {descriptor}")
 
         return {
             "structuredContent": {
@@ -40,15 +58,7 @@ class NancyService:
                 "count": len(rows),
                 "artifacts": rows,
             },
-            "content": [
-                {
-                    "type": "text",
-                    "text": (
-                        f"Nancy found {len(rows)} artifact(s) "
-                        f"({'all workspaces' if retrieval_scope == 'archive_global' else 'this workspace'})."
-                    ),
-                }
-            ],
+            "content": [{"type": "text", "text": "\n".join(lines)}],
         }
 
     def artifact_open_response(self, workspace_id: str, artifact_id: str, retrieval_scope: str = "workspace") -> Dict[str, Any]:

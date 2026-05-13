@@ -35,6 +35,7 @@ VERIDEX_TOOL_DEFINITIONS = {
     "office.transcript_get": tool_definition("office.transcript_get", "workspace.transcript.get", "Read recent workspace transcript.", requires_workspace=True),
     "office.commands_list": tool_definition("office.commands_list", "system.commands.list", "List available Veridex commands."),
     "office.sessions_list": tool_definition("office.sessions_list", "session.list", "List workspace sessions.", requires_workspace=True),
+    "office.session_objects_list": tool_definition("office.session_objects_list", "session.objects.list", "List saved session objects.", requires_workspace=True),
     "office.sessions_search": tool_definition("office.sessions_search", "session.search", "Search workspace session transcripts.", requires_workspace=True),
     "office.session_create": tool_definition("office.session_create", "session.create", "Create a new workspace session.", requires_workspace=True),
     "office.session_info": tool_definition("office.session_info", "session.info", "Read the current workspace session.", requires_workspace=True),
@@ -57,6 +58,7 @@ VERIDEX_TOOL_DEFINITIONS = {
     "office.artifact_update": tool_definition("office.artifact_update", "artifact.update", "Update an artifact.", requires_workspace=True),
     "office.artifact_append": tool_definition("office.artifact_append", "artifact.append", "Append to an artifact.", requires_workspace=True),
     "office.artifact_archive": tool_definition("office.artifact_archive", "artifact.archive", "Archive an artifact.", requires_workspace=True),
+    "office.artifact_delete": tool_definition("office.artifact_delete", "artifact.delete", "Delete an artifact.", requires_workspace=True),
     "office.archive_store_text": tool_definition("office.archive_store_text", "archive.store_text", "Store text in the archive.", requires_workspace=True),
     "office.archive_list": tool_definition("office.archive_list", "archive.list", "List archived artifacts.", requires_workspace=True),
     "office.archive_get": tool_definition("office.archive_get", "archive.get", "Get an archived artifact.", requires_workspace=True),
@@ -86,7 +88,7 @@ VERIDEX_TOOL_DEFINITIONS = {
     "office.room_memory_list": tool_definition(
         "office.room_memory_list",
         "room.memory.list",
-        "List the room's saved behavior memory objects from Records Archive.",
+        "List the room's saved behavior memories from Records Archive.",
         requires_workspace=True,
     ),
     "office.room_memory_forget": tool_definition(

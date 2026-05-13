@@ -1448,6 +1448,7 @@ def refresh_handler_bindings() -> None:
     global handle_office_transcript_get
     global handle_commands_list
     global handle_sessions_list
+    global handle_session_objects_list
     global handle_sessions_search
     global handle_session_create
     global handle_session_info
@@ -1465,6 +1466,7 @@ def refresh_handler_bindings() -> None:
     global handle_artifact_update
     global handle_artifact_append
     global handle_artifact_archive
+    global handle_artifact_delete
     global handle_archive_store_text
     global handle_archive_list
     global handle_archive_get
@@ -1525,6 +1527,7 @@ def refresh_handler_bindings() -> None:
     handle_office_transcript_get = workspace_handlers["office.transcript_get"]
     handle_commands_list = workspace_handlers["office.commands_list"]
     handle_sessions_list = session_handlers["office.sessions_list"]
+    handle_session_objects_list = session_handlers["office.session_objects_list"]
     handle_sessions_search = session_handlers["office.sessions_search"]
     handle_session_create = session_handlers["office.session_create"]
     handle_session_info = session_handlers["office.session_info"]
@@ -1544,6 +1547,7 @@ def refresh_handler_bindings() -> None:
     handle_artifact_update = artifact_handlers["office.artifact_update"]
     handle_artifact_append = artifact_handlers["office.artifact_append"]
     handle_artifact_archive = artifact_handlers["office.artifact_archive"]
+    handle_artifact_delete = artifact_handlers["office.artifact_delete"]
     handle_archive_store_text = artifact_handlers["office.archive_store_text"]
     handle_archive_list = artifact_handlers["office.archive_list"]
     handle_archive_get = artifact_handlers["office.archive_get"]
@@ -1581,6 +1585,7 @@ def refresh_handler_bindings() -> None:
             "office.transcript_get": handle_office_transcript_get,
             "office.commands_list": handle_commands_list,
             "office.sessions_list": handle_sessions_list,
+            "office.session_objects_list": handle_session_objects_list,
             "office.sessions_search": handle_sessions_search,
             "office.session_create": handle_session_create,
             "office.session_info": handle_session_info,
@@ -1601,6 +1606,7 @@ def refresh_handler_bindings() -> None:
             "office.artifact_update": handle_artifact_update,
             "office.artifact_append": handle_artifact_append,
             "office.artifact_archive": handle_artifact_archive,
+            "office.artifact_delete": handle_artifact_delete,
             "office.memos_list": handle_memos_list,
             "office.memo_get": handle_memo_get,
             "office.archive_store_text": handle_archive_store_text,
@@ -1639,6 +1645,7 @@ register_tools(
         "office.transcript_get": handle_office_transcript_get,
         "office.commands_list": handle_commands_list,
         "office.sessions_list": handle_sessions_list,
+        "office.session_objects_list": handle_session_objects_list,
         "office.sessions_search": handle_sessions_search,
         "office.session_create": handle_session_create,
         "office.session_info": handle_session_info,
@@ -1659,6 +1666,7 @@ register_tools(
         "office.artifact_update": handle_artifact_update,
         "office.artifact_append": handle_artifact_append,
         "office.artifact_archive": handle_artifact_archive,
+        "office.artifact_delete": handle_artifact_delete,
         "office.memos_list": handle_memos_list,
         "office.memo_get": handle_memo_get,
         "office.archive_store_text": handle_archive_store_text,

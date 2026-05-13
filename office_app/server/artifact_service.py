@@ -234,6 +234,13 @@ class ArtifactService:
         )
         return self._decorate(updated)
 
+    def delete_artifact(self, *, workspace_id: str, artifact_id: str) -> Dict[str, Any]:
+        current = self._require_record(workspace_id, artifact_id)
+        deleted = self.store.delete_record(workspace_id, artifact_id)
+        if deleted is None:
+            raise HTTPException(status_code=404, detail=f"Artifact not found: {artifact_id}")
+        return self._decorate(deleted)
+
     def store_text_artifact(
         self,
         *,

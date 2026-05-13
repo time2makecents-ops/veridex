@@ -216,3 +216,22 @@ class ArtifactStore:
         if fetched is None:
             raise LookupError(f"Artifact not found after update: {artifact_id}")
         return fetched
+
+    def delete_record(self, workspace_id: str, artifact_id: str) -> Optional[Dict[str, Any]]:
+        existing = self.fetch_record(workspace_id, artifact_id)
+        if existing is None:
+            return None
+
+        with self._connection() as conn:
+            result = conn.execute(
+                """
+                DELETE FROM artifacts
+                WHERE workspace_id = ? AND artifact_id = ?
+                """,
+                (workspace_id, artifact_id),
+            )
+            if result.rowcount == 0:
+                raise LookupError(f"Artifact not found: {artifact_id}")
+            conn.commit()
+
+        return existing
