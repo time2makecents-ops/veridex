@@ -196,6 +196,28 @@ button {
   background: rgba(255, 255, 255, 0.92);
 }
 
+.session-name-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(16, 17, 20, 0.42);
+}
+
+.session-name-modal {
+  width: min(100%, 460px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
 .dropdown-group {
   display: flex;
   flex-direction: column;
@@ -215,6 +237,18 @@ button {
   gap: 8px;
 }
 
+.session-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.session-action-notice {
+  color: var(--accent);
+  font-size: 0.8rem;
+}
+
 .room-option,
 .download-item {
   display: flex;
@@ -227,6 +261,16 @@ button {
 .room-option-persona {
   font-size: 0.78rem;
   color: var(--muted);
+}
+
+.session-delete-button {
+  min-width: 40px;
+  width: 40px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  font-size: 1.1rem;
+  line-height: 1;
 }
 
 .room-option.toolbar-button-active,
@@ -308,6 +352,27 @@ button {
   text-transform: uppercase;
   letter-spacing: 0.12em;
   font-size: 0.78rem;
+}
+
+.provider-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(141, 253, 167, 0.34);
+  background: rgba(141, 253, 167, 0.12);
+  color: #12331d;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.provider-badge-fallback {
+  border-color: rgba(255, 196, 102, 0.45);
+  background: rgba(255, 196, 102, 0.16);
+  color: #5c3a00;
 }
 
 .terminal-title {

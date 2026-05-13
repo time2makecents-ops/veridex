@@ -121,6 +121,48 @@ class SearchResponseSynthesisTests(unittest.TestCase):
         )
         self.assertEqual(synthesized, result)
 
+    def test_web_search_synthesis_appends_source_sites(self) -> None:
+        router = CapturingRouter("Best cameras summary.")
+        routed = {
+            "capability": "search.web",
+            "request": "what cellphones have the best cameras?",
+        }
+        result = {
+            "structuredContent": {
+                "summary_text": "Search results for best camera phones",
+                "results": [
+                    {
+                        "title": "Phone A",
+                        "source": "CNET",
+                        "snippet": "Top camera phone",
+                        "url": "https://www.cnet.com/reviews/phone-a",
+                    },
+                    {
+                        "title": "Phone B",
+                        "source": "The Verge",
+                        "snippet": "Excellent photos",
+                        "url": "https://www.theverge.com/phone-b",
+                    },
+                ],
+            },
+            "content": [{"type": "text", "text": "Search results for best camera phones"}],
+        }
+        synthesized = synthesize_search_response(
+            routed=routed,
+            result=result,
+            workspace_id="ws_1",
+            session_id="sess_1",
+            user_profile=None,
+            kernel=FakeKernel(),
+            router=router,
+            request_text_from_response=request_text_from_response,
+        )
+        text = synthesized["content"][0]["text"]
+        self.assertIn("Sources:", text)
+        self.assertIn("cnet.com", text.lower())
+        self.assertIn("theverge.com", text.lower())
+        self.assertEqual(synthesized["structuredContent"]["source_sites"], ["CNET (cnet.com)", "The Verge (theverge.com)"])
+
     def test_grounded_entity_followup_uses_music_venue_evidence(self) -> None:
         response = grounded_entity_followup_response(
             "does it have live music?",
@@ -142,6 +184,13 @@ class SearchResponseSynthesisTests(unittest.TestCase):
     def test_grounded_entity_followup_does_not_trigger_on_unrelated_question(self) -> None:
         response = grounded_entity_followup_response(
             "what state is it in?",
+            "Search results describe Blairally as a music venue/arcade in Eugene, Oregon.",
+        )
+        self.assertIsNone(response)
+
+    def test_grounded_entity_followup_does_not_trigger_on_fresh_music_lookup(self) -> None:
+        response = grounded_entity_followup_response(
+            "what music venues have famous bands play?",
             "Search results describe Blairally as a music venue/arcade in Eugene, Oregon.",
         )
         self.assertIsNone(response)
@@ -274,6 +323,23 @@ class SearchResponseSynthesisTests(unittest.TestCase):
             response,
             "I do not have a preserved search result snippet that answers that ownership question.",
         )
+
+    def test_grounded_search_followup_does_not_reuse_music_context_for_fresh_lookup(self) -> None:
+        response = grounded_search_followup_response(
+            "what are the biggest music venues in oregon?",
+            {
+                "entity_subject": "blairally",
+                "results": [
+                    {
+                        "title": "Blairally Vintage Arcade",
+                        "source": "Example",
+                        "snippet": "Blairally is a music venue/arcade in Eugene, Oregon.",
+                        "url": "https://example.com/blairally",
+                    }
+                ],
+            },
+        )
+        self.assertIsNone(response)
 
 
 if __name__ == "__main__":

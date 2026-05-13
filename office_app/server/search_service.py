@@ -274,24 +274,31 @@ class SearchService:
                 "results": [],
                 "summary_text": clarification,
             }
-        full_query = " ".join(part for part in [category, cleaned_query, inferred_location] if part).strip()
-        url = f"https://nominatim.openstreetmap.org/search?format=jsonv2&limit={max(1, min(limit, 10))}&q={quote_plus(full_query)}"
-        payload = self._fetch_json(url, {"Accept": "application/json"})
         results = []
-        for item in payload or []:
-            display_name = str(item.get("display_name") or "").strip()
-            title = str(item.get("name") or display_name.split(",")[0] or "Unknown place").strip()
-            results.append(
-                {
-                    "title": title,
-                    "address": display_name,
-                    "lat": str(item.get("lat") or ""),
-                    "lon": str(item.get("lon") or ""),
-                    "type": str(item.get("type") or ""),
-                    "source": "OpenStreetMap",
-                    "url": self._place_url(item),
-                }
-            )
+        searched_queries = self._place_query_variants(cleaned_query, inferred_location, category)
+        for index, full_query in enumerate(searched_queries):
+            url = f"https://nominatim.openstreetmap.org/search?format=jsonv2&limit={max(1, min(limit, 10))}&q={quote_plus(full_query)}"
+            payload = self._fetch_json(url, {"Accept": "application/json"})
+            for item in payload or []:
+                display_name = str(item.get("display_name") or "").strip()
+                title = str(item.get("name") or display_name.split(",")[0] or "Unknown place").strip()
+                results.append(
+                    {
+                        "title": title,
+                        "address": display_name,
+                        "lat": str(item.get("lat") or ""),
+                        "lon": str(item.get("lon") or ""),
+                        "type": str(item.get("type") or ""),
+                        "source": "OpenStreetMap",
+                        "url": self._place_url(item),
+                    }
+                )
+            if results:
+                break
+        if not results:
+            ddg_results = self._place_web_fallback_results(cleaned_query, inferred_location, category, limit=limit)
+            if ddg_results:
+                results = ddg_results
         return {
             "query": query,
             "location": inferred_location,
@@ -301,6 +308,85 @@ class SearchService:
             "results": results,
             "summary_text": self._format_places_summary(query, results),
         }
+
+    def _place_query_variants(self, query: str, location: Optional[str], category: Optional[str]) -> List[str]:
+        base_query = re.sub(r"\s+", " ", str(query or "").strip())
+        normalized_category = str(category or "").strip().lower()
+        normalized_location = re.sub(r"\s+", " ", str(location or "").strip()) or None
+        category_variants = {
+            "malls": ["shopping mall", "shopping center", "shopping centre", "mall", "malls"],
+            "bars": ["bar", "bars", "pub", "pubs"],
+            "hotels": ["hotel", "hotels", "inn", "lodging"],
+            "restaurants": ["restaurant", "restaurants", "dining"],
+            "cafe": ["cafe", "cafes", "coffee shop", "coffee shops"],
+            "coffee": ["coffee shop", "coffee shops", "cafe", "cafes"],
+            "thai": ["thai restaurant", "thai restaurants", "thai food"],
+        }
+        variants: List[str] = []
+        if base_query:
+            variants.append(base_query)
+        for candidate in category_variants.get(normalized_category, []):
+            parts = [candidate]
+            if normalized_location:
+                parts.append(normalized_location)
+            variants.append(" ".join(parts))
+        if normalized_location:
+            variants.append(" ".join(part for part in [base_query, normalized_location] if part))
+        deduped: List[str] = []
+        seen = set()
+        for candidate in variants:
+            cleaned = re.sub(r"\s+", " ", candidate).strip()
+            if not cleaned:
+                continue
+            key = cleaned.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(cleaned)
+        return deduped[:6]
+
+    def _place_web_fallback_results(
+        self,
+        query: str,
+        location: Optional[str],
+        category: Optional[str],
+        *,
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        category_text = str(category or query or "places").strip().lower()
+        location_text = str(location or "").strip()
+        search_terms = [category_text]
+        if location_text:
+            search_terms.append(location_text)
+        search_query = " ".join(part for part in search_terms if part).strip()
+        if not search_query:
+            return []
+        results = self._duckduckgo_search(search_query, limit=limit)
+        if not results:
+            return []
+        place_like = []
+        for result in results:
+            text = f"{result.title} {result.snippet}".lower()
+            if category_text == "malls":
+                if not any(marker in text for marker in ("mall", "center", "centre", "shopping")):
+                    continue
+            elif category_text in {"restaurants", "bars", "hotels", "coffee", "cafe", "thai"}:
+                if not any(marker in text for marker in (category_text.rstrip("s"), category_text, "restaurant", "bar", "hotel", "coffee", "cafe", "thai")):
+                    continue
+            place_like.append(
+                {
+                    "title": result.title,
+                    "address": result.snippet or result.url,
+                    "lat": "",
+                    "lon": "",
+                    "type": "web_result",
+                    "source": result.source,
+                    "url": result.url,
+                }
+            )
+            if len(place_like) >= limit:
+                break
+        return place_like
 
     def _duckduckgo_search(self, query: str, *, limit: int) -> List[SearchResult]:
         url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"

@@ -404,6 +404,27 @@ def build_session_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "content": [{"type": "text", "text": f"Started new session {session['title']}."}],
         }
 
+    def handle_session_info(args: Dict[str, Any]) -> Dict[str, Any]:
+        current_session_id = str(args.get("session_id") or "").strip()
+        if not current_session_id:
+            raise error_missing_required_field("session_id")
+        session = deps.user_service.get_session(current_session_id)
+        workspace_id = str(session.get("active_workspace_id") or "").strip()
+        title = str(session.get("title") or current_session_id).strip() or current_session_id
+        description = str(session.get("description") or "").strip()
+        response_text = f'This session is called "{title}".'
+        payload = {
+            "session_id": session["session_id"],
+            "workspace_id": workspace_id,
+            "title": title,
+            "description": description,
+            "response_text": response_text,
+        }
+        return {
+            "structuredContent": payload,
+            "content": [{"type": "text", "text": response_text}],
+        }
+
     def handle_session_activate(args: Dict[str, Any]) -> Dict[str, Any]:
         current_session_id = str(args.get("session_id") or "").strip()
         session_ref = re.sub(r"\s+", " ", str(args.get("session_ref") or "").strip(" .,:;"))
@@ -438,6 +459,108 @@ def build_session_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "content": [{"type": "text", "text": f"You are now in session {session['title']} ({session['session_id']})."}],
         }
 
+    def handle_session_rename(args: Dict[str, Any]) -> Dict[str, Any]:
+        current_session_id = str(args.get("session_id") or "").strip()
+        if not current_session_id:
+            raise error_missing_required_field("session_id")
+        title = str(args.get("title") or "").strip()
+        if not title:
+            raise error_missing_required_field("title")
+        description = str(args.get("description") or "").strip()
+        normalized_title = _normalize_title(title)
+        normalized_description = description or normalized_title
+        current_user = deps.user_service.get_user_for_session(current_session_id)
+        result = deps.user_service.rename_session(
+            user_id=str(current_user["user_id"]),
+            session_id=current_session_id,
+            title=normalized_title,
+            description=normalized_description,
+        )
+        workspace_id = str(result.get("workspace_id") or "").strip()
+        if workspace_id:
+            try:
+                workspace_state = deps.kernel.get_state(workspace_id)
+                pending_map = workspace_state.get("pending_session_create_by_session")
+                if isinstance(pending_map, dict):
+                    next_map = dict(pending_map)
+                    next_map.pop(current_session_id, None)
+                    if next_map:
+                        workspace_state["pending_session_create_by_session"] = next_map
+                    else:
+                        workspace_state.pop("pending_session_create_by_session", None)
+                    deps.kernel.store.save_state(workspace_id, workspace_state)
+            except HTTPException:
+                pass
+        session = result["session"]
+        response_text = f"Renamed session to {session['title']}."
+        return {
+            "structuredContent": {
+                "session_id": result["session_id"],
+                "workspace_id": result["workspace_id"],
+                "title": session["title"],
+                "description": session["description"],
+                "response_text": response_text,
+            },
+            "content": [{"type": "text", "text": response_text}],
+        }
+
+    def handle_session_delete(args: Dict[str, Any]) -> Dict[str, Any]:
+        current_session_id = str(args.get("session_id") or "").strip()
+        if not current_session_id:
+            raise error_missing_required_field("session_id")
+        current_user = deps.user_service.get_user_for_session(current_session_id)
+        target_session_id = str(args.get("target_session_id") or args.get("session_ref") or current_session_id).strip()
+        result = deps.user_service.delete_session(
+            user_id=str(current_user["user_id"]),
+            session_id=target_session_id,
+        )
+        deleted_session = result.get("deleted_session") or {}
+        active_session = result.get("session") or {}
+        deleted_title = str(deleted_session.get("title") or deleted_session.get("session_id") or target_session_id).strip()
+        active_title = str(active_session.get("title") or active_session.get("session_id") or "").strip()
+        active_session_id = str(active_session.get("session_id") or "").strip()
+        replacement_session = result.get("replacement_session") or {}
+        replacement_session_id = str(replacement_session.get("session_id") or "").strip()
+        created_replacement_session = bool(result.get("created_replacement_session"))
+        if created_replacement_session and active_session_id == replacement_session_id and replacement_session_id:
+            try:
+                current_state = deps.kernel.get_state(str(result.get("workspace_id") or ""))
+                pending_map = dict(current_state.get("pending_session_create_by_session") or {})
+                pending_map[replacement_session_id] = {
+                    "request_text": "new session",
+                    "ts": deps.utc_now(),
+                }
+                current_state["pending_session_create_by_session"] = pending_map
+                current_state.pop("pending_room_navigation", None)
+                deps.kernel.store.save_state(str(result.get("workspace_id") or ""), current_state)
+            except HTTPException:
+                pass
+        lines = [f"Deleted session {deleted_title} ({target_session_id})."]
+        if active_session_id and active_session_id != target_session_id:
+            lines.append(f"Active session is now {active_title} ({active_session_id}).")
+        if created_replacement_session and active_session_id == replacement_session_id:
+            lines.append("What should I name the new session?")
+        structured = {
+            "deleted_session_id": target_session_id,
+            "deleted_title": deleted_title,
+            "session_id": active_session_id or current_session_id,
+            "workspace_id": result.get("workspace_id"),
+            "title": active_title or deleted_title,
+            "description": str(active_session.get("description") or ""),
+            "replacement_session_id": replacement_session_id,
+            "remaining_count": result.get("remaining_count", 0),
+            "workspace_state": result.get("workspace_state") or {},
+            "deleted_session": deleted_session,
+            "active_session": active_session,
+            "created_replacement_session": created_replacement_session,
+        }
+        response_text = "\n".join(lines)
+        structured["response_text"] = response_text
+        return {
+            "structuredContent": structured,
+            "content": [{"type": "text", "text": response_text}],
+        }
+
     def handle_workspace_activate(args: Dict[str, Any]) -> Dict[str, Any]:
         session_id = str(args.get("session_id") or "").strip()
         if not session_id:
@@ -464,6 +587,9 @@ def build_session_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         "office.sessions_list": handle_sessions_list,
         "office.sessions_search": handle_sessions_search,
         "office.session_create": handle_session_create,
+        "office.session_info": handle_session_info,
         "office.session_activate": handle_session_activate,
+        "office.session_rename": handle_session_rename,
+        "office.session_delete": handle_session_delete,
         "office.workspace_activate": handle_workspace_activate,
     }

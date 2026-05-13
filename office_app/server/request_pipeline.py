@@ -173,6 +173,28 @@ class RequestPipeline:
         "web search",
         "check online",
     )
+    SEARCH_PRODUCT_HINTS = (
+        "cellphone",
+        "cellphones",
+        "phone",
+        "phones",
+        "smartphone",
+        "smartphones",
+        "camera",
+        "cameras",
+        "laptop",
+        "laptops",
+        "tv",
+        "tvs",
+        "television",
+        "televisions",
+        "headphone",
+        "headphones",
+        "earbud",
+        "earbuds",
+        "tablet",
+        "tablets",
+    )
     SEARCH_REVIEW_HINTS = (
         "reviews",
         "review",
@@ -201,6 +223,11 @@ class RequestPipeline:
         "cafe",
         "hotel",
         "hotels",
+        "mall",
+        "malls",
+        "shopping mall",
+        "shopping center",
+        "shopping centre",
         "place",
         "places",
     )
@@ -240,6 +267,11 @@ class RequestPipeline:
         "why did you say that",
         "what did you mean",
         "what are you doing",
+        "what was wrong with the question",
+        "what went wrong",
+        "what should have happened",
+        "what was wrong",
+        "why was that wrong",
     )
     INTENT_ADVICE_HINTS = (
         "what are the best restaurants to model mine after",
@@ -261,9 +293,12 @@ class RequestPipeline:
     )
     MODEL_CONTEXT_RULE = (
         "Apply active-room behavior memory as durable room-specific instructions when present. "
+        "Apply persona behavior memory as style guidance when present, but do not echo the source book or memory label unless the user explicitly asks about it. "
         "Use the provided session conversation history as the current chat thread. "
         "When the user asks a follow-up, comparison, pronoun-based question, 'what about ...', or 'how about ...', "
         "resolve it against the immediately relevant prior turns instead of treating it as a blank new chat. "
+        "If the user pastes prior assistant output, logs, or transcript text, treat it as evidence to analyze rather than a brand-new question. "
+        "Bind your answer to the exact pasted text and do not reinterpret it into an unrelated topic. "
         "For broad help or capability questions like 'what can you help me with here?', answer from the active room and persona instead of continuing the previous topic. "
         "Do not ask for details already present in recent context. "
         "If the user asks a reflective follow-up like 'how did you come to that conclusion?' or 'what makes you say that?', "
@@ -353,18 +388,62 @@ class RequestPipeline:
         "start a new session",
         "create a new session",
     )
+    SESSION_INFO_HINTS = (
+        "what is the name of this session",
+        "what is this session called",
+        "what session is this",
+        "what is this session",
+        "what's the name of this session",
+        "what's this session called",
+        "what is the title of this session",
+        "current session title",
+        "session name",
+    )
+    SESSION_RENAME_HINTS = (
+        "rename this session",
+        "rename session",
+        "retitle this session",
+        "retitle session",
+        "change this session name",
+        "change session name",
+    )
     SESSION_REQUEST_RE = re.compile(
         r"^(?:new|start|create)(?:\s+a|\s+an|\s+the)?(?:\s+new)?\s+session(?:\s+for|\s+about|\s+called|\s+named)?\s*(.*)$",
+        re.IGNORECASE,
+    )
+    SESSION_INFO_RE = re.compile(
+        r"^(?:what(?:'s| is)?|tell\s+me|give\s+me)\s+(?:the\s+)?(?:name|title)\s+of\s+(?:this|the|my|current)\s+session\??$"
+        r"|^(?:what(?:'s| is)?\s+this\s+session(?:\s+called)?\??)$"
+        r"|^(?:what\s+session\s+is\s+this\??)$",
+        re.IGNORECASE,
+    )
+    SESSION_RENAME_RE = re.compile(
+        r"^(?:rename|retitle|change)(?:\s+this)?\s+session(?:\s+to|\s+as|\s+named|\s+called)?\s*(.*)$",
         re.IGNORECASE,
     )
     SESSION_LIST_HINTS = (
         "list sessions",
         "show sessions",
         "show me the sessions",
+        "show me all sessions",
         "what sessions do i have",
         "what sessions are there",
         "what are my sessions",
         "which sessions do i have",
+    )
+    SESSION_LIST_CLARIFY_RE = re.compile(
+        r"^(?:what|which)\s+sessions?\b.*(?:are\s+there|in\s+(?:this|the|my|our|current)\s+(?:workspace|room)|here)\b.*$",
+        re.IGNORECASE,
+    )
+    SESSION_LIST_RE = re.compile(
+        r"^(?:show|display|list|give\s+me|tell\s+me|which)\b.*\bsessions?\b"
+        r"(?:\s+in\s+(?:this|the|my|our|current)\s+(?:workspace|room))?"
+        r"(?:\s+here)?\??$",
+        re.IGNORECASE,
+    )
+    WHAT_SESSIONS_LIST_RE = re.compile(
+        r"^what\s+sessions?\b.*$",
+        re.IGNORECASE,
     )
     SESSION_ACTIVATE_RE = re.compile(
         r"^(?:go(?:\s+back)?\s+to|switch\s+to|activate|open|return\s+to)\s+session\s+(.+?)\??$",
@@ -873,6 +952,15 @@ class RequestPipeline:
         if capability_route is not None:
             return capability_route
 
+        product_search_route = self.route_product_search_request(workspace_id, request_text)
+        if product_search_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **product_search_route,
+            }
+
         intent = self.classify_intent(request_text)
         if intent in {"meta", "advice"}:
             return self.model_route(
@@ -907,15 +995,6 @@ class RequestPipeline:
                 **ocr_route,
             }
 
-        search_route = self.route_search_request(workspace_id, request_text)
-        if search_route is not None:
-            return {
-                "route_kind": "tool",
-                "workspace_id": workspace_id,
-                "request": request_text,
-                **search_route,
-            }
-
         status_route = self.route_room_status_request(workspace_id, request_text)
         if status_route is not None:
             return {
@@ -923,6 +1002,15 @@ class RequestPipeline:
                 "workspace_id": workspace_id,
                 "request": request_text,
                 **status_route,
+            }
+
+        search_route = self.route_search_request(workspace_id, request_text)
+        if search_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **search_route,
             }
 
         navigation_room = self.extract_navigation_room(request_text)
@@ -1421,12 +1509,20 @@ class RequestPipeline:
                 return None
 
         place_signals = self.place_search_signals(request_text)
-        place_query = place_signals["place_query"]
+        place_query = dict(place_signals["place_query"])
         time_window = self.extract_time_window(text)
         review_signal = place_signals["review_signal"]
+        mall_discovery_signal = bool(
+            re.search(r"\b(?:which\s+ones?|what\s+are\s+they|what\s+ones?)\b", text)
+            and any(hint in text for hint in ("mall", "malls", "shopping mall", "shopping center", "shopping centre"))
+        )
+        if mall_discovery_signal:
+            place_query["category"] = place_query.get("category") or "malls"
+            if not place_query.get("normalized_query"):
+                place_query["normalized_query"] = "malls"
         place_task = bool(
             place_signals["has_place_hint"]
-            and (place_signals["discovery_signal"] or review_signal)
+            and (place_signals["discovery_signal"] or review_signal or mall_discovery_signal)
             and (place_signals["location_signal"] or place_signals["explicit_review_signal"])
         )
 
@@ -1469,11 +1565,16 @@ class RequestPipeline:
             }
 
         if place_task:
+            normalized_query = place_query["normalized_query"] or request_text
+            if place_query.get("category") and place_query.get("location"):
+                normalized_query = str(place_query["category"])
+            if mall_discovery_signal:
+                normalized_query = "malls"
             return {
                 "capability": "search.places",
                 "tool": "office.search_places",
                 "arguments": {
-                    "query": place_query["normalized_query"] or request_text,
+                    "query": normalized_query,
                     "location": place_query["location"],
                     "category": place_query["category"],
                     "needs_location": place_query["needs_location"],
@@ -1483,6 +1584,28 @@ class RequestPipeline:
             }
 
         return None
+
+    def route_product_search_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = request_text.lower().strip()
+        if not text:
+            return None
+        has_product_hint = any(hint in text for hint in self.SEARCH_PRODUCT_HINTS)
+        if not has_product_hint:
+            return None
+        product_comparison_signal = bool(
+            re.search(r"\b(best|top|highest rated|most reliable|most durable|which\s+is\s+best|which\s+one\s+is\s+best|compare|comparison|versus|vs\.?)\b", text)
+        )
+        if not product_comparison_signal:
+            return None
+        return {
+            "capability": "search.web",
+            "tool": "office.search_web",
+            "arguments": {
+                "query": request_text,
+                "limit": 5,
+            },
+            "reason": "Matched product research intent.",
+        }
 
     def is_search_capability_question(self, text: str) -> bool:
         return self.intent_analyzer.is_search_capability_question(text)
@@ -1588,7 +1711,50 @@ class RequestPipeline:
                     },
                     "reason": "Matched a session switch request.",
                 }
-        if any(hint in text for hint in self.SESSION_LIST_HINTS):
+        if self.SESSION_LIST_CLARIFY_RE.match(request_text.strip()):
+            return {
+                "route_kind": "clarify",
+                "capability": "session.list.confirmation",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": "Do you want me to list the sessions in this workspace?",
+                },
+                "reason": "Matched an ambiguous session list request.",
+            }
+        if any(hint in text for hint in self.SESSION_RENAME_HINTS):
+            match = self.SESSION_RENAME_RE.match(request_text.strip())
+            title = str(match.group(1) if match else "").strip(" .,:;")
+            if title:
+                return {
+                    "capability": "session.rename",
+                    "tool": "office.session_rename",
+                    "arguments": {
+                        "title": title,
+                        "description": title,
+                    },
+                    "reason": "Matched a session rename request.",
+                }
+            return {
+                "route_kind": "clarify",
+                "capability": "session.rename.name_required",
+                "tool": "office.session_rename",
+                "arguments": {
+                    "response_text": "What should I rename the session to?",
+                },
+                "reason": "Need a new session title before renaming the session.",
+            }
+        if any(hint in text for hint in self.SESSION_INFO_HINTS) or self.SESSION_INFO_RE.match(request_text.strip()):
+            return {
+                "capability": "session.info",
+                "tool": "office.session_info",
+                "arguments": {},
+                "reason": "Matched a request for the current session name or title.",
+            }
+        if (
+            any(hint in text for hint in self.SESSION_LIST_HINTS)
+            or self.SESSION_LIST_RE.match(request_text.strip())
+            or self.WHAT_SESSIONS_LIST_RE.match(request_text.strip())
+        ):
             return {
                 "capability": "session.list",
                 "tool": "office.sessions_list",
@@ -1692,7 +1858,13 @@ class RequestPipeline:
         match = re.search(r"\bin\s+([A-Za-z][A-Za-z0-9 .,'&-]{1,60})", request_text, re.IGNORECASE)
         if not match:
             return None
-        return match.group(1).strip(" .")
+        location = re.sub(r"\s+", " ", match.group(1)).strip(" .")
+        location = re.split(
+            r"[.?!,]|(?:\s+(?:and|or|but|with|who|which|that|what|can|could|would|do|does|we|you)\b)",
+            location,
+            maxsplit=1,
+        )[0].strip(" .")
+        return location or None
 
     def extract_time_window(self, text: str) -> Optional[str]:
         if "last month" in text:
@@ -1731,6 +1903,11 @@ class RequestPipeline:
             "cafe",
             "hotel",
             "hotels",
+            "mall",
+            "malls",
+            "shopping mall",
+            "shopping center",
+            "shopping centre",
             "thai",
         ):
             if candidate in text:
@@ -1766,7 +1943,13 @@ class RequestPipeline:
         lowered = re.sub(r"^[\s,]*(?:find|show me|list|recommend|give me)\s+", "", lowered).strip()
         lowered = re.sub(r"\b(?:near me|nearby|around me)\b", "", lowered).strip()
         location = self.extract_location(text)
-        lowered = re.sub(r"\bin\s+[A-Za-z][A-Za-z0-9 .,'&-]{1,60}", "", lowered, flags=re.IGNORECASE).strip()
+        if location:
+            lowered = re.sub(
+                rf"\bin\s+{re.escape(location)}\b",
+                "",
+                lowered,
+                flags=re.IGNORECASE,
+            ).strip()
         lowered = lowered.strip(" .,!?:;")
         if lowered.startswith("the "):
             lowered = lowered[4:].strip()
@@ -1796,14 +1979,21 @@ class RequestPipeline:
                 "cafe": "cafe",
                 "hotel": "hotels",
                 "hotels": "hotels",
+                "mall": "malls",
+                "malls": "malls",
+                "shopping mall": "malls",
+                "shopping center": "malls",
+                "shopping centre": "malls",
             }
             category = category_map.get(category or "", category)
-            if category in {"restaurants", "bars", "hotels"} and (
+            if category in {"restaurants", "bars", "hotels", "malls"} and (
                 lowered == category or any(marker in lowered for marker in ("best", "top", "local"))
             ):
                 normalized_query = category
             else:
                 normalized_query = lowered or category or ""
+            if category == "malls" and location and any(marker in lowered for marker in ("which one", "which ones", "major mall", "major malls", "tell me")):
+                normalized_query = "malls"
         normalized_query = re.sub(r"\s+", " ", normalized_query).strip()
         needs_location = bool(
             not location and any(marker in text.lower() for marker in ("near me", "nearby", "around me", "best ", "top ", "local"))

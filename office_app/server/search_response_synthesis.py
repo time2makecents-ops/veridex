@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 from typing import Any, Callable, Dict, List, Optional
 
 
@@ -21,6 +22,21 @@ ENTITY_FOLLOWUP_RULES = (
         ),
         "negative_response": "I did not find live music or event terms in the grounded search results I have here.",
     },
+)
+
+GROUNDED_FOLLOWUP_CUE_RE = (
+    re.compile(r"\b(?:it|its|they|them|their|this|that|those|these)\b", re.IGNORECASE),
+    re.compile(r"\bagain\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:does|do|did|is|are|was|were|can|could|should|would|has|have|had)\s+"
+        r"(?:it|they|them|their|this|that|those|these)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:what|where|when|who|which|how)\s+(?:is|are|was|were|do|does|did|can|could|should|would|has|have|had)\s+"
+        r"(?:it|they|them|their|this|that|those|these)\b",
+        re.IGNORECASE,
+    ),
 )
 
 
@@ -84,6 +100,8 @@ def grounded_entity_followup_response(question_text: str, evidence_text: str) ->
     question = str(question_text or "").strip()
     evidence = str(evidence_text or "").strip()
     if not question or not evidence:
+        return None
+    if not any(pattern.search(question) for pattern in GROUNDED_FOLLOWUP_CUE_RE):
         return None
     for rule in ENTITY_FOLLOWUP_RULES:
         if rule["question_re"].search(question) is None:
@@ -218,6 +236,37 @@ def _result_label(result: Dict[str, str]) -> str:
     return title or source or "that result"
 
 
+def _result_source_site(result: Dict[str, Any]) -> str:
+    source = str(result.get("source") or "").strip()
+    url = str(result.get("url") or "").strip()
+    domain = ""
+    if url:
+        parsed = urlparse(url)
+        domain = (parsed.netloc or "").lower()
+        if domain.startswith("www."):
+            domain = domain[4:]
+    if source and domain and source.casefold() != domain.casefold():
+        return f"{source} ({domain})"
+    return source or domain or ""
+
+
+def _search_source_sites(results: List[Dict[str, Any]]) -> List[str]:
+    sites: List[str] = []
+    seen = set()
+    for item in results[:5]:
+        if not isinstance(item, dict):
+            continue
+        site = _result_source_site(item)
+        if not site:
+            continue
+        normalized = site.casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        sites.append(site)
+    return sites
+
+
 def _normalize_time_token(value: str) -> str:
     token = re.sub(r"[.\s]+", "", str(value or "").strip().lower())
     token = token.replace("a.m", "am").replace("p.m", "pm")
@@ -348,15 +397,24 @@ def _explicit_entity_summary_subject(question_text: str) -> str:
     return _normalize_subject_text(match.group(1))
 
 
+def _has_grounded_followup_cue(question_text: str) -> bool:
+    lowered = re.sub(r"\s+", " ", str(question_text or "").strip())
+    if not lowered:
+        return False
+    return any(pattern.search(lowered) for pattern in GROUNDED_FOLLOWUP_CUE_RE)
+
+
 def _looks_like_grounded_search_followup(question_text: str, entity_subject: str = "") -> bool:
     lowered = re.sub(r"\s+", " ", str(question_text or "").strip().lower())
     if not lowered:
         return False
     if RESULT_PROVENANCE_RE.search(lowered):
         return True
+    if not _has_grounded_followup_cue(lowered):
+        return False
     if any(rule_re.search(lowered) for _, rule_re, _ in ATTRIBUTE_RULES):
         return True
-    if len(lowered.split()) <= 12 and re.search(r"\b(it|they|their|them|there|again)\b", lowered):
+    if len(lowered.split()) <= 12 and re.search(r"\b(it|they|their|them|there|again|this|that|those|these)\b", lowered):
         return True
     return False
 
@@ -553,6 +611,11 @@ def synthesize_search_response(
     updated = dict(result)
     structured = dict(updated.get("structuredContent") or {})
     structured["raw_tool_summary"] = structured.get("summary_text") or request_text_from_response(result)
+    source_sites = _search_source_sites(structured.get("results") or [])
+    if source_sites:
+        structured["source_sites"] = source_sites
+        if "sources:" not in text.lower() and "source sites:" not in text.lower():
+            text = f"{text.rstrip()}\n\nSources: {', '.join(source_sites[:3])}."
     if grounded_evidence_profile:
         structured["grounding_evidence_profile"] = grounded_evidence_profile
     if grounded_evidence_summary:

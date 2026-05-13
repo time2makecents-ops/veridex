@@ -161,6 +161,11 @@ class BaseProvider(ABC):
                 if memory_text:
                     lines.append(f"Active room behavior memory:\n{memory_text[:3000]}")
                 continue
+            if key == "persona_behavior_memory_text":
+                memory_text = _scalar_text(context[key]).strip()
+                if memory_text:
+                    lines.append(f"Active persona style guidance:\n{memory_text[:3000]}")
+                continue
             if key == "conversation_history_text":
                 history_text = _scalar_text(context[key]).strip()
                 if history_text:

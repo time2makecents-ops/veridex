@@ -41,6 +41,9 @@ class RequestIntentAnalyzerTests(unittest.TestCase):
     def test_classifies_meta_intent(self) -> None:
         self.assertEqual(self.analyzer.classify_intent("why did you respond that way"), "meta")
 
+    def test_classifies_reflective_question_as_meta_intent(self) -> None:
+        self.assertEqual(self.analyzer.classify_intent("what was wrong with the question"), "meta")
+
     def test_classifies_advice_intent(self) -> None:
         self.assertEqual(self.analyzer.classify_intent("what are the best restaurants to model mine after"), "advice")
 
@@ -67,4 +70,3 @@ class RequestIntentAnalyzerTests(unittest.TestCase):
         self.assertTrue(task_signals["has_place_hint"])
         self.assertTrue(task_signals["discovery_signal"])
         self.assertTrue(task_signals["location_signal"])
-

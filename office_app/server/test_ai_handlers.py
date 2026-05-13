@@ -92,11 +92,13 @@ class FakeReceptionistContextService:
         summary: str = "",
         recent_turns: Optional[List[str]] = None,
         room_memory_refs: Optional[List[Dict[str, Any]]] = None,
+        persona_memory_refs: Optional[List[Dict[str, Any]]] = None,
         session_facts_text: str = "",
     ) -> None:
         self.summary = summary
         self.recent_turns = recent_turns or []
         self.room_memory_refs = room_memory_refs or []
+        self.persona_memory_refs = persona_memory_refs or []
         self.session_facts_text = session_facts_text
 
     def build_model_context(self, *, workspace_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
@@ -108,6 +110,7 @@ class FakeReceptionistContextService:
             "recent_turns_text": list(self.recent_turns),
             "session_facts_text": self.session_facts_text,
             "room_behavior_memory_refs": list(self.room_memory_refs),
+            "persona_behavior_memory_refs": list(self.persona_memory_refs),
         }
 
 
@@ -431,6 +434,52 @@ class AiHandlerTests(unittest.TestCase):
             }
         )
         self.assertIn("Sales questions pertain to Oregon businesses.", router.contexts[0]["room_behavior_memory_text"])
+
+    def test_ai_generate_separates_persona_style_memory_from_room_memory(self) -> None:
+        router = CapturingModelRouter()
+        deps = self._deps(
+            [],
+            receptionist_room_memory_refs=[{"workspace_id": "ws_1", "artifact_id": "art_oregon"}],
+        )
+        deps = HandlerDeps(
+            **{
+                **deps.__dict__,
+                "receptionist_context_service": FakeReceptionistContextService(
+                    summary="",
+                    recent_turns=[],
+                    room_memory_refs=[{"workspace_id": "ws_1", "artifact_id": "art_oregon"}],
+                    persona_memory_refs=[{"workspace_id": "ws_1", "artifact_id": "art_carnegie"}],
+                ),
+                "archive_service": FakeArchiveService(),
+                "model_router": router,
+            }
+        )
+        original_get_artifact = deps.archive_service.get_artifact
+
+        def get_artifact(workspace_id: str, artifact_id: str) -> Dict[str, Any]:
+            if artifact_id == "art_carnegie":
+                return {
+                    "artifact_id": artifact_id,
+                    "workspace_id": workspace_id,
+                    "type": "persona_behavior_memory",
+                    "content": "Answer sales questions with How to Win Friends and Influence People in mind.",
+                    "metadata": {"memory_kind": "persona_behavior", "target_room": "sales_department", "target_persona": "Sales Director"},
+                }
+            return original_get_artifact(workspace_id, artifact_id)
+
+        deps.archive_service.get_artifact = get_artifact  # type: ignore[method-assign]
+        handlers = build_ai_handlers(deps)
+        handlers["office.ai_generate"](
+            {
+                "workspace_id": "ws_1",
+                "user_prompt": "what are the best ways bars increase repeat customers?",
+                "session_id": "sess_1",
+            }
+        )
+        context = router.contexts[0]
+        self.assertIn("Sales questions pertain to Oregon businesses.", context["room_behavior_memory_text"])
+        self.assertIn("friendly, empathetic, relationship-first style", context["persona_behavior_memory_text"])
+        self.assertNotIn("How to Win Friends and Influence People", context["persona_behavior_memory_text"])
 
     def test_ai_generate_propagates_session_facts_into_context(self) -> None:
         router = CapturingModelRouter()

@@ -162,6 +162,75 @@ class RequestFollowupRouterTests(unittest.TestCase):
             "I do not have a preserved search result snippet that answers that ownership question.",
         )
 
+    def test_fresh_music_lookup_does_not_reuse_preserved_grounded_context(self) -> None:
+        self.grounded_context = {
+            "entity_subject": "blairally",
+            "results": [
+                {
+                    "title": "Blairally Vintage Arcade",
+                    "source": "Example",
+                    "snippet": "Blairally is a music venue/arcade in Eugene, Oregon.",
+                    "url": "https://example.com/blairally",
+                }
+            ],
+        }
+        routed = self.router.route_contextual_followup(
+            "ws1",
+            "what are the biggest music venues in oregon?",
+            [],
+        )
+        self.assertIsNone(routed)
+
+    def test_show_all_sessions_in_workspace_does_not_reuse_grounded_context(self) -> None:
+        self.grounded_context = {
+            "entity_subject": "blairally",
+            "results": [
+                {
+                    "title": "Blairally Vintage Arcade",
+                    "source": "Example",
+                    "snippet": "Blairally is a music venue/arcade in Eugene, Oregon.",
+                    "url": "https://example.com/blairally",
+                }
+            ],
+        }
+        routed = self.router.route_contextual_followup(
+            "ws1",
+            "show me all sessions in this workspace",
+            [
+                {"role": "user", "text": "tell me about blairally"},
+                {
+                    "role": "assistant",
+                    "text": "Veridex doesn't have any verified information about blairally. Have the Sales Department do an internet search or search your other sessions if you want to know more.",
+                },
+            ],
+        )
+        self.assertIsNone(routed)
+
+    def test_what_sessions_are_in_this_workspace_does_not_reuse_grounded_context(self) -> None:
+        self.grounded_context = {
+            "entity_subject": "blairally",
+            "results": [
+                {
+                    "title": "Blairally Vintage Arcade",
+                    "source": "Example",
+                    "snippet": "Blairally is a music venue/arcade in Eugene, Oregon.",
+                    "url": "https://example.com/blairally",
+                }
+            ],
+        }
+        routed = self.router.route_contextual_followup(
+            "ws1",
+            "what sessions are in this workspace",
+            [
+                {"role": "user", "text": "tell me about blairally"},
+                {
+                    "role": "assistant",
+                    "text": "Veridex doesn't have any verified information about blairally. Have the Sales Department do an internet search or search your other sessions if you want to know more.",
+                },
+            ],
+        )
+        self.assertIsNone(routed)
+
     def test_restaurant_followup_routes_to_reviews(self) -> None:
         self.grounded_context = None
         routed = self.router.route_contextual_followup(
@@ -312,6 +381,27 @@ class RequestFollowupRouterTests(unittest.TestCase):
         )
         self.assertEqual(subject, "blairally")
 
+    def test_thread_context_ignores_source_checks_when_collecting_meaningful_turns(self) -> None:
+        context = RequestFollowupRouter._build_thread_context(
+            [
+                {"role": "user", "text": "why are malls dying in oregon?"},
+                {
+                    "role": "assistant",
+                    "text": "Malls are struggling in Oregon because of online shopping and changing consumer preferences.",
+                },
+                {
+                    "role": "user",
+                    "text": 'where did you gather your information from when answering my question "why are malls dying in oregon"?',
+                },
+                {
+                    "role": "assistant",
+                    "text": 'The text you quoted came from my prior response: "Malls are struggling in Oregon..."',
+                },
+            ]
+        )
+        self.assertIn("why are malls dying in oregon?", context.meaningful_user_turns)
+        self.assertNotIn("where did you gather your information from when answering my question \"why are malls dying in oregon\"?", context.meaningful_user_turns)
+
     def test_session_search_detail_followup_reuses_recent_session_search(self) -> None:
         routed = self.router.route_contextual_followup(
             "ws1",
@@ -437,3 +527,88 @@ class RequestFollowupRouterTests(unittest.TestCase):
         self.assertEqual(routed["arguments"]["target_session_id"], "sess_66c6c2f0dfd3")
         self.assertTrue(routed["arguments"]["detail"])
         self.assertTrue(routed["arguments"]["expand_full"])
+
+    def test_source_followup_reports_unsupported_generalization_in_prior_answer(self) -> None:
+        routed = self.router.route_contextual_followup(
+            "ws1",
+            "where did you gather your information from when answering my question?",
+            [
+                {
+                    "role": "assistant",
+                    "text": (
+                        "Considering the principles from How to Win Friends and Influence People by Dale Carnegie, "
+                        "I'll provide you with some insights on why malls might be dying in Oregon.\n\n"
+                        "Malls are struggling nationwide, and Oregon is no exception. "
+                        "Oregon has seen a surge in new developments."
+                    ),
+                }
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "clarification.source_reference")
+        self.assertIn("unsupported generalization", routed["arguments"]["response_text"].lower())
+        self.assertIn("prior response", routed["arguments"]["response_text"].lower())
+
+    def test_memory_reference_followup_returns_prior_topic_summary(self) -> None:
+        routed = self.router.route_contextual_followup(
+            "ws1",
+            "do you remember when i asked about malls dying in oregon?",
+            [
+                {"role": "user", "text": "why are malls dying in oregon?"},
+                {
+                    "role": "assistant",
+                    "text": (
+                        "Malls are struggling in Oregon, much like the rest of the country, due to a combination of factors. "
+                        "The primary drivers include the significant shift towards online shopping, which offers convenience and often better prices, "
+                        "and changing consumer preferences that increasingly favor unique, personalized experiences over traditional retail environments."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "text": 'where did you gather your information from when answering my question "why are malls dying in oregon"?',
+                },
+                {
+                    "role": "assistant",
+                    "text": (
+                        'The text you quoted came from my prior response: "Malls are struggling in Oregon, much like the rest of the country..." '
+                        "I do not have a verified source for that claim."
+                    ),
+                },
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "clarification.memory_reference")
+        response_text = routed["arguments"]["response_text"]
+        self.assertIn("Yes.", response_text)
+        self.assertIn("malls dying in oregon", response_text.lower())
+        self.assertIn("Malls are struggling in Oregon", response_text)
+        self.assertNotIn("where did you gather your information", response_text.lower())
+
+    def test_source_followup_uses_quoted_prior_question_to_find_matching_answer(self) -> None:
+        routed = self.router.route_contextual_followup(
+            "ws1",
+            'where did you gather your information from when answering my question "why are malls dying in oregon"?',
+            [
+                {"role": "user", "text": "why are malls dying in oregon?"},
+                {
+                    "role": "assistant",
+                    "text": (
+                        "Malls are struggling in Oregon, much like the rest of the country, due to a combination of factors. "
+                        "The primary drivers include the significant shift towards online shopping, which offers convenience and often better prices, "
+                        "and changing consumer preferences that increasingly favor unique, personalized experiences over traditional retail environments."
+                    ),
+                },
+                {"role": "user", "text": "how do you pick a good beer to go with fish?"},
+                {"role": "assistant", "text": "When pairing beer with fish, I consider the principles from How to Win Friends and Influence People."},
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "clarify")
+        response_text = routed["arguments"]["response_text"]
+        self.assertIn("Malls are struggling in Oregon", response_text)
+        self.assertNotIn("beer with fish", response_text)

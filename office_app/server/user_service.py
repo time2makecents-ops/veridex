@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import shutil
 from datetime import datetime, timezone
 import re
 import uuid
@@ -156,15 +157,17 @@ class UserService:
         workspace_id: str,
         title: str,
         description: str = "",
+        active_room: Optional[str] = None,
+        active_persona: Optional[str] = None,
     ) -> Dict[str, Any]:
         now = self.utc_now()
         try:
             workspace_state = self.kernel.get_state(workspace_id)
-            active_room = str(workspace_state.get("active_room") or "lobby")
-            active_persona = str(workspace_state.get("active_persona") or "Receptionist")
+            default_active_room = str(workspace_state.get("active_room") or "lobby")
+            default_active_persona = str(workspace_state.get("active_persona") or "Receptionist")
         except Exception:
-            active_room = "lobby"
-            active_persona = "Receptionist"
+            default_active_room = "lobby"
+            default_active_persona = "Receptionist"
         return self.sessions.insert_session(
             {
                 "session_id": f"sess_{uuid.uuid4().hex[:12]}",
@@ -172,13 +175,23 @@ class UserService:
                 "title": self._normalize_text(title) or "Session",
                 "description": self._normalize_text(description),
                 "active_workspace_id": workspace_id,
-                "active_room": active_room,
-                "active_persona": active_persona,
+                "active_room": self._normalize_text(active_room) or default_active_room,
+                "active_persona": self._normalize_text(active_persona) or default_active_persona,
                 "created_at": now,
                 "updated_at": now,
                 "last_active_at": now,
             }
         )
+
+    def _workspace_label_for(self, workspace_id: str) -> str:
+        try:
+            index = self.kernel.list_workspaces()
+        except Exception:
+            return workspace_id
+        for row in index.get("workspaces", []):
+            if str(row.get("workspace_id") or "").strip() == workspace_id:
+                return str(row.get("label") or workspace_id).strip() or workspace_id
+        return workspace_id
 
     def _activate_session(self, user_id: str, session_id: str) -> Dict[str, Any]:
         session = self.sessions.fetch_session(session_id)
@@ -252,6 +265,8 @@ class UserService:
         description: str = "",
         workspace_id: Optional[str] = None,
         workspace_label: Optional[str] = None,
+        active_room: Optional[str] = None,
+        active_persona: Optional[str] = None,
     ) -> Dict[str, Any]:
         workspace_title = self._normalize_text(workspace_label) or self._default_session_title(title)
         if workspace_id:
@@ -265,6 +280,8 @@ class UserService:
             workspace_id=workspace_id,
             title=title or workspace_title,
             description=description,
+            active_room=active_room,
+            active_persona=active_persona,
         )
         self.kernel.store.append_transcript(
             workspace_id,
@@ -504,3 +521,123 @@ class UserService:
         if not user_id:
             raise HTTPException(status_code=404, detail="User not found.")
         return self._activate_session(user_id, session_id)
+
+    def delete_session(self, *, user_id: str, session_id: str) -> Dict[str, Any]:
+        target_session = self.get_session(session_id)
+        target_user_id = str(target_session.get("user_id") or "").strip()
+        if target_user_id != str(user_id or "").strip():
+            raise HTTPException(status_code=404, detail="Session not found.")
+
+        workspace_id = str(target_session.get("active_workspace_id") or "").strip()
+        if not workspace_id:
+            raise HTTPException(status_code=404, detail="Session not found.")
+
+        user_record = self.store.fetch_user(user_id)
+        if user_record is None:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        current_active_session_id = str(user_record.get("last_active_session_id") or "").strip()
+        remaining_sessions = [
+            row
+            for row in self.sessions.list_sessions_for_user(user_id, workspace_id=workspace_id)
+            if str(row.get("session_id") or "").strip() != session_id
+        ]
+
+        deleted = self.sessions.delete_session(session_id)
+        if deleted is None:
+            raise HTTPException(status_code=404, detail="Session not found.")
+
+        session_dir = self.kernel.store.workspace_dir(workspace_id) / "sessions" / session_id
+        shutil.rmtree(session_dir, ignore_errors=True)
+
+        replacement_session: Optional[Dict[str, Any]] = None
+        created_replacement_session = False
+        if current_active_session_id == session_id:
+            if remaining_sessions:
+                replacement_session = self._activate_session(user_id, str(remaining_sessions[0]["session_id"]))
+            else:
+                workspace_label = self._workspace_label_for(workspace_id)
+                replacement_session = self.create_session(
+                    user_id=user_id,
+                    title="New Session",
+                    description="Fresh session.",
+                    workspace_id=workspace_id,
+                    workspace_label=workspace_label,
+                    active_room="lobby",
+                    active_persona="Receptionist",
+                )
+                created_replacement_session = True
+                replacement_session = self._activate_session(user_id, str(replacement_session["session_id"]))
+
+        active_session = replacement_session or self.sessions.fetch_session(
+            current_active_session_id
+        )
+        if active_session is None:
+            active_session = self.sessions.fetch_session_for_user(user_id, workspace_id=workspace_id)
+
+        if active_session is None:
+            active_session = self.create_session(
+                user_id=user_id,
+                title="New Session",
+                description="Fresh session.",
+                workspace_id=workspace_id,
+                workspace_label=self._workspace_label_for(workspace_id),
+                active_room="lobby",
+                active_persona="Receptionist",
+            )
+            active_session = self._activate_session(user_id, str(active_session["session_id"]))
+
+        final_remaining_count = len(self.sessions.list_sessions_for_user(user_id, workspace_id=workspace_id))
+        try:
+            workspace_state = self.kernel.get_state(str(active_session.get("active_workspace_id") or workspace_id))
+        except HTTPException:
+            workspace_state = {}
+
+        return {
+            "deleted_session": deleted,
+            "session": active_session,
+            "session_id": str(active_session.get("session_id") or ""),
+            "workspace_id": str(active_session.get("active_workspace_id") or workspace_id),
+            "workspace_state": workspace_state,
+            "replacement_session": replacement_session,
+            "remaining_count": final_remaining_count,
+            "created_replacement_session": created_replacement_session,
+        }
+
+    def rename_session(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        title: str,
+        description: str = "",
+    ) -> Dict[str, Any]:
+        session = self.get_session(session_id)
+        if str(session.get("user_id") or "").strip() != str(user_id or "").strip():
+            raise HTTPException(status_code=404, detail="Session not found.")
+
+        normalized_title = self._normalize_text(title) or "New Session"
+        normalized_description = self._normalize_text(description) or normalized_title
+        updated = self.sessions.update_session(
+            session_id,
+            {
+                "title": normalized_title,
+                "description": normalized_description,
+                "updated_at": self.utc_now(),
+                "last_active_at": self.utc_now(),
+            },
+        )
+        self.store.update_user(
+            user_id,
+            {
+                "last_active_workspace_id": str(updated.get("active_workspace_id") or ""),
+                "last_active_session_id": str(updated.get("session_id") or ""),
+                "updated_at": self.utc_now(),
+            },
+        )
+        self._restore_session_room(updated)
+        return {
+            "session": updated,
+            "session_id": str(updated.get("session_id") or ""),
+            "workspace_id": str(updated.get("active_workspace_id") or ""),
+        }

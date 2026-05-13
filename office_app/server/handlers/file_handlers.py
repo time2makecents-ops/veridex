@@ -11,6 +11,26 @@ from .dependencies import HandlerDeps
 
 
 def build_file_handlers(deps: HandlerDeps) -> Dict[str, Any]:
+    def _is_persona_behavior_instruction(instruction: str) -> bool:
+        lowered = str(instruction or "").lower()
+        return any(
+            marker in lowered
+            for marker in (
+                "how to win friends and influence people",
+                "dale carnegie",
+                "48 laws of power",
+                "persona",
+                "style",
+                "tone",
+                "voice",
+                "advice",
+                "in mind",
+                "from now on",
+                "filter your advice",
+                "answer my sales questions",
+            )
+        )
+
     def handle_file_upload(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = resolve_file_workspace(args=args, resolve_workspace_id=deps.resolve_workspace_id)
         original_name = str(args.get("name") or args.get("filename") or args.get("file_name") or "").strip()
@@ -135,36 +155,50 @@ def build_file_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         source_room = str(state.get("active_room") or "lobby")
         source_persona = str(state.get("active_persona") or "Receptionist")
         session_id = str(args.get("session_id") or "").strip() or None
+        memory_kind = "persona_behavior" if _is_persona_behavior_instruction(instruction) else "room_behavior"
+        target_persona = source_persona if memory_kind == "persona_behavior" else None
 
         record = deps.archive_service.create_artifact(
             workspace_id=workspace_id,
-            type="room_behavior_memory",
-            title=f"{room_title} behavior memory",
+            type="persona_behavior_memory" if memory_kind == "persona_behavior" else "room_behavior_memory",
+            title=f"{room_title} persona memory" if memory_kind == "persona_behavior" else f"{room_title} behavior memory",
             content=instruction,
             format="text/plain",
             status="active",
             created_by="user",
             metadata={
-                "memory_kind": "room_behavior",
+                "memory_kind": memory_kind,
                 "target_room": room_id,
                 "target_room_title": room_title,
+                "target_persona": target_persona,
                 "source_room": source_room,
                 "source_persona": source_persona,
                 "session_id": session_id,
             },
             source_refs=[],
         )
-        ref_result = deps.receptionist_context_service.remember_room_behavior_ref(
-            workspace_id=workspace_id,
-            room_id=room_id,
-            artifact_id=str(record["artifact_id"]),
-            artifact_workspace_id=workspace_id,
-            preview=instruction,
-        )
+        if memory_kind == "persona_behavior":
+            ref_result = deps.receptionist_context_service.remember_persona_behavior_ref(
+                workspace_id=workspace_id,
+                room_id=room_id,
+                persona_name=source_persona,
+                artifact_id=str(record["artifact_id"]),
+                artifact_workspace_id=workspace_id,
+                preview=instruction,
+            )
+        else:
+            ref_result = deps.receptionist_context_service.remember_room_behavior_ref(
+                workspace_id=workspace_id,
+                room_id=room_id,
+                artifact_id=str(record["artifact_id"]),
+                artifact_workspace_id=workspace_id,
+                preview=instruction,
+            )
         structured = {
             "workspace_id": workspace_id,
             "room_id": room_id,
             "room_title": room_title,
+            "memory_kind": memory_kind,
             "artifact": record,
             "room_behavior_memory_refs": ref_result["room_behavior_memory_refs"],
         }
@@ -173,7 +207,9 @@ def build_file_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "content": [
                 {
                     "type": "text",
-                    "text": f"Saved behavior memory for {room_title} in Records Archive as {record['artifact_id']}.",
+                    "text": (
+                        f"Saved {memory_kind.replace('_', ' ')} for {room_title} in Records Archive as {record['artifact_id']}."
+                    ),
                 }
             ],
         }
@@ -189,8 +225,13 @@ def build_file_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             workspace_id=workspace_id,
             room_id=room_id,
         )
+        persona_refs = deps.receptionist_context_service.persona_behavior_memory_refs(
+            workspace_id=workspace_id,
+            room_id=room_id,
+            persona_name=str(state.get("active_persona") or "Receptionist"),
+        )
         items = []
-        for ref in refs:
+        for ref in refs + persona_refs:
             artifact_id = str(ref.get("artifact_id") or "").strip()
             if not artifact_id:
                 continue
@@ -208,6 +249,11 @@ def build_file_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                     "description": str(artifact.get("content") or "").strip(),
                     "metadata": artifact.get("metadata"),
                     "linked_at": ref.get("linked_at"),
+                    "memory_kind": (
+                        ref.get("memory_kind")
+                        or (artifact.get("metadata") or {}).get("memory_kind")
+                        or ("persona_behavior" if _is_persona_behavior_instruction(str(artifact.get("content") or "")) else "room_behavior")
+                    ),
                 }
             )
         structured = {
@@ -217,7 +263,17 @@ def build_file_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "count": len(items),
             "items": items,
         }
-        lines = [f"{item['index']}. {item['description']}" for item in items]
+        room_items = [item for item in items if str(item.get("memory_kind") or "").lower() != "persona_behavior"]
+        persona_items = [item for item in items if str(item.get("memory_kind") or "").lower() == "persona_behavior"]
+        lines = []
+        if room_items:
+            lines.append("Room behavior memories:")
+            lines.extend(f"{item['index']}. {item['description']}" for item in room_items)
+        if persona_items:
+            if lines:
+                lines.append("")
+            lines.append("Persona behavior memories:")
+            lines.extend(f"{item['index']}. {item['description']}" for item in persona_items)
         text = "\n".join(lines) if lines else f"No room behavior memory objects are saved for {room_title}."
         structured["response_text"] = text
         return {

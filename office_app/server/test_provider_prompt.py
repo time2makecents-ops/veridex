@@ -65,6 +65,23 @@ class ProviderPromptTests(unittest.TestCase):
         self.assertIn("what are the main ways bars increase repeat customers?", result.text)
         self.assertIn("Service quality is strongest.", result.text)
 
+    def test_persona_style_guidance_is_labeled_separately_from_room_memory(self) -> None:
+        provider = PromptProbeProvider()
+        result = provider.generate_response(
+            system_prompt="system",
+            user_prompt="hello there",
+            context={
+                "workspace_id": "ws_1",
+                "active_room": "sales_department",
+                "active_persona": "Sales Director",
+                "room_behavior_memory_text": "- Sales questions pertain to Oregon businesses.",
+                "persona_behavior_memory_text": "- Use a friendly, empathetic, relationship-first style.",
+            },
+        )
+        self.assertIn("Active room behavior memory:", result.text)
+        self.assertIn("Active persona style guidance:", result.text)
+        self.assertIn("friendly, empathetic, relationship-first style", result.text)
+
 
 if __name__ == "__main__":
     unittest.main()

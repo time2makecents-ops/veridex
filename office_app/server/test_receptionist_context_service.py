@@ -116,6 +116,14 @@ class ReceptionistContextServiceTests(unittest.TestCase):
                 artifact_workspace_id="ws_test",
                 preview="Answer my sales questions from now on with the book How to Win Friends and Influence People in mind.",
             )
+            service.remember_persona_behavior_ref(
+                workspace_id="ws_test",
+                room_id="sales_department",
+                persona_name="Sales Director",
+                artifact_id="art_persona",
+                artifact_workspace_id="ws_test",
+                preview="Use a friendly, empathetic sales style.",
+            )
             removed_current = service.forget_room_behavior_refs(
                 workspace_id="ws_test",
                 room_id="sales_department",
@@ -123,6 +131,13 @@ class ReceptionistContextServiceTests(unittest.TestCase):
             )
             self.assertEqual(removed_current["removed_count"], 1)
             self.assertEqual(service.room_behavior_memory_refs(workspace_id="ws_test", room_id="sales_department"), [])
+            persona_refs = service.persona_behavior_memory_refs(
+                workspace_id="ws_test",
+                room_id="sales_department",
+                persona_name="Sales Director",
+            )
+            self.assertEqual(len(persona_refs), 1)
+            self.assertEqual(persona_refs[0]["artifact_id"], "art_persona")
 
             service.remember_room_behavior_ref(
                 workspace_id="ws_test",

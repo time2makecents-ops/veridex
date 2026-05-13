@@ -173,6 +173,9 @@ class ReceptionistContextStore:
 
 class ReceptionistContextService:
     ROOM_BEHAVIOR_MEMORY_REFS_KEY = "room_behavior_memory_refs"
+    PERSONA_BEHAVIOR_MEMORY_REFS_KEY = "persona_behavior_memory_refs"
+    ROOM_BEHAVIOR_MEMORY_KIND = "room_behavior"
+    PERSONA_BEHAVIOR_MEMORY_KIND = "persona_behavior"
     MAX_ROOM_BEHAVIOR_NOTES = 20
     MODEL_CONTEXT_TURN_LIMIT = 12
     MODEL_CONTEXT_TURN_CHARS = 700
@@ -291,6 +294,8 @@ class ReceptionistContextService:
         artifact_id: str,
         artifact_workspace_id: Optional[str] = None,
         preview: str = "",
+        memory_kind: str = ROOM_BEHAVIOR_MEMORY_KIND,
+        target_persona: Optional[str] = None,
     ) -> Dict[str, Any]:
         room = str(room_id or "").strip()
         artifact = str(artifact_id or "").strip()
@@ -311,7 +316,11 @@ class ReceptionistContextService:
             "artifact_id": artifact,
             "workspace_id": str(artifact_workspace_id or workspace_id).strip() or workspace_id,
             "linked_at": self.utc_now(),
+            "memory_kind": memory_kind,
         }
+        persona = str(target_persona or "").strip()
+        if persona:
+            entry["target_persona"] = persona
         preview_text = self._truncate_text(preview, 240)
         if preview_text:
             entry["preview"] = preview_text
@@ -336,7 +345,40 @@ class ReceptionistContextService:
             "room_behavior_memory_refs": refs,
         }
 
-    def room_behavior_memory_refs(self, *, workspace_id: str, room_id: str) -> List[Dict[str, Any]]:
+    def remember_persona_behavior_ref(
+        self,
+        *,
+        workspace_id: str,
+        room_id: str,
+        persona_name: str,
+        artifact_id: str,
+        artifact_workspace_id: Optional[str] = None,
+        preview: str = "",
+    ) -> Dict[str, Any]:
+        return self.remember_room_behavior_ref(
+            workspace_id=workspace_id,
+            room_id=room_id,
+            artifact_id=artifact_id,
+            artifact_workspace_id=artifact_workspace_id,
+            preview=preview,
+            memory_kind=self.PERSONA_BEHAVIOR_MEMORY_KIND,
+            target_persona=persona_name,
+        )
+
+    @staticmethod
+    def _ref_memory_kind(ref: Dict[str, Any], artifact: Optional[Dict[str, Any]] = None) -> str:
+        kind = str(ref.get("memory_kind") or "").strip().lower()
+        if kind:
+            return kind
+        if isinstance(artifact, dict):
+            metadata = artifact.get("metadata")
+            if isinstance(metadata, dict):
+                meta_kind = str(metadata.get("memory_kind") or "").strip().lower()
+                if meta_kind:
+                    return meta_kind
+        return ReceptionistContextService.ROOM_BEHAVIOR_MEMORY_KIND
+
+    def _behavior_memory_refs(self, *, workspace_id: str, room_id: str) -> List[Dict[str, Any]]:
         current = self._ensure_context(workspace_id)
         profile = current.get("known_user_profile")
         profile = profile if isinstance(profile, dict) else {}
@@ -344,6 +386,27 @@ class ReceptionistContextService:
         refs_by_room = refs_by_room if isinstance(refs_by_room, dict) else {}
         refs = refs_by_room.get(str(room_id or "").strip())
         return [dict(ref) for ref in refs if isinstance(ref, dict)] if isinstance(refs, list) else []
+
+    def room_behavior_memory_refs(self, *, workspace_id: str, room_id: str) -> List[Dict[str, Any]]:
+        refs = self._behavior_memory_refs(workspace_id=workspace_id, room_id=room_id)
+        return [
+            ref
+            for ref in refs
+            if self._ref_memory_kind(ref) == self.ROOM_BEHAVIOR_MEMORY_KIND
+        ]
+
+    def persona_behavior_memory_refs(self, *, workspace_id: str, room_id: str, persona_name: str) -> List[Dict[str, Any]]:
+        refs = self._behavior_memory_refs(workspace_id=workspace_id, room_id=room_id)
+        persona = str(persona_name or "").strip().casefold()
+        rows = []
+        for ref in refs:
+            if self._ref_memory_kind(ref) != self.PERSONA_BEHAVIOR_MEMORY_KIND:
+                continue
+            target_persona = str(ref.get("target_persona") or "").strip().casefold()
+            if target_persona and persona and target_persona != persona:
+                continue
+            rows.append(ref)
+        return rows
 
     def forget_room_behavior_refs(
         self,
@@ -371,13 +434,19 @@ class ReceptionistContextService:
             refs = refs_by_room.get(target_room)
             refs = list(refs) if isinstance(refs, list) else []
             kept: List[Dict[str, Any]] = []
+            room_ref_index = 0
             for ref_index, ref in enumerate(refs, start=1):
                 if not isinstance(ref, dict):
                     continue
+                ref_kind = self._ref_memory_kind(ref)
+                if ref_kind != self.ROOM_BEHAVIOR_MEMORY_KIND:
+                    kept.append(dict(ref))
+                    continue
+                room_ref_index += 1
                 ref_artifact = str(ref.get("artifact_id") or "").strip()
                 preview = str(ref.get("preview") or "")
                 should_remove = bool(
-                    (index is not None and target_room == room and ref_index == index)
+                    (index is not None and target_room == room and room_ref_index == index)
                     or (artifact and ref_artifact == artifact)
                     or (needle and self._memory_text_matches(needle, preview))
                     or (not artifact and index is None and not needle)
@@ -581,6 +650,11 @@ class ReceptionistContextService:
             "room_behavior_memory_refs": self.room_behavior_memory_refs(
                 workspace_id=workspace_id,
                 room_id=active_room,
+            ),
+            "persona_behavior_memory_refs": self.persona_behavior_memory_refs(
+                workspace_id=workspace_id,
+                room_id=active_room,
+                persona_name=str(state.get("active_persona") or "Receptionist"),
             ),
             "session_id": session_id,
         }

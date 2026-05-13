@@ -1,6 +1,8 @@
 param(
   [ValidateSet("start", "stop", "restart", "status")]
   [string]$Action = "start"
+  ,
+  [switch]$GroqFallbackTest
 )
 
 $backendPort = 8078
@@ -126,6 +128,9 @@ function Show-StartupHelp {
 }
 
 function Start-Backend {
+  if ($GroqFallbackTest) {
+    $env:GEMINI_API_KEY = "invalid-gemini-key-for-groq-fallback-test"
+  }
   Start-Process -FilePath "cmd.exe" -ArgumentList "/k", "`"$backendCommand`"" -WorkingDirectory $root
 }
 

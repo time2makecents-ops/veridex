@@ -127,9 +127,89 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             except Exception:
                 continue
             metadata = record.get("metadata")
-            if isinstance(metadata, dict) and str(metadata.get("memory_kind") or "") != "room_behavior":
-                continue
             content = re.sub(r"\s+", " ", str(record.get("content") or "").strip())
+            if not content:
+                continue
+            lowered = content.lower()
+            if (
+                (isinstance(metadata, dict) and str(metadata.get("memory_kind") or "").strip().lower() in {"persona_behavior", "persona_style"})
+                or "how to win friends and influence people" in lowered
+                or "dale carnegie" in lowered
+                or "48 laws of power" in lowered
+                or "in mind" in lowered
+                or "from now on" in lowered
+                or "filter your advice" in lowered
+                or "answer my sales questions" in lowered
+            ):
+                continue
+            if content:
+                lines.append(f"- {content}")
+        return "\n".join(lines)
+
+    def _persona_style_guidance_text(content: str) -> str:
+        lowered = re.sub(r"\s+", " ", str(content or "").strip().lower())
+        if not lowered:
+            return ""
+        if "how to win friends and influence people" in lowered or "dale carnegie" in lowered:
+            return (
+                "Use a friendly, empathetic, relationship-first style. "
+                "Prioritize trust, encouragement, and practical interpersonal advice."
+            )
+        if "48 laws of power" in lowered:
+            return (
+                "Use a strategic, power-aware style. "
+                "Prioritize positioning, perception, and careful leverage."
+            )
+        cleaned = re.sub(r"\bthe book\b.*?(?:in mind|as a guide|when giving advice)\b", "", str(content), flags=re.IGNORECASE)
+        cleaned = re.sub(r"\b(?:how to win friends and influence people|dale carnegie|48 laws of power)\b", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" .,:;?!")
+        if not cleaned:
+            return ""
+        if len(cleaned) > 220:
+            cleaned = cleaned[:217].rstrip() + "..."
+        return cleaned
+
+    def _persona_behavior_memory_text(*, refs: Any) -> str:
+        if deps.archive_service is None or not isinstance(refs, list):
+            return ""
+        lines: List[str] = []
+        seen: set[Tuple[str, str]] = set()
+        for ref in refs[-20:]:
+            if not isinstance(ref, dict):
+                continue
+            artifact_id = str(ref.get("artifact_id") or "").strip()
+            artifact_workspace_id = str(ref.get("workspace_id") or workspace_id).strip() or workspace_id
+            key = (artifact_workspace_id, artifact_id)
+            if not artifact_id or key in seen:
+                continue
+            seen.add(key)
+            try:
+                record = deps.archive_service.get_artifact(artifact_workspace_id, artifact_id)
+            except Exception:
+                continue
+            metadata = record.get("metadata")
+            content = _persona_style_guidance_text(str(record.get("content") or "").strip())
+            lowered = str(record.get("content") or "").strip().lower()
+            is_persona_kind = isinstance(metadata, dict) and str(metadata.get("memory_kind") or "").strip().lower() in {"persona_behavior", "persona_style"}
+            is_persona_style = any(
+                marker in lowered
+                for marker in (
+                    "how to win friends and influence people",
+                    "dale carnegie",
+                    "48 laws of power",
+                    "persona",
+                    "style",
+                    "tone",
+                    "voice",
+                    "advice",
+                    "in mind",
+                    "from now on",
+                    "filter your advice",
+                    "answer my sales questions",
+                )
+            )
+            if not is_persona_kind and not is_persona_style:
+                continue
             if content:
                 lines.append(f"- {content}")
         return "\n".join(lines)
@@ -561,6 +641,7 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                 "Never expose raw JSON, internal tool names, hidden schemas, or backend metadata in your response. "
                 "Do not invent unsupported factual details about a specific company, entity, or person. If verified grounding is missing, say so directly instead of guessing. "
                 "Apply active-room behavior memory as durable room-specific instructions when present. "
+                "Apply persona behavior memory as style guidance when present, but do not echo the source book or memory label unless the user explicitly asks about it. "
                 "Use the provided session conversation history as the current chat thread. Use session facts as transient thread-local context for details stated earlier in this session, such as location or organization, but do not turn them into durable room memory unless the user explicitly asks you to remember them. When the user asks a follow-up, comparison, pronoun-based question, 'what about ...', or 'how about ...', resolve it against the immediately relevant prior turns instead of treating it as a blank new chat. For broad help or capability questions like 'what can you help me with here?', answer from the active room and persona instead of continuing the previous topic. Do not ask for details already present in recent context. If the user asks a reflective follow-up like 'how did you come to that conclusion?' or 'what makes you say that?', explain the immediately previous answer instead of asking the user for more context. "
                 "Do not claim you are searching, processing, working in the background, or that you will send results later. You can only answer with information available in this response. If a tool or missing detail is needed, say so directly. "
                 "Respond clearly, concisely, and stay within Veridex governance."
@@ -590,10 +671,14 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "session_facts": receptionist_context.get("session_facts", []),
             "session_facts_text": receptionist_context.get("session_facts_text", ""),
             "room_behavior_memory_refs": receptionist_context.get("room_behavior_memory_refs", []),
+            "persona_behavior_memory_refs": receptionist_context.get("persona_behavior_memory_refs", []),
         }
         context["room_behavior_memory_text"] = _room_behavior_memory_text(
             workspace_id=workspace_id,
             refs=context.get("room_behavior_memory_refs"),
+        )
+        context["persona_behavior_memory_text"] = _persona_behavior_memory_text(
+            refs=list(context.get("persona_behavior_memory_refs") or []) + list(context.get("room_behavior_memory_refs") or []),
         )
 
         settings = args.get("settings")

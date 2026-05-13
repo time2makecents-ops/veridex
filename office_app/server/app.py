@@ -338,6 +338,149 @@ def handle_natural_language_request(
     user_service.restore_session_room(session_id)
     user_profile = _session_user_profile(session_id)
     current_state = kernel.get_state(workspace_id)
+    pending_session_rename = _pending_session_rename(current_state, session_id)
+    if pending_session_rename and request_text:
+        record_user_turn(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            request_text=request_text,
+            kernel=kernel,
+            store=store,
+            receptionist_context_service=receptionist_context_service,
+            user_profile=user_profile,
+        )
+        if _is_cancel_text(request_text) or _is_confirmation_no(request_text):
+            current_state = _clear_pending_session_rename(current_state, session_id)
+            store.save_state(workspace_id, current_state)
+            response_text = "Okay. I did not rename the session."
+            response = {
+                "structuredContent": {
+                    "workspace_id": workspace_id,
+                    "session_id": session_id,
+                    "response_text": response_text,
+                    "routing": {
+                        "route_kind": "clarify",
+                        "capability": "session.rename.name_required",
+                        "tool": "office.session_rename",
+                        "reason": "Cancelled pending session rename.",
+                    },
+                },
+                "content": [{"type": "text", "text": response_text}],
+            }
+            record_assistant_turn(
+                workspace_id=workspace_id,
+                session_id=session_id,
+                response_text=response_text,
+                kernel=kernel,
+                store=store,
+                receptionist_context_service=receptionist_context_service,
+                user_profile=user_profile,
+            )
+            return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
+        current_state = _clear_pending_session_rename(current_state, session_id)
+        store.save_state(workspace_id, current_state)
+        title_text = str(request_text or "").strip(" .,:;") or "New Session"
+        result = router.dispatch_capability(
+            "session.rename",
+            {
+                "workspace_id": workspace_id,
+                "session_id": session_id,
+                "title": title_text,
+                "description": title_text,
+            },
+            preferred_tool="office.session_rename",
+        )
+        if isinstance(result, dict):
+            structured = result.get("structuredContent")
+            if isinstance(structured, dict):
+                structured["routing"] = {
+                    "route_kind": "tool",
+                    "capability": "session.rename",
+                    "tool": "office.session_rename",
+                    "reason": "Renamed the pending session from the response title.",
+                }
+        enriched = attach_request_context(result, workspace_id=workspace_id, session_id=session_id)
+        record_assistant_turn(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            response_text=request_text_from_response(enriched),
+            kernel=kernel,
+            store=store,
+            receptionist_context_service=receptionist_context_service,
+            user_profile=user_profile,
+        )
+        return enriched
+    pending_session_list = _pending_session_list(current_state, session_id)
+    if pending_session_list and request_text:
+        record_user_turn(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            request_text=request_text,
+            kernel=kernel,
+            store=store,
+            receptionist_context_service=receptionist_context_service,
+            user_profile=user_profile,
+        )
+        if _is_confirmation_yes(request_text):
+            current_state = _clear_pending_session_list(current_state, session_id)
+            current_state.pop("pending_room_navigation", None)
+            store.save_state(workspace_id, current_state)
+            result = router.dispatch_capability(
+                "session.list",
+                {
+                    "workspace_id": workspace_id,
+                    "session_id": session_id,
+                },
+                preferred_tool="office.sessions_list",
+            )
+            if isinstance(result, dict):
+                structured = result.get("structuredContent")
+                if isinstance(structured, dict):
+                    structured["routing"] = {
+                        "route_kind": "tool",
+                        "capability": "session.list",
+                        "tool": "office.sessions_list",
+                        "reason": "Confirmed pending session list request.",
+                    }
+            enriched = attach_request_context(result, workspace_id=workspace_id, session_id=session_id)
+            record_assistant_turn(
+                workspace_id=workspace_id,
+                session_id=session_id,
+                response_text=request_text_from_response(enriched),
+                kernel=kernel,
+                store=store,
+                receptionist_context_service=receptionist_context_service,
+                user_profile=user_profile,
+            )
+            return enriched
+        if _is_confirmation_no(request_text) or _is_cancel_text(request_text):
+            current_state = _clear_pending_session_list(current_state, session_id)
+            store.save_state(workspace_id, current_state)
+            response_text = "Okay. I won't list the sessions."
+            response = {
+                "structuredContent": {
+                    "workspace_id": workspace_id,
+                    "session_id": session_id,
+                    "response_text": response_text,
+                    "routing": {
+                        "route_kind": "clarify",
+                        "capability": "session.list.confirmation",
+                        "tool": "office.capability_info",
+                        "reason": "Cancelled pending session list request.",
+                    },
+                },
+                "content": [{"type": "text", "text": response_text}],
+            }
+            record_assistant_turn(
+                workspace_id=workspace_id,
+                session_id=session_id,
+                response_text=response_text,
+                kernel=kernel,
+                store=store,
+                receptionist_context_service=receptionist_context_service,
+                user_profile=user_profile,
+            )
+            return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
     pending_navigation = pending_room_navigation(current_state)
     if pending_navigation and request_text:
         if _is_confirmation_yes(request_text):
@@ -696,9 +839,18 @@ def handle_natural_language_request(
         return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
 
     if routed["route_kind"] == "clarify":
+        if str(routed.get("capability") or "") == "session.rename.name_required":
+            current_state = kernel.get_state(workspace_id)
+            current_state = _set_pending_session_rename(current_state, session_id, request_text)
+            store.save_state(workspace_id, current_state)
         if str(routed.get("capability") or "") == "session.create.name_required":
             current_state = kernel.get_state(workspace_id)
             current_state = _set_pending_session_create(current_state, session_id, request_text)
+            store.save_state(workspace_id, current_state)
+        if str(routed.get("capability") or "") == "session.list.confirmation":
+            current_state = kernel.get_state(workspace_id)
+            current_state = _set_pending_session_list(current_state, session_id, request_text)
+            current_state.pop("pending_room_navigation", None)
             store.save_state(workspace_id, current_state)
         response_text = str(routed.get("arguments", {}).get("response_text") or "Did you mean something else?")
         if str(routed.get("capability") or "") == "clarification.entity_grounding":
@@ -874,6 +1026,15 @@ def select_session(payload: dict[str, Any]) -> Dict[str, Any]:
     return handle_session_activate(dict(payload or {}))
 
 
+@app.delete("/sessions/{session_id}")
+def delete_session(
+    session_id: str,
+    x_session_id: Optional[str] = Header(default=None, alias="X-Session-Id"),
+) -> Dict[str, Any]:
+    current_session_id = str(x_session_id or "").strip() or session_id
+    return handle_session_delete({"session_id": current_session_id, "target_session_id": session_id})
+
+
 @app.post("/workspaces/select")
 def select_workspace(payload: dict[str, Any]) -> Dict[str, Any]:
     return handle_workspace_activate(dict(payload or {}))
@@ -1034,6 +1195,68 @@ def _clear_pending_session_create(state: Dict[str, Any], session_id: str) -> Dic
         state["pending_session_create_by_session"] = next_map
     else:
         state.pop("pending_session_create_by_session", None)
+    return state
+
+
+def _pending_session_rename(state: Dict[str, Any], session_id: str) -> Optional[Dict[str, Any]]:
+    pending_map = state.get("pending_session_rename_by_session")
+    if not isinstance(pending_map, dict):
+        return None
+    pending = pending_map.get(session_id)
+    return pending if isinstance(pending, dict) else None
+
+
+def _set_pending_session_rename(state: Dict[str, Any], session_id: str, request_text: str) -> Dict[str, Any]:
+    pending_map = dict(state.get("pending_session_rename_by_session") or {})
+    pending_map[session_id] = {
+        "request_text": request_text,
+        "ts": utc_now(),
+    }
+    state["pending_session_rename_by_session"] = pending_map
+    return state
+
+
+def _clear_pending_session_rename(state: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+    pending_map = state.get("pending_session_rename_by_session")
+    if not isinstance(pending_map, dict):
+        return state
+    next_map = dict(pending_map)
+    next_map.pop(session_id, None)
+    if next_map:
+        state["pending_session_rename_by_session"] = next_map
+    else:
+        state.pop("pending_session_rename_by_session", None)
+    return state
+
+
+def _pending_session_list(state: Dict[str, Any], session_id: str) -> Optional[Dict[str, Any]]:
+    pending_map = state.get("pending_session_list_by_session")
+    if not isinstance(pending_map, dict):
+        return None
+    pending = pending_map.get(session_id)
+    return pending if isinstance(pending, dict) else None
+
+
+def _set_pending_session_list(state: Dict[str, Any], session_id: str, request_text: str) -> Dict[str, Any]:
+    pending_map = dict(state.get("pending_session_list_by_session") or {})
+    pending_map[session_id] = {
+        "request_text": request_text,
+        "ts": utc_now(),
+    }
+    state["pending_session_list_by_session"] = pending_map
+    return state
+
+
+def _clear_pending_session_list(state: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+    pending_map = state.get("pending_session_list_by_session")
+    if not isinstance(pending_map, dict):
+        return state
+    next_map = dict(pending_map)
+    next_map.pop(session_id, None)
+    if next_map:
+        state["pending_session_list_by_session"] = next_map
+    else:
+        state.pop("pending_session_list_by_session", None)
     return state
 
 
@@ -1227,7 +1450,10 @@ def refresh_handler_bindings() -> None:
     global handle_sessions_list
     global handle_sessions_search
     global handle_session_create
+    global handle_session_info
     global handle_session_activate
+    global handle_session_rename
+    global handle_session_delete
     global handle_office_room_set
     global handle_office_nancy_route
     global handle_mailroom_dispatch
@@ -1301,7 +1527,10 @@ def refresh_handler_bindings() -> None:
     handle_sessions_list = session_handlers["office.sessions_list"]
     handle_sessions_search = session_handlers["office.sessions_search"]
     handle_session_create = session_handlers["office.session_create"]
+    handle_session_info = session_handlers["office.session_info"]
     handle_session_activate = session_handlers["office.session_activate"]
+    handle_session_rename = session_handlers["office.session_rename"]
+    handle_session_delete = session_handlers["office.session_delete"]
     handle_office_room_set = workspace_handlers["office.room_set"]
     handle_office_nancy_route = workspace_handlers["office.nancy_route"]
 
@@ -1354,7 +1583,10 @@ def refresh_handler_bindings() -> None:
             "office.sessions_list": handle_sessions_list,
             "office.sessions_search": handle_sessions_search,
             "office.session_create": handle_session_create,
+            "office.session_info": handle_session_info,
             "office.session_activate": handle_session_activate,
+            "office.session_rename": handle_session_rename,
+            "office.session_delete": handle_session_delete,
             "office.room_set": handle_office_room_set,
             "office.nancy_route": handle_office_nancy_route,
             "office.ai_generate": handle_ai_generate,
@@ -1409,7 +1641,10 @@ register_tools(
         "office.sessions_list": handle_sessions_list,
         "office.sessions_search": handle_sessions_search,
         "office.session_create": handle_session_create,
+        "office.session_info": handle_session_info,
         "office.session_activate": handle_session_activate,
+        "office.session_rename": handle_session_rename,
+        "office.session_delete": handle_session_delete,
         "office.room_set": handle_office_room_set,
         "office.nancy_route": handle_office_nancy_route,
         "office.ai_generate": handle_ai_generate,

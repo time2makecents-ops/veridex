@@ -49,6 +49,21 @@ class FakeReceptionistContextService:
             ],
         }
 
+    def remember_persona_behavior_ref(self, **kwargs: Any) -> Dict[str, Any]:
+        self.linked = dict(kwargs)
+        return {
+            "workspace_id": kwargs["workspace_id"],
+            "room_id": kwargs["room_id"],
+            "room_behavior_memory_refs": [
+                {
+                    "artifact_id": kwargs["artifact_id"],
+                    "workspace_id": kwargs["artifact_workspace_id"],
+                    "preview": kwargs["preview"],
+                    "memory_kind": "persona_behavior",
+                }
+            ],
+        }
+
     def forget_room_behavior_refs(self, **kwargs: Any) -> Dict[str, Any]:
         self.linked = dict(kwargs)
         return {
@@ -110,6 +125,48 @@ class RoomMemoryHandlerTests(unittest.TestCase):
         structured = result["structuredContent"]
         self.assertEqual(structured["artifact"]["artifact_id"], "art_oregon")
         self.assertIn("Records Archive", result["content"][0]["text"])
+
+    def test_persona_style_memory_is_stored_separately(self) -> None:
+        archive = FakeArchiveService()
+        context = FakeReceptionistContextService()
+        deps = HandlerDeps(
+            kernel=FakeKernel(),
+            store=None,
+            pipeline=None,
+            archive_service=archive,
+            memo_service=None,
+            nancy_service=None,
+            receptionist_context_service=context,
+            workspace_file_service=None,
+            private_file_service=None,
+            search_service=None,
+            ocr_service=None,
+            model_router=None,
+            user_service=None,
+            utc_now=lambda: "2026-05-07T12:00:00Z",
+            stable_state_sha=lambda state: "sha",
+            append_incident=lambda **kwargs: "inc",
+            error_missing_required_field=lambda field: ValueError(field),
+            resolve_workspace_id=lambda tool, args: str(args.get("workspace_id") or ""),
+        )
+        handlers = build_file_handlers(deps)
+
+        result = handlers["office.room_memory_remember"](
+            {
+                "workspace_id": "ws_1",
+                "room_id": "sales_department",
+                "instruction": "Answer sales questions from now on with How to Win Friends and Influence People in mind.",
+                "session_id": "sess_1",
+            }
+        )
+
+        self.assertIsNotNone(archive.created)
+        assert archive.created is not None
+        self.assertEqual(archive.created["type"], "persona_behavior_memory")
+        self.assertEqual(archive.created["metadata"]["memory_kind"], "persona_behavior")
+        self.assertEqual(archive.created["metadata"]["target_persona"], "Sales Director")
+        self.assertIn("persona memory", archive.created["title"].lower())
+        self.assertIn("persona behavior", result["content"][0]["text"].lower())
 
     def test_room_memory_forget_unlinks_behavior_reference(self) -> None:
         context = FakeReceptionistContextService()

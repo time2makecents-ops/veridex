@@ -34,6 +34,9 @@ class FakeContextService:
     def room_behavior_memory_refs(self, *, workspace_id: str, room_id: str) -> List[Dict[str, Any]]:
         return [{"artifact_id": "art_123", "workspace_id": "ws_archive", "linked_at": "2026-05-07T12:00:00Z"}]
 
+    def persona_behavior_memory_refs(self, *, workspace_id: str, room_id: str, persona_name: str) -> List[Dict[str, Any]]:
+        return []
+
 
 class RoomMemoryListHandlerTests(unittest.TestCase):
     def test_room_memory_list_includes_description(self) -> None:
@@ -61,7 +64,8 @@ class RoomMemoryListHandlerTests(unittest.TestCase):
         handlers = build_file_handlers(deps)
         result = handlers["office.room_memory_list"]({"workspace_id": "ws_1", "room_id": "sales_department"})
         text = result["content"][0]["text"]
-        self.assertTrue(text.startswith("1. "))
+        self.assertTrue(text.startswith("Room behavior memories:"))
+        self.assertIn("1. ", text)
         self.assertIn("How to Win Friends and Influence People", text)
         self.assertEqual(archive.requested_workspace_id, "ws_archive")
         self.assertEqual(result["structuredContent"]["items"][0]["index"], 1)

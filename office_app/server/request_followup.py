@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from office_app.server.conversation_planner import ConversationPlanner
@@ -13,6 +14,15 @@ from office_app.server.search_response_synthesis import (
 ModelRouteFn = Callable[..., Dict[str, Any]]
 LocationExtractorFn = Callable[[str], Optional[str]]
 GroundedSearchLoaderFn = Callable[[str, Optional[str]], Optional[Dict[str, Any]]]
+
+
+@dataclass(frozen=True)
+class ThreadContext:
+    last_user_text: str = ""
+    last_assistant_text: str = ""
+    meaningful_user_turns: tuple[str, ...] = ()
+    last_entity_subject: str = ""
+    last_session_query: str = ""
 
 
 RECENT_ENTITY_PATTERNS = (
@@ -57,15 +67,48 @@ SESSION_SEARCH_GENERIC_RE = re.compile(
     r"^(?:search|look(?:\s+through)?|check|scan)\s+(?:the\s+)?sessions(?:\s+in\s+.+)?\??$",
     re.IGNORECASE,
 )
+SESSION_WORKSPACE_LIST_RE = re.compile(
+    r"^(?:show|display|list|give(?:\s+me)?|tell(?:\s+me)?|which)\b.*\bsessions?\b"
+    r"(?:\s+in\s+(?:this|the|my|our|current)\s+(?:workspace|room))?"
+    r"(?:\s+here)?\??$",
+    re.IGNORECASE,
+)
+SESSION_WORKSPACE_AMBIGUOUS_RE = re.compile(
+    r"^(?:what|which)\s+sessions?\b.*(?:are\s+there|in\s+(?:this|the|my|our|current)\s+(?:workspace|room)|here)\b.*$",
+    re.IGNORECASE,
+)
+WHAT_SESSIONS_LIST_RE = re.compile(r"^what\s+sessions?\b.*$", re.IGNORECASE)
 SESSION_ITEM_FULL_RE = re.compile(
     r"^(?:can\s+you\s+)?(?:show|display|give|tell)(?:\s+me)?(?:\s+the)?\s+"
     r"(?:rest|full|whole|complete)(?:\s+(?:answer|response|info(?:rmation)?|details?|results?))?"
     r"(?:\s+(?:of|for|from))?\s*(?:number\s+|#)?(\d+)\b.*$",
     re.IGNORECASE,
 )
+SOURCE_QUESTION_RE = re.compile(
+    r"(?:where\s+did\s+you\s+(?:get|pull|gather)\b.*\bfrom|"
+    r"what\s+(?:source|sources)\s+did\s+you\s+use\b|"
+    r"can\s+you\s+confirm\s+that\s+you\s+sent\s+this\s+response\b|"
+    r"where\s+did\s+that\s+come\s+from\b)",
+    re.IGNORECASE,
+)
+QUOTED_REFERENCE_RE = re.compile(r'"([^"]{6,220})"|“([^”]{6,220})”')
 SESSION_ITEM_DETAIL_RE = re.compile(
     r"^(?:can\s+you\s+)?(?:show|display|give|list|tell)(?:\s+me)?(?:\s+the)?(?:\s+rest\s+of)?"
     r"(?:\s+information|\s+info|\s+details|\s+results|\s+response|\s+answer)?(?:\s+from)?\s+(?:number\s+|#)(\d+)\b.*$",
+    re.IGNORECASE,
+)
+
+MEMORY_REFERENCE_RE = re.compile(
+    r"(?:do\s+you|can\s+you|did\s+you|could\s+you)\s+remember\b|"
+    r"\bremember\s+when\b|"
+    r"\bwhat\s+were\s+we\s+talking\s+about\b|"
+    r"\bwhat\s+was\s+i\s+asking\s+about\b|"
+    r"\bwhat\s+did\s+i\s+ask\s+about\b|"
+    r"\bwhat\s+was\s+i\s+asking\b",
+    re.IGNORECASE,
+)
+MEMORY_TOPIC_RE = re.compile(
+    r"\b(?:when\s+i\s+asked|when\s+we\s+talked\s+about|about|for|on)\s+(.+?)(?=[.?!](?:\s|$)|$)",
     re.IGNORECASE,
 )
 
@@ -100,6 +143,85 @@ class RequestFollowupRouter:
             if subject:
                 return subject
         return ""
+
+    @staticmethod
+    def _is_utility_followup_text(text: str) -> bool:
+        lowered = re.sub(r"\s+", " ", str(text or "").strip().lower())
+        if not lowered:
+            return True
+        return bool(
+            SOURCE_QUESTION_RE.search(lowered)
+            or MEMORY_REFERENCE_RE.search(lowered)
+            or SESSION_SEARCH_REQUEST_RE.match(lowered)
+            or SESSION_SEARCH_DETAIL_RE.match(lowered)
+            or SESSION_SEARCH_GENERIC_RE.match(lowered)
+            or SESSION_WORKSPACE_LIST_RE.match(lowered)
+            or lowered in {"yes", "yeah", "yep", "sure", "ok", "okay", "search", "search it", "look it up", "look that up"}
+        )
+
+    @staticmethod
+    def _is_session_workspace_request(text: str) -> bool:
+        lowered = re.sub(r"\s+", " ", str(text or "").strip().lower())
+        if not lowered:
+            return False
+        return bool(
+            SESSION_WORKSPACE_LIST_RE.match(lowered)
+            or SESSION_WORKSPACE_AMBIGUOUS_RE.match(lowered)
+            or WHAT_SESSIONS_LIST_RE.match(lowered)
+            or "session thread" in lowered
+            or "session transcript" in lowered
+            or "show transcript" in lowered
+            or "show trascript" in lowered
+        )
+
+    @classmethod
+    def _build_thread_context(cls, recent_turns: List[Dict[str, Any]]) -> ThreadContext:
+        last_user_text = ""
+        last_assistant_text = ""
+        meaningful_user_turns: List[str] = []
+        for turn in recent_turns[-24:]:
+            role = str(turn.get("role") or "").strip().lower()
+            text = re.sub(r"\s+", " ", str(turn.get("text") or "").strip())
+            if not text:
+                continue
+            if role == "user":
+                last_user_text = text
+                if not cls._is_utility_followup_text(text):
+                    meaningful_user_turns.append(text)
+            elif role == "assistant":
+                last_assistant_text = text
+
+        last_entity_subject = ""
+        for candidate_text in reversed(meaningful_user_turns[-8:]):
+            subject = cls._candidate_entity_subject(candidate_text)
+            if subject:
+                last_entity_subject = subject
+                break
+        if not last_entity_subject:
+            for turn in reversed(recent_turns[-12:]):
+                if str(turn.get("role") or "").strip().lower() != "assistant":
+                    continue
+                text = re.sub(r"\s+", " ", str(turn.get("text") or "").strip())
+                if not text or "matching session(s)" in text.lower():
+                    continue
+                subject = cls._candidate_entity_subject(text)
+                if subject:
+                    last_entity_subject = subject
+                    break
+
+        last_session_query = ""
+        recent_session_search = cls._recent_session_search_context(recent_turns)
+        query = re.sub(r"\s+", " ", str(recent_session_search.get("query") or "").strip(" .,:;?!"))
+        if query:
+            last_session_query = query
+
+        return ThreadContext(
+            last_user_text=last_user_text,
+            last_assistant_text=last_assistant_text,
+            meaningful_user_turns=tuple(meaningful_user_turns),
+            last_entity_subject=last_entity_subject,
+            last_session_query=last_session_query,
+        )
 
     @staticmethod
     def _normalize_session_query(query: str) -> str:
@@ -174,6 +296,135 @@ class RequestFollowupRouter:
             "matches": matches,
         }
 
+    @staticmethod
+    def _source_followup_response(recent_turns: List[Dict[str, Any]], request_text: str) -> Optional[str]:
+        if not SOURCE_QUESTION_RE.search(request_text):
+            return None
+        quoted_reference = ""
+        quoted_matches = QUOTED_REFERENCE_RE.findall(request_text)
+        if quoted_matches:
+            for match in reversed(quoted_matches):
+                quoted_reference = next((part for part in match if part), "")
+                quoted_reference = re.sub(r"\s+", " ", quoted_reference).strip(" .,:;?!")
+                if quoted_reference:
+                    break
+
+        recent_assistant = ""
+        if quoted_reference:
+            normalized_reference = re.sub(r"\s+", " ", quoted_reference).casefold()
+            match_index = None
+            window = recent_turns[-24:]
+            for index, turn in enumerate(window):
+                role = str(turn.get("role") or "").strip().lower()
+                text = re.sub(r"\s+", " ", str(turn.get("text") or "").strip())
+                if not text:
+                    continue
+                if role == "user" and normalized_reference in text.casefold():
+                    match_index = index
+            if match_index is not None:
+                for turn in window[match_index + 1 :]:
+                    role = str(turn.get("role") or "").strip().lower()
+                    text = re.sub(r"\s+", " ", str(turn.get("text") or "").strip())
+                    if role == "assistant" and text:
+                        recent_assistant = text
+                        break
+        if not recent_assistant:
+            for turn in reversed(recent_turns[-12:]):
+                if str(turn.get("role") or "").strip().lower() != "assistant":
+                    continue
+                text = re.sub(r"\s+", " ", str(turn.get("text") or "").strip())
+                if text:
+                    recent_assistant = text
+                    break
+        if not recent_assistant:
+            return "I do not have a verified source for that earlier claim."
+        quoted = re.sub(r"\s+", " ", recent_assistant)
+        if len(quoted) > 220:
+            quoted = quoted[:217].rstrip() + "..."
+        if "general knowledge" in recent_assistant.lower() or "based on general knowledge" in recent_assistant.lower():
+            return (
+                f'The text you quoted came from my prior response: "{quoted}". '
+                "I do not have a verified source for that claim. It was an unsupported generalization, not a grounded fact."
+            )
+        return (
+            f'The text you quoted came from my prior response: "{quoted}". '
+            "I do not have a verified source for that claim. It should have been treated as an unsupported generalization, not a grounded fact."
+        )
+
+    @staticmethod
+    def _memory_reference_response(recent_turns: List[Dict[str, Any]], request_text: str) -> Optional[str]:
+        if not MEMORY_REFERENCE_RE.search(request_text):
+            return None
+
+        normalized_request = re.sub(r"\s+", " ", request_text).strip()
+        topic = ""
+
+        quoted_matches = QUOTED_REFERENCE_RE.findall(normalized_request)
+        if quoted_matches:
+            for match in reversed(quoted_matches):
+                topic = next((part for part in match if part), "")
+                topic = re.sub(r"\s+", " ", topic).strip(" .,:;?!")
+                if topic:
+                    break
+
+        if not topic:
+            topic_match = MEMORY_TOPIC_RE.search(normalized_request)
+            if topic_match:
+                topic = re.sub(r"\s+", " ", topic_match.group(1).strip(" .,:;?!\"'"))
+                topic = re.sub(r"^(?:about|for|on)\s+", "", topic, flags=re.IGNORECASE).strip(" .,:;?!\"'")
+
+        if not topic:
+            lowered = normalized_request.lower()
+            if "remember" in lowered or "asked about" in lowered or "talking about" in lowered:
+                topic = normalized_request
+
+        if not topic:
+            return "Yes. I remember the earlier topic, but I need a little more detail to restate it cleanly."
+
+        cleaned_topic = re.sub(r"\s+", " ", topic).strip(" .,:;?!\"'")
+        if len(cleaned_topic) > 140:
+            cleaned_topic = cleaned_topic[:137].rstrip() + "..."
+
+        matched_user = ""
+        matched_assistant = ""
+        window = recent_turns[-24:]
+        topic_key = re.sub(r"\s+", " ", cleaned_topic).casefold()
+        for index, turn in enumerate(window):
+            if str(turn.get("role") or "").strip().lower() != "user":
+                continue
+            text = re.sub(r"\s+", " ", str(turn.get("text") or "").strip())
+            if not text:
+                continue
+            lowered = text.casefold()
+            if SOURCE_QUESTION_RE.search(text) or "source" in lowered or "gather your information" in lowered:
+                continue
+            if MEMORY_REFERENCE_RE.search(text):
+                continue
+            if topic_key in lowered:
+                matched_user = text
+                for followup in window[index + 1 :]:
+                    role = str(followup.get("role") or "").strip().lower()
+                    followup_text = re.sub(r"\s+", " ", str(followup.get("text") or "").strip())
+                    if role == "assistant" and followup_text:
+                        matched_assistant = followup_text
+                        break
+                break
+
+        if not matched_user:
+            return f"Yes. You asked about {cleaned_topic}."
+
+        matched_user = re.sub(r"\s+", " ", matched_user).strip(" .,:;?!\"'")
+        if len(matched_user) > 140:
+            matched_user = matched_user[:137].rstrip() + "..."
+
+        if matched_assistant:
+            first_sentence = re.split(r"(?<=[.!?])\s+", re.sub(r"\s+", " ", matched_assistant).strip(), maxsplit=1)[0].strip()
+            if len(first_sentence) > 220:
+                first_sentence = first_sentence[:217].rstrip() + "..."
+            return f"Yes. You asked {matched_user}. I answered: {first_sentence}"
+
+        return f"Yes. You asked {matched_user}."
+
     def route_contextual_followup(
         self,
         workspace_id: str,
@@ -184,8 +435,13 @@ class RequestFollowupRouter:
     ) -> Optional[Dict[str, Any]]:
         text = request_text.strip()
         lowered = text.lower()
+        if re.search(r"\bwhich\s+ones?\b", lowered) and any(
+            hint in lowered for hint in ("mall", "malls", "shopping mall", "shopping center", "shopping centre")
+        ) and self.extract_location(text):
+            return None
+        thread_context = self._build_thread_context(recent_turns)
         recent_session_search = self._recent_session_search_context(recent_turns)
-        recent_entity_subject = self._recent_entity_subject(recent_turns)
+        recent_entity_subject = thread_context.last_entity_subject or self._recent_entity_subject(recent_turns)
         item_match = SESSION_ITEM_FULL_RE.match(text) or SESSION_ITEM_DETAIL_RE.match(text)
         if item_match:
             session_items = recent_session_search.get("matches") or []
@@ -232,6 +488,21 @@ class RequestFollowupRouter:
                     },
                     "reason": "Expanded the latest session-search result into detailed session excerpts.",
                 }
+        memory_response = self._memory_reference_response(recent_turns, request_text)
+        if memory_response is not None:
+            return {
+                "route_kind": "clarify",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                "capability": "clarification.memory_reference",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": memory_response,
+                },
+                "reason": "Answered a memory-reference follow-up from the current thread.",
+            }
+        if self._is_session_workspace_request(text):
+            return None
         grounded_context = self.load_grounded_search_context(workspace_id, session_id)
         grounded_context_response = grounded_search_followup_response(request_text, grounded_context or {})
         if grounded_context_response is not None:
@@ -245,6 +516,19 @@ class RequestFollowupRouter:
                     "response_text": grounded_context_response,
                 },
                 "reason": "Answered a grounded search follow-up from preserved search result evidence.",
+            }
+        source_response = self._source_followup_response(recent_turns, request_text)
+        if source_response is not None:
+            return {
+                "route_kind": "clarify",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                "capability": "clarification.source_reference",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": source_response,
+                },
+                "reason": "Answered a source-follow-up question from the previous assistant response.",
             }
         if lowered in {"search", "search it", "look it up", "look that up"} and recent_entity_subject:
             return {

@@ -46,20 +46,23 @@ class RequestIntentAnalyzer:
         lowered = text.lower().strip()
         place_query = self.normalize_place_query(request_text)
         has_place_hint = any(hint in lowered for hint in self.config.search_place_hints)
+        location_signal = bool(
+            place_query["location"]
+            or re.search(r"\b(?:near me|nearby|nearest)\b", lowered)
+            or re.search(r"\baround\s+[A-Za-z]", text, re.IGNORECASE)
+        )
         discovery_signal = bool(
             re.match(r"^(?:find|show me|list|recommend|give me)\b", lowered)
             or re.search(r"\b(?:near me|nearby|nearest)\b", lowered)
             or re.match(r"^(?:where is|where are)\b", lowered)
             or "reviews for" in lowered
+            or re.search(r"\bwhich\s+ones?\b", lowered)
+            or re.search(r"\bwhich\s+ones?\s+are\s+they\b", lowered)
+            or (has_place_hint and location_signal and re.search(r"\b(?:major|main|largest|biggest|top|best|notable)\b", lowered))
         )
         explicit_review_signal = any(hint in lowered for hint in self.config.search_review_hints)
         review_signal = bool(
             explicit_review_signal or re.search(r"\b(?:best|top|highest rated|top rated|best rated)\b", lowered)
-        )
-        location_signal = bool(
-            place_query["location"]
-            or re.search(r"\b(?:near me|nearby|nearest)\b", lowered)
-            or re.search(r"\baround\s+[A-Za-z]", text, re.IGNORECASE)
         )
         return {
             "has_place_hint": has_place_hint,
@@ -230,4 +233,3 @@ class RequestIntentAnalyzer:
         if text in {"company", "business", "brand", "restaurant", "restaurants"}:
             return False
         return True
-

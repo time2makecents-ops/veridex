@@ -265,6 +265,84 @@ class UserServiceTests(unittest.TestCase):
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 
+    def test_delete_session_activates_replacement_and_removes_thread(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_delete_session"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            service = UserService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+
+            created = service.onboard_user(name="Mina", pin_code="4455")
+            first_session_id = created["session_id"]
+            workspace_id = created["workspace_id"]
+            second = service.create_session(
+                user_id=created["user"]["user_id"],
+                title="Second",
+                description="Second thread.",
+                workspace_id=workspace_id,
+            )
+            second_session_id = second["session_id"]
+            store.append_transcript(
+                workspace_id,
+                "assistant",
+                "sales_department",
+                "Second session thread text.",
+                speaker="Sales Director",
+                session_id=second_session_id,
+            )
+
+            result = service.delete_session(user_id=created["user"]["user_id"], session_id=second_session_id)
+
+            self.assertEqual(result["session_id"], first_session_id)
+            self.assertEqual(service.store.fetch_user(created["user"]["user_id"])["last_active_session_id"], first_session_id)
+            self.assertFalse((workspaces_dir / workspace_id / "sessions" / second_session_id).exists())
+            sessions = service.list_sessions(created["user"]["user_id"], workspace_id=workspace_id)
+            self.assertEqual(len(sessions), 1)
+            self.assertEqual(sessions[0]["session_id"], first_session_id)
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_delete_last_session_starts_fresh_session(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_delete_last_session"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            service = UserService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+
+            created = service.onboard_user(name="Mina", pin_code="4466")
+            session_id = created["session_id"]
+            workspace_id = created["workspace_id"]
+            service.remember_session_room(session_id, active_room="sales_department", active_persona="Sales Director")
+            store.append_transcript(
+                workspace_id,
+                "assistant",
+                "sales_department",
+                "Fresh start thread text.",
+                speaker="Sales Director",
+                session_id=session_id,
+            )
+
+            result = service.delete_session(user_id=created["user"]["user_id"], session_id=session_id)
+            new_session_id = result["session_id"]
+            new_session = service.get_session(new_session_id)
+
+            self.assertNotEqual(new_session_id, session_id)
+            self.assertEqual(new_session["active_room"], "lobby")
+            self.assertEqual(new_session["active_persona"], "Receptionist")
+            self.assertEqual(service.store.fetch_user(created["user"]["user_id"])["last_active_session_id"], new_session_id)
+            self.assertFalse((workspaces_dir / workspace_id / "sessions" / session_id).exists())
+            self.assertEqual(len(service.list_sessions(created["user"]["user_id"], workspace_id=workspace_id)), 1)
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

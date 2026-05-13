@@ -9,6 +9,7 @@ import {
   callTool,
   createSession,
   createWorkspace,
+  deleteSession,
   extractFileText,
   fileDownloadUrl,
   listFiles,
@@ -17,6 +18,7 @@ import {
   loadTranscript,
   request,
   requestText,
+  renameSession,
   uploadFile,
   type FileRecord,
   type WorkspaceRecord,
@@ -39,6 +41,11 @@ type Message = {
   speaker?: string;
   room?: string;
   sessionId?: string;
+};
+
+type ProviderBadge = {
+  provider: string;
+  fallbackUsed: boolean;
 };
 
 type SavedFileNotice = {
@@ -106,8 +113,12 @@ export default function ChatPage() {
   const [activeWorkspaceLabel, setActiveWorkspaceLabel] = useState("");
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [deletingSessionId, setDeletingSessionId] = useState("");
+  const [hiddenSessionIds, setHiddenSessionIds] = useState<string[]>([]);
+  const [sessionActionNotice, setSessionActionNotice] = useState("");
   const [sessionTitleDraft, setSessionTitleDraft] = useState("");
   const [sessionDescriptionDraft, setSessionDescriptionDraft] = useState("");
+  const [sessionPromptTargetId, setSessionPromptTargetId] = useState("");
   const [fileKind, setFileKind] = useState("document");
   const [fileScope, setFileScope] = useState<FileScope>("room");
   const [loadScope, setLoadScope] = useState<FileScope>("room");
@@ -130,11 +141,13 @@ export default function ChatPage() {
   const [lastSavedFile, setLastSavedFile] = useState<SavedFileNotice | null>(null);
   const [roomStatus, setRoomStatus] = useState("Waiting for room state.");
   const [backendBanner, setBackendBanner] = useState("");
+  const [providerBadge, setProviderBadge] = useState<ProviderBadge | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
   const draftRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const announcedRoomRef = useRef(false);
+  const hiddenSessionIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const stored = getStoredSessionId();
@@ -357,7 +370,8 @@ export default function ChatPage() {
     setSessionsLoading(true);
     try {
       const response = await listSessions();
-      setSessions(response);
+      const hiddenIds = hiddenSessionIdsRef.current;
+      setSessions(response.filter((item) => !hiddenIds.has(String(item.session_id))));
       const targetId = activeSessionId || sessionId;
       const active = response.find((item) => String(item.session_id) === targetId);
       if (active) {
@@ -493,6 +507,125 @@ export default function ChatPage() {
     }
   }
 
+  async function handleDeleteSession(targetSessionId: string) {
+    if (!targetSessionId || deletingSessionId === targetSessionId) {
+      return;
+    }
+    const target = sessions.find((session) => String(session.session_id) === targetSessionId);
+    const targetTitle = target?.title || targetSessionId;
+    if (!window.confirm(`Delete session "${targetTitle}" and its transcript?`)) {
+      return;
+    }
+    setDeletingSessionId(targetSessionId);
+    setError("");
+    setBackendBanner("");
+    setSessionActionNotice("");
+    try {
+      const response = await deleteSession(targetSessionId, sessionId);
+      const structured = response.structuredContent as {
+        session_id?: string;
+        workspace_id?: string;
+        deleted_session_id?: string;
+        created_replacement_session?: boolean;
+        active_session?: { active_room?: string; active_persona?: string; title?: string; description?: string };
+        workspace_state?: LobbyState;
+      } | undefined;
+      const nextSessionId = String(structured?.session_id || response.session_id || sessionId);
+      const nextWorkspaceId = String(structured?.workspace_id || response.workspace_id || workspaceId);
+      const activeRoomFromResponse = String(structured?.workspace_state?.active_room || structured?.active_session?.active_room || activeRoom);
+      const activePersonaFromResponse = String(structured?.workspace_state?.active_persona || structured?.active_session?.active_persona || activePersona);
+      const deletedWasCurrent = targetSessionId === sessionId;
+      const replacementTitle = String(structured?.active_session?.title || nextSessionId || "a fresh session");
+
+      hiddenSessionIdsRef.current = new Set([...hiddenSessionIdsRef.current, targetSessionId]);
+      setHiddenSessionIds(Array.from(hiddenSessionIdsRef.current));
+      setSessions((current) => current.filter((item) => String(item.session_id) !== targetSessionId));
+
+      setStoredSessionId(nextSessionId);
+      setSessionId(nextSessionId);
+      setWorkspaceId(nextWorkspaceId);
+      setActiveWorkspaceLabel(workspaces.find((item) => String(item.workspace_id) === nextWorkspaceId)?.label || nextWorkspaceId);
+      setChatScope("room");
+
+      await refreshSessions(nextSessionId);
+      await refreshWorkspaces(nextWorkspaceId);
+
+      if (deletedWasCurrent && nextSessionId) {
+        setActiveRoom(activeRoomFromResponse);
+        setActivePersona(activePersonaFromResponse);
+        setRecentRooms((current) => pushRecentRoom(current, activeRoomFromResponse));
+        await refreshCurrentThread(nextSessionId);
+        await refreshFiles(nextSessionId, activeRoomFromResponse);
+      }
+
+      if (Boolean(structured?.created_replacement_session)) {
+        setSessionPromptTargetId(nextSessionId);
+        setSessionTitleDraft(String(structured?.active_session?.title || "New Session"));
+        setSessionDescriptionDraft(String(structured?.active_session?.description || "Fresh session."));
+      } else {
+        setSessionPromptTargetId("");
+      }
+
+      const notice = deletedWasCurrent
+        ? `Deleted session ${targetTitle}. Switched to ${replacementTitle}.`
+        : `Deleted session ${targetTitle}.`;
+      setBackendBanner(notice);
+      setSessionActionNotice(notice);
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          role: "system",
+          speaker: "System",
+          text: notice,
+          room: activeRoomFromResponse || activeRoom,
+          sessionId: nextSessionId || sessionId,
+        },
+      ]);
+
+      setSessionMenuOpen(true);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to delete session.";
+      setError(message);
+      setBackendBanner(backendDisconnectedMessage(message));
+    } finally {
+      setDeletingSessionId("");
+    }
+  }
+
+  async function handleSaveSessionNamePrompt() {
+    const targetSessionId = sessionPromptTargetId;
+    if (!targetSessionId) {
+      return;
+    }
+    const title = sessionTitleDraft.trim() || "New Session";
+    const description = sessionDescriptionDraft.trim() || title;
+    setError("");
+    setBackendBanner("");
+    try {
+      const renamed = await renameSession(targetSessionId, title, description);
+      const nextSessionId = String(renamed.session_id || targetSessionId);
+      setSessionTitleDraft(String(renamed.title || title));
+      setSessionDescriptionDraft(String(renamed.description || description));
+      setStoredSessionId(nextSessionId);
+      setSessionId(nextSessionId);
+      setSessionPromptTargetId("");
+      await refreshSessions(nextSessionId);
+      await refreshWorkspaces(workspaceId);
+      await refreshCurrentThread(nextSessionId);
+      setSessionActionNotice(`Renamed session to ${renamed.title || title}.`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to rename session.";
+      setError(message);
+      setBackendBanner(backendDisconnectedMessage(message));
+    }
+  }
+
+  function handleCancelSessionNamePrompt() {
+    setSessionPromptTargetId("");
+  }
+
   async function handleCreateSession() {
     const title = sessionTitleDraft.trim() || "New Session";
     const description = sessionDescriptionDraft.trim() || title;
@@ -549,6 +682,8 @@ export default function ChatPage() {
         speaker?: string;
         navigator_activation?: { activated?: boolean };
         routing?: { route_kind?: string };
+        provider?: string;
+        fallback_used?: boolean;
       } | undefined;
       const nextWorkspaceId = String(response.workspace_id || structuredResponse?.workspace_id || workspaceId);
       const nextSessionId = String(response.session_id || structuredResponse?.session_id || outgoingSessionId);
@@ -559,8 +694,14 @@ export default function ChatPage() {
           structuredResponse?.routing?.route_kind === "clarify" || structuredResponse?.navigator_activation?.activated
             ? "Navigator"
             : structuredResponse?.speaker
-        ) || nextPersona,
+          ) || nextPersona,
       );
+      if (structuredResponse?.provider) {
+        setProviderBadge({
+          provider: structuredResponse.provider,
+          fallbackUsed: Boolean(structuredResponse.fallback_used),
+        });
+      }
       if (nextSessionId && nextSessionId !== outgoingSessionId) {
         setStoredSessionId(nextSessionId);
         setSessionId(nextSessionId);
@@ -761,6 +902,12 @@ export default function ChatPage() {
           <div className="lobby-title-row">
             <div className="stack" style={{ gap: 4 }}>
               <div className="terminal-label">Veridex</div>
+              {providerBadge ? (
+                <div className={`provider-badge ${providerBadge.fallbackUsed ? "provider-badge-fallback" : ""}`}>
+                  {providerBadge.provider}
+                  {providerBadge.fallbackUsed ? " fallback" : ""}
+                </div>
+              ) : null}
               <h1 className="title">{currentTitle}</h1>
               <div className="muted">{currentSessionDescription || "No session description yet."}</div>
             </div>
@@ -907,21 +1054,38 @@ export default function ChatPage() {
             <div className="dropdown-panel">
               <div className="dropdown-group">
                 <div className="dropdown-group-title">Current Sessions</div>
+                {sessionActionNotice ? <div className="muted session-action-notice">{sessionActionNotice}</div> : null}
                 <div className="dropdown-grid">
                   {sessionsLoading ? <div className="muted">Loading sessions...</div> : null}
                   {sessions.map((session) => (
-                    <button
-                      key={session.session_id}
-                      type="button"
-                      className={`ghost room-option ${String(session.session_id) === sessionId ? "toolbar-button-active" : ""}`}
-                      onClick={() => void handleSessionSelect(session.session_id)}
-                    >
-                      <span>{session.title || session.session_id}</span>
-                      <span className="room-option-persona">
-                        {session.description || "No description"}
-                        {session.active_room ? ` - ${roomById(String(session.active_room))?.title || session.active_room}` : ""}
-                      </span>
-                    </button>
+                    <div key={session.session_id} className="session-list-row">
+                      <button
+                        type="button"
+                        className={`ghost room-option ${String(session.session_id) === sessionId ? "toolbar-button-active" : ""}`}
+                        onClick={() => void handleSessionSelect(session.session_id)}
+                        disabled={deletingSessionId === session.session_id}
+                      >
+                        <span>{session.title || session.session_id}</span>
+                        <span className="room-option-persona">
+                          {session.description || "No description"}
+                          {session.active_room ? ` - ${roomById(String(session.active_room))?.title || session.active_room}` : ""}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost session-delete-button"
+                        aria-label={`Delete session ${session.title || session.session_id}`}
+                        title="Delete session"
+                        disabled={deletingSessionId === session.session_id}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void handleDeleteSession(session.session_id);
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
                   ))}
                   {!sessionsLoading && !sessions.length ? <div className="muted">No sessions yet.</div> : null}
                 </div>
@@ -946,6 +1110,40 @@ export default function ChatPage() {
                   <div className="toolbar-row">
                     <button type="button" className="primary" onClick={() => void handleCreateSession()}>
                       Create Session
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {sessionPromptTargetId ? (
+            <div className="session-name-overlay" role="dialog" aria-modal="true" aria-label="Name new session">
+              <div className="session-name-modal">
+                <div className="dropdown-group-title">Name new session</div>
+                <div className="muted">The current workspace created a fresh session. Give it a title before continuing.</div>
+                <div className="toolbar-stack">
+                  <input
+                    className="session-input"
+                    type="text"
+                    value={sessionTitleDraft}
+                    placeholder="Session title"
+                    onChange={(event) => setSessionTitleDraft(event.target.value)}
+                    autoFocus
+                  />
+                  <textarea
+                    className="session-input session-description"
+                    value={sessionDescriptionDraft}
+                    placeholder="Optional description"
+                    onChange={(event) => setSessionDescriptionDraft(event.target.value)}
+                    rows={3}
+                  />
+                  <div className="toolbar-row">
+                    <button type="button" className="secondary" onClick={handleCancelSessionNamePrompt}>
+                      Keep New Session
+                    </button>
+                    <button type="button" className="primary" onClick={() => void handleSaveSessionNamePrompt()}>
+                      Save Name
                     </button>
                   </div>
                 </div>

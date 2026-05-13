@@ -73,6 +73,13 @@ class ConversationPlanner:
             return ConversationPlan(user_prompt=text, answer_type="chat")
 
         risk_flags = ("regulated_or_high_risk",) if self.RISK_CONTEXT_RE.search(lowered) else ()
+        evidence_mode = self._looks_like_pasted_output(request_text)
+        evidence_line = (
+            "- The user pasted prior assistant output, logs, or transcript text. Treat that text as evidence, not a new unrelated question. "
+            "Analyze the pasted text directly and stay anchored to the exact wording provided.\n"
+            if evidence_mode
+            else ""
+        )
 
         if self._looks_like_list_request(lowered):
             count = self._requested_count(lowered) or 5
@@ -88,6 +95,7 @@ class ConversationPlanner:
                 "- Put the strongest or most practical items first when ranking matters.\n"
                 "- Use one concise, practical explanation per item.\n"
                 "- Do not stop after the first item.\n"
+                f"{evidence_line}"
                 f"{self.PLAIN_TEXT_STYLE_RULES}"
                 f"{risk_line}"
                 "- If any recommendation touches legal, regulatory, safety, financial, or policy risk, include one brief verification caution only if the answer has not already included one.\n"
@@ -110,6 +118,7 @@ class ConversationPlanner:
                 "- Briefly compare it with the next strongest alternative.\n"
                 "- If the answer depends on missing context, state the assumption and give the best provisional answer.\n"
                 "- Keep the answer to 2 or 3 short paragraphs, unless the user asks for more detail.\n"
+                f"{evidence_line}"
                 f"{self.PLAIN_TEXT_STYLE_RULES}"
                 f"{risk_line}"
                 "- If the recommendation touches legal, regulatory, safety, financial, or policy risk, include one brief verification caution only if the answer has not already included one.\n\n"
@@ -117,7 +126,31 @@ class ConversationPlanner:
             )
             return ConversationPlan(user_prompt=prompt, answer_type="recommendation", risk_flags=risk_flags)
 
-        return ConversationPlan(user_prompt=text, answer_type="chat", risk_flags=risk_flags)
+        prompt = text
+        if evidence_mode:
+            prompt = (
+                f"User request: {text}\n\n"
+                "Answer plan:\n"
+                "- The user pasted prior assistant output, logs, or transcript text.\n"
+                "- Treat that text as evidence to analyze, not a fresh unrelated question.\n"
+                "- Stay anchored to the exact pasted wording and identify what went wrong, what was claimed, or what the pasted text shows.\n"
+                "- Do not generalize beyond the pasted evidence.\n\n"
+                "Respond directly to the user."
+            )
+        return ConversationPlan(user_prompt=prompt, answer_type="chat", risk_flags=risk_flags)
+
+    @staticmethod
+    def _looks_like_pasted_output(request_text: str) -> bool:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip())
+        lowered = text.lower()
+        if not text:
+            return False
+        if any(marker in lowered for marker in ("here is the output", "this is the output", "pasted output", "i was pasting", "here's the output")):
+            return True
+        if "\n" in str(request_text or ""):
+            if re.search(r"(?m)^\s*(sales director|navigator|marketing director|system|you)\b", request_text, re.IGNORECASE):
+                return True
+        return False
 
     def rewrite_followup(self, request_text: str, recent_turns: List[Dict[str, Any]]) -> Optional[ConversationPlan]:
         text = re.sub(r"\s+", " ", str(request_text or "").strip())

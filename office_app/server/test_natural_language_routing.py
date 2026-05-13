@@ -76,6 +76,25 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["tool"], "office.artifact_list")
         self.assertEqual(routed["arguments"]["retrieval_scope"], "workspace")
 
+    def test_show_all_sessions_in_workspace_routes_to_session_list(self) -> None:
+        routed = self.pipeline.route_user_request("default", "show me all sessions in this workspace")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "session.list")
+        self.assertEqual(routed["tool"], "office.sessions_list")
+
+    def test_what_sessions_are_in_this_workspace_routes_to_clarify(self) -> None:
+        routed = self.pipeline.route_user_request("default", "what sessions are in this workspace")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "session.list.confirmation")
+        self.assertEqual(routed["tool"], "office.capability_info")
+        self.assertIn("list the sessions in this workspace", routed["arguments"]["response_text"])
+
+    def test_what_sessions_are_there_routes_to_clarify(self) -> None:
+        routed = self.pipeline.route_user_request("default", "what sessions are there")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "session.list.confirmation")
+        self.assertEqual(routed["tool"], "office.capability_info")
+
     def test_saved_so_far_routes_to_workspace_scoped_list(self) -> None:
         routed = self.pipeline.route_user_request("default", "what have we saved so far")
         self.assertEqual(routed["route_kind"], "artifact")
@@ -162,6 +181,12 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         routed = self.sales_pipeline.route_user_request("default", "how should I improve my restaurant marketing")
         self.assertEqual(routed["route_kind"], "model")
         self.assertEqual(routed["capability"], "ai.respond")
+
+    def test_phone_camera_product_research_routes_to_web_search(self) -> None:
+        routed = self.sales_pipeline.route_user_request("default", "what cellphones have the best cameras?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.web")
+        self.assertEqual(routed["tool"], "office.search_web")
 
     def test_read_last_response_stays_in_model_route(self) -> None:
         routed = self.sales_pipeline.route_user_request("default", "read your last response")
@@ -979,6 +1004,27 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["tool"], "office.search_reviews")
         self.assertEqual(routed["arguments"]["location"], "Portland")
 
+    def test_mall_question_with_location_routes_to_places(self) -> None:
+        routed = self.sales_pipeline.route_user_request(
+            "default",
+            "in eugene we have two major malls. can you tell me which ones they are?",
+        )
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.places")
+        self.assertEqual(routed["tool"], "office.search_places")
+        self.assertEqual(routed["arguments"]["query"], "malls")
+        self.assertEqual(routed["arguments"]["category"], "malls")
+        self.assertEqual(routed["arguments"]["location"], "eugene")
+
+    def test_major_bars_with_location_routes_to_places(self) -> None:
+        routed = self.sales_pipeline.route_user_request("default", "what are the major bars in Eugene?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "search.places")
+        self.assertEqual(routed["tool"], "office.search_places")
+        self.assertEqual(routed["arguments"]["query"], "bars")
+        self.assertEqual(routed["arguments"]["category"], "bars")
+        self.assertEqual(routed["arguments"]["location"], "Eugene")
+
     def test_unqualified_bar_question_stays_in_model_route(self) -> None:
         routed = self.pipeline.route_user_request("default", "how do you increase food sales in a bar")
         self.assertEqual(routed["route_kind"], "model")
@@ -1428,6 +1474,19 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["route_kind"], "clarify")
         self.assertEqual(routed["capability"], "session.create.name_required")
         self.assertEqual(routed["arguments"]["response_text"], "What should I name the new session?")
+
+    def test_session_name_question_routes_to_session_info(self) -> None:
+        routed = self.pipeline.route_user_request("default", "what is the name of this session?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "session.info")
+        self.assertEqual(routed["tool"], "office.session_info")
+
+    def test_rename_session_routes_to_session_rename(self) -> None:
+        routed = self.pipeline.route_user_request("default", "rename this session newest test")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "session.rename")
+        self.assertEqual(routed["tool"], "office.session_rename")
+        self.assertEqual(routed["arguments"]["title"], "newest test")
 
     def test_list_sessions_routes_to_sessions_tool(self) -> None:
         routed = self.pipeline.route_user_request("default", "list sessions")

@@ -280,6 +280,20 @@ export async function createSession(title: string, description: string): Promise
   };
 }
 
+export async function renameSession(session_id: string, title: string, description: string): Promise<SessionRecord> {
+  const response = await callTool("office.session_rename", { session_id, title, description });
+  const structured = response.structuredContent as SessionRecord | undefined;
+  if (structured && typeof structured.session_id === "string") {
+    return structured;
+  }
+  return {
+    session_id,
+    title,
+    description,
+    active_workspace_id: String(response.workspace_id || ""),
+  };
+}
+
 export async function createWorkspace(label: string): Promise<WorkspaceRecord> {
   const response = await callTool("office.workspace_new", { label });
   const structured = response.structuredContent as WorkspaceRecord | undefined;
@@ -318,6 +332,27 @@ export async function activateSession(session_id: string): Promise<SessionRecord
     session_id,
     active_workspace_id: String(response.workspace_id || ""),
   };
+}
+
+export async function deleteSession(session_id: string, currentSessionId?: string): Promise<LobbyResponse> {
+  const storedSessionId = typeof window === "undefined" ? "" : window.localStorage.getItem("veridex.session_id") ?? "";
+  const authSessionId = String(currentSessionId || storedSessionId || "");
+  if (!authSessionId) {
+    throw new Error("Session ID required");
+  }
+  const response = await fetchJsonWithTimeout(`/sessions/${encodeURIComponent(session_id)}`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Session-Id": authSessionId,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response));
+  }
+
+  return (await response.json()) as LobbyResponse;
 }
 
 export async function uploadFile(payload: {

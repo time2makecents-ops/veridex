@@ -223,6 +223,68 @@ class SearchServiceTests(unittest.TestCase):
         self.assertEqual(result["results"], [])
         self.assertIn("I need your location", result["summary_text"])
 
+    def test_search_places_retries_with_category_variants_when_first_query_is_empty(self) -> None:
+        seen_queries = []
+
+        def fetch_json(url, headers):
+            from urllib.parse import parse_qs, urlparse
+
+            seen_queries.append(parse_qs(urlparse(url).query).get("q", [""])[0])
+            if len(seen_queries) == 1:
+                return []
+            return [
+                {
+                    "name": "Valley River Center",
+                    "display_name": "Valley River Center, Eugene, Oregon, USA",
+                    "lat": "44.0",
+                    "lon": "-123.0",
+                    "type": "shopping_mall",
+                    "osm_type": "node",
+                    "osm_id": 123,
+                }
+            ]
+
+        service = SearchService(
+            fetch_json=fetch_json,
+            serpapi_api_key="",
+            google_api_key="",
+            google_search_engine_id="",
+        )
+        result = service.search_places(query="malls", location="Eugene", category="malls", limit=1)
+        self.assertGreaterEqual(len(seen_queries), 2)
+        self.assertEqual(result["results"][0]["title"], "Valley River Center")
+        self.assertIn("Eugene", result["results"][0]["address"])
+
+    def test_search_places_falls_back_to_web_snippets_when_nominatim_is_empty(self) -> None:
+        seen_queries = []
+
+        def fetch_json(url, headers):
+            from urllib.parse import parse_qs, urlparse
+
+            seen_queries.append(parse_qs(urlparse(url).query).get("q", [""])[0])
+            return []
+
+        markup = """
+        <html>
+          <body>
+            <a class="result__a" href="https://example.com/valley-river-center">Valley River Center</a>
+            <div class="result__snippet">Valley River Center is a shopping center in Eugene, Oregon.</div>
+          </body>
+        </html>
+        """
+        service = SearchService(
+            fetch_json=fetch_json,
+            fetch_text=lambda url, headers: markup,
+            serpapi_api_key="",
+            google_api_key="",
+            google_search_engine_id="",
+        )
+        result = service.search_places(query="malls", location="Eugene", category="malls", limit=1)
+        self.assertGreaterEqual(len(seen_queries), 1)
+        self.assertEqual(result["results"][0]["title"], "Valley River Center")
+        self.assertEqual(result["results"][0]["source"], "example.com")
+        self.assertIn("shopping center in Eugene, Oregon", result["results"][0]["address"])
+
 
 if __name__ == "__main__":
     unittest.main()

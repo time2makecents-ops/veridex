@@ -246,3 +246,22 @@ class SessionStore:
         if fetched is None:
             raise LookupError(f"Session not found after update: {session_id}")
         return fetched
+
+    def delete_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        existing = self.fetch_session(session_id)
+        if existing is None:
+            return None
+
+        with self._connection() as conn:
+            result = conn.execute(
+                f"""
+                DELETE FROM {self.table_name}
+                WHERE session_id = ?
+                """,
+                (session_id,),
+            )
+            if result.rowcount == 0:
+                raise LookupError(f"Session not found: {session_id}")
+            conn.commit()
+
+        return existing
