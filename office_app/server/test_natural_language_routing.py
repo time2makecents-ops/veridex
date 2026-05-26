@@ -1144,6 +1144,50 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["route_kind"], "clarify")
         self.assertEqual(routed["capability"], "capability.rooms.info")
         self.assertIn("go to Sales Department", routed["arguments"]["response_text"])
+        self.assertIn("Records Archive", routed["arguments"]["response_text"])
+
+    def test_lobby_room_directory_phrases_get_complete_room_directory(self) -> None:
+        phrases = (
+            "What rooms are there",
+            "What departments are there?",
+            "Is there a list of places I can go in Veridex?",
+            "List all offices",
+            "All departments",
+            "What offices?",
+            "where can I go",
+        )
+        for phrase in phrases:
+            with self.subTest(phrase=phrase):
+                routed = self.pipeline.route_user_request("default", phrase)
+                self.assertEqual(routed["route_kind"], "clarify")
+                self.assertEqual(routed["capability"], "room.directory")
+                self.assertEqual(routed["tool"], "office.capability_info")
+                text = routed["arguments"]["response_text"]
+                self.assertIn("Sales Department", text)
+                self.assertIn("Marketing & Advertising", text)
+                self.assertIn("Law Office", text)
+                self.assertIn("Records Archive", text)
+                self.assertIn("Research & Development", text)
+
+    def test_lobby_room_directory_followups_use_recent_room_context(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                transcript_rows=[
+                    {"role": "user", "text": "What rooms are there"},
+                    {"role": "assistant", "text": "This workspace has rooms, departments, and offices."},
+                ]
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        for phrase in ("Can you list all of them please", "Specific offices"):
+            with self.subTest(phrase=phrase):
+                routed = pipeline.route_user_request("default", phrase)
+                self.assertEqual(routed["route_kind"], "clarify")
+                self.assertEqual(routed["capability"], "room.directory")
+                self.assertIn("Records Archive", routed["arguments"]["response_text"])
 
     def test_session_capability_question_gets_deterministic_answer(self) -> None:
         routed = self.pipeline.route_user_request("default", "can you create sessions?")

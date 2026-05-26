@@ -89,6 +89,15 @@ function roomTransitionText(roomId: string, persona: string): string {
   return `Now in ${title}. Persona: ${persona}.`;
 }
 
+function lobbyOrientationText(persona: string): string {
+  return [
+    `${persona} ready. You are in the Lobby.`,
+    "",
+    "I can show you every room, help you start onboarding, or send you to a department.",
+    "Try: what rooms are there, go to Conference Room, or go to My Office.",
+  ].join("\n");
+}
+
 export default function ChatPage() {
   const router = useRouter();
   const [sessionId, setSessionId] = useState("");
@@ -254,8 +263,9 @@ export default function ChatPage() {
           id: "welcome",
           role: "assistant",
           speaker: nextPersona,
-          text: `${nextPersona} ready.`,
+          text: nextRoom === "lobby" ? lobbyOrientationText(nextPersona) : `${nextPersona} ready.`,
           sessionId: hydratedSessionId || sessionId,
+          room: nextRoom,
         },
       ]);
     }

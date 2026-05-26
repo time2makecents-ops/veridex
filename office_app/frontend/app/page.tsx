@@ -104,9 +104,11 @@ export default function ExteriorTerminalPage() {
     setError("");
     try {
       const result = await enter(pinCode);
-      if (result?.session_id) {
-        setStoredSessionId(result.session_id);
+      const sessionId = String(result?.session_id || result?.structuredContent?.session_id || "");
+      if (!sessionId) {
+        throw new Error("Missing session ID from server.");
       }
+      setStoredSessionId(sessionId);
       router.push("/chat");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Access denied.";

@@ -416,6 +416,30 @@ class RequestPipeline:
         "current room",
         "what room are we in",
     )
+    ROOM_DIRECTORY_HINTS = (
+        "what rooms are there",
+        "what rooms do you have",
+        "what departments are there",
+        "what departments do you have",
+        "is there a list of places i can go",
+        "list of places i can go",
+        "places i can go",
+        "where can i go",
+        "where can we go",
+        "where could i go",
+        "where should i go",
+        "list all rooms",
+        "list all departments",
+        "list all offices",
+        "all departments",
+        "what offices",
+    )
+    ROOM_DIRECTORY_FOLLOWUP_HINTS = (
+        "can you list all of them",
+        "list all of them",
+        "all of them",
+        "specific offices",
+    )
     OCR_EXPLICIT_HINTS = (
         "ocr",
         "extract text",
@@ -1124,6 +1148,10 @@ class RequestPipeline:
         if capability_route is not None:
             return capability_route
 
+        room_directory_route = self.route_room_directory_request(workspace_id, request_text, recent_turns=recent_turns)
+        if room_directory_route is not None:
+            return room_directory_route
+
         product_search_route = self.route_product_search_request(workspace_id, request_text)
         if product_search_route is not None:
             return {
@@ -1498,6 +1526,48 @@ class RequestPipeline:
             "reason": f"Answered a {capability} capability question without running a tool.",
         }
 
+    def route_room_directory_request(
+        self,
+        workspace_id: str,
+        request_text: str,
+        *,
+        recent_turns: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", request_text.lower().strip().rstrip("?!."))
+        if not text:
+            return None
+        if self.is_explicit_room_navigation(text):
+            return None
+        direct_match = any(hint in text for hint in self.ROOM_DIRECTORY_HINTS)
+        followup_match = any(hint in text for hint in self.ROOM_DIRECTORY_FOLLOWUP_HINTS)
+        if not direct_match and not (followup_match and self.recent_context_was_room_directory(recent_turns or [])):
+            return None
+        ctx = self.current_context(workspace_id)
+        active_room = str(ctx.get("active_room") or "lobby")
+        active_persona = str(ctx.get("active_persona") or "Receptionist")
+        response_text = self.room_directory_response_text(active_room=active_room, active_persona=active_persona)
+        return {
+            "route_kind": "clarify",
+            "workspace_id": workspace_id,
+            "request": request_text,
+            "capability": "room.directory",
+            "tool": "office.capability_info",
+            "arguments": {
+                "response_text": response_text,
+                "active_room": active_room,
+                "active_persona": active_persona,
+                "rooms": rooms_payload(),
+            },
+            "reason": "Answered a room directory request from the authoritative room registry.",
+        }
+
+    def recent_context_was_room_directory(self, recent_turns: List[Dict[str, Any]]) -> bool:
+        for row in reversed(recent_turns[-6:]):
+            text = re.sub(r"\s+", " ", str(row.get("text") or "").lower())
+            if any(term in text for term in ("rooms", "departments", "offices", "places you can go", "places i can go")):
+                return True
+        return False
+
     def capability_question_kind(self, request_text: str) -> Optional[str]:
         text = request_text.lower().strip()
         if not text:
@@ -1587,7 +1657,8 @@ class RequestPipeline:
             ),
             "rooms": (
                 f"{room_line}\n\n"
-                "Yes. Use the Directory button or say something explicit like 'go to Sales Department'. "
+                f"{self.room_directory_response_text(active_room=active_room, active_persona=active_persona)}\n\n"
+                "Say something explicit like 'go to Sales Department' when you want me to move you. "
                 f"Room changes are backend-controlled so the active persona and room state stay consistent. {coordination_line}"
             ),
             "sessions": (
@@ -1613,6 +1684,27 @@ class RequestPipeline:
             ),
         }
         return responses.get(capability, responses["overview"])
+
+    def room_directory_response_text(self, *, active_room: str, active_persona: str) -> str:
+        active_rooms = [room for room in rooms_payload() if room.get("is_active", True)]
+        lines = [
+            f"Here in {self.room_title_for_id(active_room)}, I am the {active_persona}.",
+            "",
+            "You can go to these Veridex rooms:",
+        ]
+        for index, room in enumerate(active_rooms, start=1):
+            title = str(room.get("title") or room.get("id") or f"Room {index}").strip()
+            persona = str(room.get("default_persona") or "Navigator").strip()
+            room_id = str(room.get("id") or "").strip()
+            suffix = f" ({room_id})" if room_id else ""
+            lines.append(f"{index}. {title} - {persona}{suffix}")
+        lines.extend(
+            [
+                "",
+                "To move, say for example: go to Sales Department, go to My Office, or go to Records Archive.",
+            ]
+        )
+        return "\n".join(lines)
 
     def room_title_for_id(self, room_id: str) -> str:
         for room in rooms_payload():
