@@ -35,7 +35,7 @@ Last updated: 2026-05-02
      - upload/download panel
 
 4. Runtime/Git hygiene
-   - Remove generated runtime state from tracked source control in a careful patch.
+   - Remove generated runtime state from tracked source control in a careful patch. (In progress: `office_app/runtime/` removed from Git index without deleting local data.)
    - Do not delete local user data.
    - Keep `.env.local`, local certs, storage, logs, and runtime databases ignored.
 

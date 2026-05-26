@@ -23,6 +23,24 @@ cd C:\Office-App
 .\veridex.cmd restart
 ```
 
+Current workstation launcher:
+
+```cmd
+C:\Office-App\veridex_redca.cmd
+```
+
+This workstation launcher uses the local Python and Node installs directly, starts backend/frontend, and opens Chrome to:
+
+```text
+https://127.0.0.1:3078/chat
+```
+
+Same-network phone access for this workstation:
+
+```text
+https://192.168.1.144:3078/chat
+```
+
 Manual backend:
 
 ```cmd
@@ -113,6 +131,8 @@ Google Programmable Search whole-web mode is deprecated for new engines, so Goog
 - `office_app/runtime/veridex.db`
 - `office_app/backend/incident_log.csv`
 - `office_app/storage/`
+
+Runtime paths are local generated state and should remain ignored by Git. Existing tracked runtime files have been removed from the Git index without deleting local data.
 
 ## Current Architecture Reality
 
