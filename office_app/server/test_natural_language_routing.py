@@ -12,11 +12,13 @@ class DummyKernel:
         active_persona: str = "Receptionist",
         transcript_rows: list[dict[str, str]] | None = None,
         grounded_search_by_session: dict[str, dict[str, object]] | None = None,
+        pending_break_room_jokes: dict[str, dict[str, str]] | None = None,
     ):
         self.active_room = active_room
         self.active_persona = active_persona
         self.store = DummyStore(transcript_rows or [])
         self.grounded_search_by_session = grounded_search_by_session or {}
+        self.pending_break_room_jokes = pending_break_room_jokes or {}
 
     def current_context(self, workspace_id: str):
         return {
@@ -33,6 +35,7 @@ class DummyKernel:
             "active_room": self.active_room,
             "active_persona": self.active_persona,
             "grounded_search_by_session": self.grounded_search_by_session,
+            "pending_break_room_jokes": self.pending_break_room_jokes,
         }
 
 
@@ -1188,6 +1191,171 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
                 self.assertEqual(routed["route_kind"], "clarify")
                 self.assertEqual(routed["capability"], "room.directory")
                 self.assertIn("Records Archive", routed["arguments"]["response_text"])
+
+    def test_break_room_joke_request_pauses_before_punchline(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="break_room", active_persona="Break Room Host"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "tell me a joke")
+        self.assertEqual(routed["route_kind"], "break_room_joke")
+        self.assertEqual(routed["capability"], "break_room.joke.generate")
+        self.assertEqual(routed["tool"], "office.ai_generate")
+
+    def test_break_room_joke_followup_reveals_punchline(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="break_room",
+                active_persona="Break Room Host",
+                pending_break_room_jokes={
+                    "sess_1": {
+                        "setup": "Why did the project manager bring a ladder to the meeting?",
+                        "punchline": "Because the team said the goals were too high.",
+                    }
+                },
+                transcript_rows=[
+                    {"role": "user", "text": "tell me a joke"},
+                    {
+                        "role": "assistant",
+                        "text": "Why did the project manager bring a ladder to the meeting?",
+                    },
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "because the room was upstairs?", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "break_room.joke.punchline")
+        self.assertIn("Because the team said the goals were too high.", routed["arguments"]["response_text"])
+        self.assertTrue(routed["arguments"]["clear_pending_break_room_joke"])
+
+    def test_break_room_correct_joke_guess_is_acknowledged(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="break_room",
+                active_persona="Break Room Host",
+                pending_break_room_jokes={
+                    "sess_1": {
+                        "setup": "Why did the project manager bring a ladder to the meeting?",
+                        "punchline": "Because the team said the goals were too high.",
+                    }
+                },
+                transcript_rows=[
+                    {"role": "user", "text": "tell me a joke"},
+                    {"role": "assistant", "text": "Why did the project manager bring a ladder to the meeting?"},
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "because the goals were too high", session_id="sess_1")
+        self.assertEqual(routed["capability"], "break_room.joke.punchline")
+        self.assertIn("Exactly.", routed["arguments"]["response_text"])
+
+    def test_break_room_yes_after_another_offer_starts_setup_only(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="break_room",
+                active_persona="Break Room Host",
+                transcript_rows=[
+                    {"role": "assistant", "text": "Why did the project manager bring a ladder to the meeting?"},
+                    {
+                        "role": "assistant",
+                        "text": "Because the team said the goals were too high.\n\nWant another one?",
+                    },
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "sure")
+        self.assertEqual(routed["route_kind"], "break_room_joke")
+        self.assertEqual(routed["capability"], "break_room.joke.generate")
+        self.assertEqual(routed["tool"], "office.ai_generate")
+
+    def test_pending_break_room_joke_does_not_block_navigation(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="break_room",
+                active_persona="Break Room Host",
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "text": "Why did the project manager bring a ladder to the meeting?",
+                    },
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "go to the lobby")
+        self.assertEqual(routed["route_kind"], "navigation")
+        self.assertEqual(routed["room_id"], "lobby")
+
+    def test_repeating_joke_setup_with_go_to_does_not_trigger_navigation(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="break_room", active_persona="Break Room Host"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request(
+            "default",
+            'you asked why did the mushroom go to the party, which is a fungi and sounds like "fun guy"',
+            session_id="sess_1",
+        )
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["capability"], "ai.respond")
+
+    def test_send_memo_to_navigator_routes_to_mailroom_dispatch(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="break_room", active_persona="Break Room Host"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "send a memo to the navigator. how is system health?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "memo.dispatch")
+        self.assertEqual(routed["tool"], "mailroom.dispatch")
+        self.assertEqual(routed["arguments"]["to_room"], "control_room")
+        self.assertEqual(routed["arguments"]["explicit_persona"], "Navigator")
+        self.assertEqual(routed["arguments"]["body"], "how is system health?")
+
+    def test_break_room_can_dispatch_question_memo(self) -> None:
+        self.pipeline.assert_mailroom_allowed("break_room", "control_room")
+
+    def test_memo_response_uses_real_newlines(self) -> None:
+        header = self.pipeline.mailroom_header("Navigator", "Control Room", "System Health")
+        self.assertIn("\nSubject: System Health\n", header)
+        self.assertNotIn("\\n", header)
+
+        text = self.pipeline.memo_get_text(
+            {
+                "memo_id": "memo_1",
+                "from_room": "break_room",
+                "to_room": "control_room",
+                "to_persona": "Navigator",
+                "subject": "System Health",
+            },
+            "How is system health?",
+        )
+        self.assertIn("\nFrom: break_room\n", text)
+        self.assertNotIn("\\n", text)
 
     def test_session_capability_question_gets_deterministic_answer(self) -> None:
         routed = self.pipeline.route_user_request("default", "can you create sessions?")

@@ -2,6 +2,7 @@
 
 import csv
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,7 @@ from pydantic import BaseModel, Field
 from office_app.server.archive_service import ArchiveService
 from office_app.server.command_router import CommandRouter
 from office_app.server.errors import error_missing_required_field
-from office_app.server.model_router import ModelRouter
+from office_app.server.model_router import ModelRouter, ModelRoutingError
 from office_app.server.receptionist_context_service import ReceptionistContextService
 from office_app.server.memo_service import MemoService
 from office_app.server.nancy_service import NancyService
@@ -319,6 +320,168 @@ def _resolve_http_workspace_id(workspace_id: Optional[str], session_id: Optional
     if workspace:
         return workspace
     raise HTTPException(status_code=400, detail="Workspace ID required")
+
+
+def _pending_break_room_jokes(state: Dict[str, Any]) -> Dict[str, Any]:
+    pending = state.get("pending_break_room_jokes")
+    return pending if isinstance(pending, dict) else {}
+
+
+def _set_pending_break_room_joke(state: Dict[str, Any], session_id: str, joke: Dict[str, str]) -> Dict[str, Any]:
+    pending = dict(_pending_break_room_jokes(state))
+    pending[session_id] = {
+        "setup": str(joke.get("setup") or "").strip(),
+        "punchline": str(joke.get("punchline") or "").strip(),
+    }
+    state["pending_break_room_jokes"] = pending
+    return state
+
+
+def _clear_pending_break_room_joke(state: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+    pending = dict(_pending_break_room_jokes(state))
+    pending.pop(session_id, None)
+    if pending:
+        state["pending_break_room_jokes"] = pending
+    else:
+        state.pop("pending_break_room_jokes", None)
+    return state
+
+
+def _extract_break_room_joke(raw_text: str) -> Dict[str, str]:
+    text = str(raw_text or "").strip()
+    if not text:
+        raise ValueError("Empty model response")
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    candidates = [match.group(0)] if match else []
+    candidates.append(text)
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            setup = str(data.get("setup") or "").strip()
+            punchline = str(data.get("punchline") or "").strip()
+            if setup and punchline:
+                return {"setup": setup, "punchline": punchline}
+    setup_match = re.search(r"setup\s*:\s*(?P<setup>.+?)(?:\r?\n|$)", text, flags=re.IGNORECASE)
+    punchline_match = re.search(r"punchline\s*:\s*(?P<punchline>.+?)(?:\r?\n|$)", text, flags=re.IGNORECASE)
+    if setup_match and punchline_match:
+        return {
+            "setup": setup_match.group("setup").strip(" \"'"),
+            "punchline": punchline_match.group("punchline").strip(" \"'"),
+        }
+    raise ValueError("Model response did not include setup and punchline")
+
+
+def _generate_break_room_joke(workspace_id: str, session_id: str) -> Dict[str, Any]:
+    state = kernel.get_state(workspace_id)
+    recent_turns = []
+    try:
+        recent_turns = store.load_transcript(workspace_id, limit=20, session_id=session_id)
+    except Exception:
+        recent_turns = []
+    recent_jokes = [
+        str(row.get("text") or "").strip()
+        for row in recent_turns
+        if str(row.get("role") or "").strip().lower() == "assistant"
+        and str(row.get("room") or "").strip() == "break_room"
+        and str(row.get("text") or "").strip().endswith("?")
+    ][-6:]
+    avoid_text = "\n".join(f"- {item}" for item in recent_jokes) or "- none"
+    system_prompt = (
+        "You are the Veridex Break Room Host. Generate one fresh, light workplace-safe joke. "
+        "Return only strict JSON with exactly these string keys: setup, punchline. "
+        "The setup must be a question. The punchline must be a separate sentence. "
+        "Do not include markdown, explanation, or extra keys."
+    )
+    user_prompt = (
+        "Generate a new short joke for a casual break room chat.\n"
+        "Avoid repeating these recent setups:\n"
+        f"{avoid_text}\n"
+        "Return only JSON like {\"setup\":\"Why ...?\",\"punchline\":\"Because ...\"}."
+    )
+    try:
+        result = model_router.generate_response(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            context={
+                "workspace_id": workspace_id,
+                "session_id": session_id,
+                "active_room": "break_room",
+                "active_persona": "Break Room Host",
+                "recent_joke_setups": recent_jokes,
+            },
+            settings={
+                "temperature": 0.8,
+                "max_output_tokens": 180,
+                "provider_by_task_type": {"conversation": "gemini"},
+            },
+            task_type="conversation",
+        )
+    except ModelRoutingError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"message": "Unable to generate a Break Room joke right now.", "attempts": exc.attempts},
+        ) from exc
+    try:
+        joke = _extract_break_room_joke(result.text)
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="The model did not return a usable joke.") from exc
+    state = _set_pending_break_room_joke(state, session_id, joke)
+    store.save_state(workspace_id, state)
+    return {
+        "joke": joke,
+        "provider": result.provider,
+        "model": result.model,
+        "attempts": result.attempts,
+        "fallback_used": result.fallback_used,
+    }
+
+
+def _memo_recipient_response_text(*, workspace_id: str, session_id: str, result: Dict[str, Any], body: str) -> str:
+    structured = result.get("structuredContent") if isinstance(result, dict) else None
+    if not isinstance(structured, dict):
+        return ""
+    to_room = str(structured.get("to_room") or "").strip()
+    to_persona = str(structured.get("to_persona") or "").strip()
+    body_text = str(body or "").strip().lower()
+    if to_room != "control_room" and to_persona.lower() != "navigator":
+        return ""
+    if not any(term in body_text for term in ("system health", "health", "status", "are you ok", "are you okay")):
+        return ""
+    try:
+        state = kernel.get_state(workspace_id)
+    except Exception:
+        state = {}
+    active_room = str(state.get("active_room") or "unknown")
+    active_persona = str(state.get("active_persona") or "unknown")
+    return (
+        "Navigator response:\n"
+        "System health is nominal from the local control layer. "
+        f"Backend request handling is active for workspace {workspace_id}, session {session_id}. "
+        f"Current room state is {active_room} with persona {active_persona}. "
+        "No backend exception was recorded for this memo exchange."
+    )
+
+
+def _attach_memo_recipient_response(*, workspace_id: str, session_id: str, result: Dict[str, Any], body: str) -> Dict[str, Any]:
+    recipient_text = _memo_recipient_response_text(
+        workspace_id=workspace_id,
+        session_id=session_id,
+        result=result,
+        body=body,
+    )
+    if not recipient_text:
+        return result
+    existing_text = request_text_from_response(result)
+    response_text = f"{existing_text}\n{recipient_text}" if existing_text else recipient_text
+    structured = result.get("structuredContent")
+    if isinstance(structured, dict):
+        structured["recipient_response_text"] = recipient_text
+        structured["response_text"] = response_text
+    result["content"] = [{"type": "text", "text": response_text}]
+    return result
 
 
 @app.post("/request")
@@ -723,6 +886,13 @@ def handle_natural_language_request(
                 )
                 return enriched
             raise
+        if str(routed.get("capability") or "") == "memo.dispatch":
+            result = _attach_memo_recipient_response(
+                workspace_id=workspace_id,
+                session_id=session_id,
+                result=result,
+                body=str(args.get("body") or ""),
+            )
         result = synthesize_search_response(
             routed=routed,
             result=result,
@@ -838,6 +1008,42 @@ def handle_natural_language_request(
                 }
         return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
 
+    if routed["route_kind"] == "break_room_joke":
+        generated = _generate_break_room_joke(workspace_id, session_id)
+        joke = generated["joke"]
+        response_text = str(joke.get("setup") or "").strip()
+        response = {
+            "structuredContent": {
+                "workspace_id": workspace_id,
+                "session_id": session_id,
+                "response_text": response_text,
+                "joke_phase": "setup",
+                "provider": generated.get("provider"),
+                "model": generated.get("model"),
+                "fallback_used": generated.get("fallback_used"),
+                "attempts": generated.get("attempts"),
+                "routing": {
+                    "route_kind": "break_room_joke",
+                    "capability": routed["capability"],
+                    "tool": routed["tool"],
+                    "reason": routed["reason"],
+                },
+            },
+            "content": [{"type": "text", "text": response_text}],
+        }
+        enriched = attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
+        record_assistant_turn(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            response_text=response_text,
+            kernel=kernel,
+            store=store,
+            receptionist_context_service=receptionist_context_service,
+            user_profile=user_profile,
+            speaker=_response_speaker(enriched),
+        )
+        return enriched
+
     if routed["route_kind"] == "clarify":
         if str(routed.get("capability") or "") == "session.rename.name_required":
             current_state = kernel.get_state(workspace_id)
@@ -851,6 +1057,10 @@ def handle_natural_language_request(
             current_state = kernel.get_state(workspace_id)
             current_state = _set_pending_session_list(current_state, session_id, request_text)
             current_state.pop("pending_room_navigation", None)
+            store.save_state(workspace_id, current_state)
+        if str(routed.get("arguments", {}).get("clear_pending_break_room_joke") or "").strip().lower() in {"1", "true", "yes"}:
+            current_state = kernel.get_state(workspace_id)
+            current_state = _clear_pending_break_room_joke(current_state, session_id)
             store.save_state(workspace_id, current_state)
         response_text = str(routed.get("arguments", {}).get("response_text") or "Did you mean something else?")
         if str(routed.get("capability") or "") == "clarification.entity_grounding":

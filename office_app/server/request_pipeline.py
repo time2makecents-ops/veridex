@@ -184,6 +184,10 @@ class RequestPipeline:
         "what behavior memories are saved now",
         "what room behavior memories are saved now",
     )
+    MEMO_DISPATCH_RE = re.compile(
+        r"^(?:please\s+)?(?:send|file|dispatch)\s+(?:a\s+)?memo\s+to\s+(?P<target>[^.?!:;,]+)[.?!:;,-]*\s*(?P<body>.*)$",
+        re.IGNORECASE,
+    )
     ROOM_NAVIGATION_PREFIXES = (
         "go to ",
         "go back to ",
@@ -210,6 +214,11 @@ class RequestPipeline:
         "we should",
         "help me",
         "maybe",
+    )
+    NON_NAVIGATION_GO_TO_PATTERNS = (
+        re.compile(r"\bwhy\s+did\b.+\bgo\s+to\b", re.IGNORECASE),
+        re.compile(r"\byou\s+asked\b.+\bgo\s+to\b", re.IGNORECASE),
+        re.compile(r"\bthe\s+pun\b.+\bgo\s+to\b", re.IGNORECASE),
     )
     SEARCH_WEB_HINTS = (
         "search the internet",
@@ -439,6 +448,29 @@ class RequestPipeline:
         "list all of them",
         "all of them",
         "specific offices",
+    )
+    BREAK_ROOM_JOKE_HINTS = (
+        "tell me a joke",
+        "tell me another joke",
+        "tell me another one",
+        "tell us a joke",
+        "say something funny",
+        "give me a joke",
+        "got any jokes",
+        "do you know any jokes",
+        "make me laugh",
+    )
+    BREAK_ROOM_AFFIRMATIVE_HINTS = (
+        "yes",
+        "yeah",
+        "yep",
+        "sure",
+        "ok",
+        "okay",
+        "please",
+        "another",
+        "one more",
+        "tell me another",
     )
     OCR_EXPLICIT_HINTS = (
         "ocr",
@@ -744,12 +776,6 @@ class RequestPipeline:
                 detail="Break Room is non-operational. Memo dispatch is not allowed to break_room.",
             )
 
-        if from_room == "break_room":
-            raise HTTPException(
-                status_code=403,
-                detail="Break Room is non-operational. Memo dispatch is not allowed from break_room.",
-            )
-
         if from_room == "vr_room":
             vr_policy = policies.get("vr_room", {})
             if not vr_policy.get("affects_other_rooms", False):
@@ -819,6 +845,7 @@ class RequestPipeline:
         )
         normalized = re.sub(r"^back\s+to\s+", "", normalized)
         normalized = normalized.strip(" .,!?:;")
+        normalized = re.sub(r"^(?:the|a|an)\s+", "", normalized).strip()
         if not normalized:
             return None
 
@@ -1079,6 +1106,30 @@ class RequestPipeline:
                 **session_objects_route,
             }
 
+        memo_dispatch_route = self.route_memo_dispatch_request(workspace_id, request_text)
+        if memo_dispatch_route is not None:
+            if "route_kind" in memo_dispatch_route:
+                return {
+                    "workspace_id": workspace_id,
+                    "request": request_text,
+                    **memo_dispatch_route,
+                }
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **memo_dispatch_route,
+            }
+
+        break_room_joke_route = self.route_break_room_joke_request(
+            workspace_id,
+            request_text,
+            recent_turns=recent_turns,
+            session_id=session_id,
+        )
+        if break_room_joke_route is not None:
+            return break_room_joke_route
+
         room_memory_list_route = self.route_room_memory_list_request(workspace_id, request_text)
         if room_memory_list_route is not None:
             return {
@@ -1279,6 +1330,7 @@ class RequestPipeline:
 
     def resolve_room_reference(self, room_text: str) -> Optional[Dict[str, Any]]:
         normalized = normalize_room_text(room_text)
+        normalized_without_article = re.sub(r"^(?:the|a|an)\s+", "", normalized).strip()
         if not normalized:
             return None
 
@@ -1292,7 +1344,7 @@ class RequestPipeline:
                 normalize_room_text(title.replace("Department", "").replace("department", "")),
                 normalize_room_text(room_id.replace("_department", "").replace("_room", "")),
             }
-            if normalized in aliases:
+            if normalized in aliases or normalized_without_article in aliases:
                 return room
 
         route = self.recommend_room(room_text)
@@ -1567,6 +1619,193 @@ class RequestPipeline:
             if any(term in text for term in ("rooms", "departments", "offices", "places you can go", "places i can go")):
                 return True
         return False
+
+    def route_memo_dispatch_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip())
+        if not text:
+            return None
+        match = self.MEMO_DISPATCH_RE.match(text)
+        if not match:
+            return None
+        target_text = re.sub(r"^(?:the|a|an)\s+", "", str(match.group("target") or "").strip(), flags=re.IGNORECASE)
+        body = str(match.group("body") or "").strip(" .")
+        if not target_text:
+            return {
+                "route_kind": "clarify",
+                "capability": "memo.dispatch.target_required",
+                "tool": "office.capability_info",
+                "arguments": {"response_text": "Who should I send the memo to?"},
+                "reason": "Memo dispatch request did not include a destination.",
+            }
+        if not body:
+            return {
+                "route_kind": "clarify",
+                "capability": "memo.dispatch.body_required",
+                "tool": "office.capability_info",
+                "arguments": {"response_text": f"What should the memo to {target_text} say?"},
+                "reason": "Memo dispatch request did not include a body.",
+            }
+
+        target_room = self.resolve_memo_target_room(target_text)
+        if target_room is None:
+            return {
+                "route_kind": "clarify",
+                "capability": "memo.dispatch.target_unknown",
+                "tool": "office.capability_info",
+                "arguments": {"response_text": f"I can send a memo, but I could not identify the destination: {target_text}."},
+                "reason": "Memo dispatch destination did not match a known room or persona.",
+            }
+        room_id = str(target_room.get("id") or "").strip()
+        persona = str(target_room.get("default_persona") or "").strip()
+        return {
+            "capability": "memo.dispatch",
+            "tool": "mailroom.dispatch",
+            "arguments": {
+                "workspace_id": workspace_id,
+                "to_room": room_id,
+                "body": body,
+                "explicit_persona": persona or None,
+            },
+            "reason": f"Matched a memo dispatch request to {target_room.get('title') or room_id}.",
+        }
+
+    def resolve_memo_target_room(self, target_text: str) -> Optional[Dict[str, Any]]:
+        normalized = normalize_room_text(target_text)
+        if normalized in {"navigator", "control", "control room"}:
+            return validate_room("control_room")
+        for room in rooms_payload():
+            persona = normalize_room_text(str(room.get("default_persona") or ""))
+            if normalized and normalized == persona:
+                return room
+        return self.resolve_room_reference(target_text)
+
+    def route_break_room_joke_request(
+        self,
+        workspace_id: str,
+        request_text: str,
+        *,
+        recent_turns: Optional[List[Dict[str, Any]]] = None,
+        session_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        ctx = self.current_context(workspace_id)
+        active_room = str(ctx.get("active_room") or "").strip()
+        active_persona = str(ctx.get("active_persona") or "Break Room Host").strip() or "Break Room Host"
+        if active_room != "break_room":
+            return None
+
+        if self.is_explicit_room_navigation(request_text):
+            return None
+
+        turns = recent_turns or []
+        text = re.sub(r"\s+", " ", request_text.lower().strip().rstrip("?!."))
+        if self.recent_break_room_joke_asked_for_another(turns) and self.is_break_room_affirmative(text):
+            return self.break_room_joke_generate_route(
+                workspace_id=workspace_id,
+                request_text=request_text,
+                active_room=active_room,
+                active_persona=active_persona,
+                reason="Generate another Break Room joke after user accepted the offer.",
+            )
+
+        pending_joke = self.pending_break_room_joke(workspace_id=workspace_id, session_id=session_id)
+        if pending_joke is not None:
+            response_text = self.break_room_punchline_response_text(pending_joke, request_text)
+            return {
+                "route_kind": "clarify",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                "capability": "break_room.joke.punchline",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": response_text,
+                    "active_room": active_room,
+                    "active_persona": active_persona,
+                    "joke_phase": "punchline",
+                    "clear_pending_break_room_joke": True,
+                },
+                "reason": "Answered the user's guess after a pending Break Room joke setup.",
+            }
+
+        if not text or not any(hint in text for hint in self.BREAK_ROOM_JOKE_HINTS):
+            return None
+
+        return self.break_room_joke_generate_route(
+            workspace_id=workspace_id,
+            request_text=request_text,
+            active_room=active_room,
+            active_persona=active_persona,
+            reason="Generate a Break Room joke and show only the setup.",
+        )
+
+    def break_room_joke_generate_route(
+        self,
+        *,
+        workspace_id: str,
+        request_text: str,
+        active_room: str,
+        active_persona: str,
+        reason: str,
+    ) -> Dict[str, Any]:
+        return {
+            "route_kind": "break_room_joke",
+            "workspace_id": workspace_id,
+            "request": request_text,
+            "capability": "break_room.joke.generate",
+            "tool": "office.ai_generate",
+            "arguments": {
+                "active_room": active_room,
+                "active_persona": active_persona,
+                "joke_phase": "setup",
+            },
+            "reason": reason,
+        }
+
+    def recent_break_room_joke_asked_for_another(self, recent_turns: List[Dict[str, Any]]) -> bool:
+        for row in reversed(recent_turns[-4:]):
+            if str(row.get("role") or "").strip().lower() != "assistant":
+                continue
+            return "want another one?" in str(row.get("text") or "").lower()
+        return False
+
+    def is_break_room_affirmative(self, text: str) -> bool:
+        if not text:
+            return False
+        return text in self.BREAK_ROOM_AFFIRMATIVE_HINTS or any(hint in text for hint in self.BREAK_ROOM_AFFIRMATIVE_HINTS)
+
+    def pending_break_room_joke(self, *, workspace_id: str, session_id: Optional[str]) -> Optional[Dict[str, str]]:
+        if not session_id:
+            return None
+        try:
+            state = self.kernel.get_state(workspace_id)
+        except Exception:
+            return None
+        pending_by_session = state.get("pending_break_room_jokes")
+        if not isinstance(pending_by_session, dict):
+            return None
+        pending = pending_by_session.get(session_id)
+        if not isinstance(pending, dict):
+            return None
+        setup = str(pending.get("setup") or "").strip()
+        punchline = str(pending.get("punchline") or "").strip()
+        if not setup or not punchline:
+            return None
+        return {"setup": setup, "punchline": punchline}
+
+    def break_room_punchline_response_text(self, joke: Dict[str, str], request_text: str) -> str:
+        if self.break_room_guess_matches_punchline(joke, request_text):
+            return f"Exactly. {joke['punchline']}\n\nWant another one?"
+        return f"{joke['punchline']}\n\nWant another one?"
+
+    def break_room_guess_matches_punchline(self, joke: Dict[str, str], request_text: str) -> bool:
+        guess = normalize_room_text(request_text)
+        punchline = normalize_room_text(joke["punchline"])
+        if not guess:
+            return False
+        if guess in punchline or punchline in guess:
+            return True
+        punchline_words = {word for word in punchline.split() if len(word) > 3}
+        guess_words = {word for word in guess.split() if len(word) > 3}
+        return bool(punchline_words) and len(punchline_words & guess_words) >= max(2, len(punchline_words) // 2)
 
     def capability_question_kind(self, request_text: str) -> Optional[str]:
         text = request_text.lower().strip()
@@ -2213,7 +2452,12 @@ class RequestPipeline:
         text = request_text.strip().lower()
         if not text:
             return False
+        if self.is_non_navigation_go_to_context(text):
+            return False
         return any(text.startswith(prefix) for prefix in self.ROOM_NAVIGATION_PREFIXES) or self.ROOM_NAVIGATION_RE.search(text) is not None
+
+    def is_non_navigation_go_to_context(self, text: str) -> bool:
+        return any(pattern.search(text) for pattern in self.NON_NAVIGATION_GO_TO_PATTERNS)
 
     def extract_location(self, request_text: str) -> Optional[str]:
         match = re.search(r"\bin\s+([A-Za-z][A-Za-z0-9 .,'&-]{1,60})", request_text, re.IGNORECASE)
@@ -2373,7 +2617,7 @@ class RequestPipeline:
         }
 
     def mailroom_header(self, to_persona: str, dest_room_title: str, subject: str) -> str:
-        return f"Memo filed to: {to_persona} ({dest_room_title})\\nSubject: {subject}\\n"
+        return f"Memo filed to: {to_persona} ({dest_room_title})\nSubject: {subject}\n"
 
     def mailroom_response(
         self,
@@ -2410,10 +2654,10 @@ class RequestPipeline:
 
     def memo_get_text(self, obj: Dict[str, Any], body: str) -> str:
         return (
-            f"Memo {obj.get('memo_id')}\\n"
-            f"From: {obj.get('from_room')}\\n"
-            f"To: {obj.get('to_room')} ({obj.get('to_persona')})\\n"
-            f"Subject: {obj.get('subject')}\\n\\n"
+            f"Memo {obj.get('memo_id')}\n"
+            f"From: {obj.get('from_room')}\n"
+            f"To: {obj.get('to_room')} ({obj.get('to_persona')})\n"
+            f"Subject: {obj.get('subject')}\n\n"
             f"{body}"
         )
 

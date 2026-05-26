@@ -31,6 +31,30 @@ from office_app.server.search_service import SearchServiceError
 
 
 class SessionRoutingTests(unittest.TestCase):
+    def test_navigator_health_memo_attaches_recipient_response(self) -> None:
+        result = {
+            "structuredContent": {
+                "workspace_id": "ws_test",
+                "memo_id": "memo_1",
+                "from_room": "break_room",
+                "to_room": "control_room",
+                "to_persona": "Navigator",
+                "subject": "System Health",
+                "response_text": "Memo filed to: Navigator (Control Room)\nSubject: System Health\n",
+            },
+            "content": [{"type": "text", "text": "Memo filed to: Navigator (Control Room)\nSubject: System Health\n"}],
+        }
+        enriched = app_module._attach_memo_recipient_response(
+            workspace_id="ws_test",
+            session_id="sess_test",
+            result=result,
+            body="how is system health?",
+        )
+        text = enriched["content"][0]["text"]
+        self.assertIn("Memo filed to: Navigator", text)
+        self.assertIn("Navigator response:", text)
+        self.assertIn("System health is nominal", text)
+
     def test_grounded_entity_search_failure_fails_closed_in_sales_department(self) -> None:
         runtime_dir = Path.cwd() / "office_app" / "runtime" / "_session_routing_test_grounded_entity_search"
         workspaces_dir = runtime_dir / "workspaces"
