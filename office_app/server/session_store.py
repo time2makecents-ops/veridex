@@ -213,6 +213,19 @@ class SessionStore:
                 ).fetchall()
         return [self._row_to_record(row) for row in rows]
 
+    def list_sessions_for_workspace(self, workspace_id: str) -> list[Dict[str, Any]]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM sessions_v2
+                WHERE active_workspace_id = ?
+                ORDER BY last_active_at DESC, updated_at DESC
+                """,
+                (workspace_id,),
+            ).fetchall()
+        return [self._row_to_record(row) for row in rows]
+
     def update_session(self, session_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
         normalized: Dict[str, Any] = {}
         for key, value in updates.items():

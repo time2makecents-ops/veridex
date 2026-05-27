@@ -7,6 +7,7 @@ import unittest
 
 from fastapi import HTTPException
 
+from office_app.server.archive_service import ArchiveService
 from office_app.server.workspace_kernel import WorkspaceKernel, WorkspaceStore
 from office_app.server.user_service import UserService
 
@@ -31,6 +32,8 @@ class UserServiceTests(unittest.TestCase):
             self.assertEqual(user["name"], "Ada")
             self.assertEqual(user["display_name"], "Ada Lovelace")
             self.assertEqual(user["pin_code"], "2468")
+            self.assertEqual(user["role"], "user")
+            self.assertFalse(user["is_admin"])
             self.assertEqual(user["default_workspace_id"], result["workspace_id"])
             self.assertEqual(user["last_active_workspace_id"], result["workspace_id"])
             self.assertEqual(result["session_id"], session["session_id"])
@@ -52,8 +55,58 @@ class UserServiceTests(unittest.TestCase):
             profile = json.loads(profile_path.read_text(encoding="utf-8"))
             self.assertEqual(profile["user_id"], user["user_id"])
             self.assertEqual(profile["pin_code"], "2468")
+            self.assertEqual(profile["role"], "user")
             self.assertFalse(profile["has_face_photo"])
             self.assertEqual((user_folders[0] / "pin_code.txt").read_text(encoding="utf-8").strip(), "2468")
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_onboard_with_admin_pin_sets_admin_role(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_admin_pin"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            service = UserService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+
+            result = service.onboard_user(name="Admin", display_name="Admin", pin_code="1978")
+
+            user = result["user"]
+            self.assertEqual(user["role"], "admin")
+            self.assertTrue(user["is_admin"])
+
+            profile_path = next((runtime_dir / "users").iterdir()) / "profile.json"
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            self.assertEqual(profile["role"], "admin")
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_ensure_admin_user_creates_or_upgrades_admin_account(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_ensure_admin"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            service = UserService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+
+            created = service.ensure_admin_user()
+            self.assertEqual(created["role"], "admin")
+            self.assertTrue(created["is_admin"])
+            self.assertEqual(created["pin_code"], "1978")
+
+            upgraded = service.ensure_admin_user()
+            self.assertEqual(upgraded["role"], "admin")
+            self.assertTrue(upgraded["is_admin"])
+
+            by_pin = service.get_user_by_pin("1978")
+            self.assertEqual(by_pin["role"], "admin")
+            self.assertTrue(by_pin["is_admin"])
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 
@@ -340,6 +393,90 @@ class UserServiceTests(unittest.TestCase):
             self.assertEqual(service.store.fetch_user(created["user"]["user_id"])["last_active_session_id"], new_session_id)
             self.assertFalse((workspaces_dir / workspace_id / "sessions" / session_id).exists())
             self.assertEqual(len(service.list_sessions(created["user"]["user_id"], workspace_id=workspace_id)), 1)
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_admin_views_users_and_session_transcript(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_admin_views"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            service = UserService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+
+            admin = service.ensure_admin_user()
+            created = service.onboard_user(name="Rhea", display_name="Rhea Moss", pin_code="5588")
+            workspace_id = created["workspace_id"]
+            session_id = created["session_id"]
+            store.append_transcript(
+                workspace_id,
+                "assistant",
+                "sales_department",
+                "Transcript line for admin review.",
+                speaker="Sales Director",
+                session_id=session_id,
+            )
+            archive_service = ArchiveService(
+                workspaces_dir=workspaces_dir,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            )
+            archive_service.create_artifact(
+                workspace_id=workspace_id,
+                type="note",
+                title="Admin Review Note",
+                content="User-facing artifact for admin review.",
+            )
+
+            users = service.list_users()
+            self.assertTrue(any(row["user_id"] == admin["user_id"] for row in users))
+            self.assertTrue(any(row["user_id"] == created["user"]["user_id"] for row in users))
+
+            detail = service.get_user_admin_detail(created["user"]["user_id"])
+            self.assertEqual(detail["user"]["display_name"], "Rhea Moss")
+            self.assertEqual(len(detail["sessions"]), 1)
+            self.assertEqual(len(detail["artifacts"]), 1)
+            self.assertEqual(detail["artifacts"][0]["display_name"], "Admin Review Note")
+
+            transcript = service.get_session_transcript(user_id=created["user"]["user_id"], session_id=session_id)
+            self.assertEqual(transcript["count"], 1)
+            self.assertIn("Transcript line for admin review.", transcript["entries"][0]["text"])
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_delete_user_removes_user_sessions_and_workspace(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_delete_user"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            service = UserService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+
+            created = service.onboard_user(name="Tess", display_name="Tess Vale", pin_code="6677")
+            workspace_id = created["workspace_id"]
+            session_id = created["session_id"]
+            user_id = created["user"]["user_id"]
+            store.append_transcript(
+                workspace_id,
+                "assistant",
+                "sales_department",
+                "Session transcript to delete.",
+                speaker="Sales Director",
+                session_id=session_id,
+            )
+
+            result = service.delete_user(user_id=user_id)
+
+            self.assertEqual(result["deleted_user"]["display_name"], "Tess Vale")
+            self.assertIsNone(service.store.fetch_user(user_id))
+            self.assertEqual(service.sessions.list_sessions_for_user(user_id), [])
+            self.assertFalse((runtime_dir / "users").exists() and any((runtime_dir / "users").iterdir()))
+            self.assertFalse((workspaces_dir / workspace_id).exists())
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 

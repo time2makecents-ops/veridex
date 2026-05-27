@@ -1,10 +1,46 @@
 # VERIDEX THREAD HANDOFF
 Project: Veridex (formerly Office-App)
 Developer: JR
+Current branch: `ai_response_tuning`
+Current commit: `c76f084`
 Environment: FastAPI backend
 Purpose: Preserve system intent, architecture, and implementation state so development can continue in a new thread without design drift.
 
 ---
+
+# 0. CURRENT HANDOFF SNAPSHOT
+
+Use this when resuming on another computer.
+
+## Start
+
+```powershell
+cd C:\Office-App
+.\veridex.cmd
+```
+
+Expected launch behavior:
+- backend opens in a `cmd` window
+- frontend opens as a `node` process/window
+- this is intentional
+
+## Last verified behavior
+
+- session delete works and removes the session row plus transcript folder
+- the delete confirmation popup is intentional
+- `delete 1` on a workspace object list now deletes the actual workspace artifact
+- `what objects are saved in this session` shows session facts only
+- `what objects are saved in this workspace` shows workspace artifacts
+- `what objects are saved in this room` routes to the active room's behavior memories
+- room behavior memories and persona behavior memories are separate
+- session objects are derived from transcript facts, not stored as standalone session rows
+
+## Preserve these scope boundaries
+
+- workspace objects
+- session objects
+- room behavior memories
+- persona behavior memories
 
 # 1. SYSTEM PURPOSE
 
@@ -78,6 +114,13 @@ Rules:
 • Nancy assists with coordination, retrieval, and organization
 
 Nancy does NOT replace the command router or system authority.
+
+Implementation note:
+- room behavior memories are saved as workspace artifacts and linked to a room
+- persona behavior memories are also saved as artifacts, but they guide style rather than replace the room
+- room behavior memory lists should stay room-scoped
+- workspace object lists should stay workspace-scoped
+- session object lists should stay session-scoped
 
 ---
 

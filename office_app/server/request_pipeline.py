@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import difflib
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
 from office_app.server.conversation_planner import ConversationPlanner
+from office_app.server.governance_registry_service import GovernanceRegistryService
 from office_app.server.request_followup import RequestFollowupRouter
 from office_app.server.request_grounding import EntityGroundingRouter
 from office_app.server.persona_registry import persona_profile_for_name
@@ -67,6 +69,20 @@ def room_reference_aliases(room: Dict[str, Any]) -> List[str]:
         if normalized and normalized not in aliases:
             aliases.append(normalized)
     return aliases
+
+
+def _default_governance_registry_service() -> GovernanceRegistryService:
+    server_dir = Path(__file__).resolve().parent
+    pkg_dir = server_dir.parent
+    root_dir = pkg_dir.parent
+    return GovernanceRegistryService(
+        registry_path=pkg_dir / "backend" / "registry.csv",
+        governance_guide_path=root_dir / "01_Architecture" / "Veridex_Governance_Guide_v1.0.0.md",
+        room_state_model_path=root_dir / "01_Architecture" / "Room_State_Model_v1.0.0.md",
+        mailroom_contract_path=root_dir / "01_Architecture" / "Mailroom_Dispatch_Contract_v1.0.0.md",
+        persona_registry_path=server_dir / "persona_registry.py",
+        room_registry_path=server_dir / "room_router.py",
+    )
 
 
 class RequestPipeline:
@@ -497,6 +513,12 @@ class RequestPipeline:
         "all of them",
         "specific offices",
     )
+    ROOM_DIRECTORY_LIST_RE = re.compile(
+        r"^(?:list|show|display|give\s+me|tell\s+me)\s+"
+        r"(?:(?:all\s+)?(?:departments?\s+and\s+rooms?|rooms?\s+and\s+departments?)|"
+        r"(?:all\s+)?(?:rooms?|departments?|offices?))\b.*$",
+        re.IGNORECASE,
+    )
     BREAK_ROOM_JOKE_HINTS = (
         "tell me a joke",
         "tell me another joke",
@@ -538,6 +560,28 @@ class RequestPipeline:
         "create new session",
         "start a new session",
         "create a new session",
+    )
+    PERSONA_ROLE_HINTS = (
+        "what is your job here",
+        "what is your role here",
+        "what is your role in the app",
+        "what is your role in this app",
+        "what do you do here",
+        "what are you here for",
+        "what is your purpose here",
+        "what is your purpose in the app",
+        "what is your job in the app",
+    )
+    CONTROL_ROOM_GOVERNANCE_HINTS = (
+        "what rules are you governed by",
+        "what governs you",
+        "what rules govern the app",
+        "what are the veridex guidelines",
+        "what are the system rules",
+        "what hard rules govern the app",
+        "what gates do you enforce",
+        "what gates are active",
+        "what gates are enabled",
     )
     SESSION_INFO_HINTS = (
         "what is the name of this session",
@@ -696,6 +740,7 @@ class RequestPipeline:
         tool_names: Optional[List[str]] = None,
         tool_catalog: Optional[List[Dict[str, Any]]] = None,
         app_version: Optional[str] = None,
+        governance_registry_service: Optional[GovernanceRegistryService] = None,
     ):
         self.kernel = kernel
         self.navigator_control = navigator_control
@@ -703,6 +748,7 @@ class RequestPipeline:
         self.tool_names = tool_names or []
         self.tool_catalog = tool_catalog or []
         self.app_version = app_version or "0.0.0"
+        self.governance_registry_service = governance_registry_service or _default_governance_registry_service()
         self.conversation_planner = ConversationPlanner()
         self.intent_analyzer = RequestIntentAnalyzer(
             RequestIntentConfig(
@@ -1225,6 +1271,14 @@ class RequestPipeline:
                 **session_route,
                 }
 
+        persona_role_route = self.route_persona_role_request(workspace_id, request_text)
+        if persona_role_route is not None:
+            return persona_role_route
+
+        governance_route = self.route_control_room_governance_request(workspace_id, request_text)
+        if governance_route is not None:
+            return governance_route
+
         object_scope_clarification = self.route_object_scope_clarification(request_text)
         if object_scope_clarification is not None:
             return {
@@ -1629,7 +1683,7 @@ class RequestPipeline:
             return None
         if self.is_explicit_room_navigation(text):
             return None
-        direct_match = any(hint in text for hint in self.ROOM_DIRECTORY_HINTS)
+        direct_match = any(hint in text for hint in self.ROOM_DIRECTORY_HINTS) or self.ROOM_DIRECTORY_LIST_RE.match(text) is not None
         followup_match = any(hint in text for hint in self.ROOM_DIRECTORY_FOLLOWUP_HINTS)
         if not direct_match and not (followup_match and self.recent_context_was_room_directory(recent_turns or [])):
             return None
@@ -2264,6 +2318,107 @@ class RequestPipeline:
             "reason": "Matched a room status query.",
         }
 
+    def route_persona_role_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip().lower())
+        if not text:
+            return None
+        if not any(hint in text for hint in self.PERSONA_ROLE_HINTS):
+            return None
+        ctx = self.current_context(workspace_id)
+        active_room = str(ctx.get("active_room") or "lobby")
+        active_persona = str(ctx.get("active_persona") or "Receptionist")
+        profile = dict(ctx.get("active_persona_profile") or {})
+        room = validate_room(active_room)
+        purpose = str(profile.get("purpose") or "").strip()
+        style = str(profile.get("style") or "").strip()
+        response_text = (
+            f"I am {active_persona} in {room.get('title')}. "
+            f"My role here is {purpose or 'to operate within this room’s responsibilities.'}"
+        )
+        if style:
+            response_text += f" My operating style is {style}."
+        return {
+            "route_kind": "clarify",
+            "workspace_id": workspace_id,
+            "request": request_text,
+            "capability": "room.persona_role",
+            "tool": "office.capability_info",
+            "arguments": {
+                "response_text": response_text,
+                "speaker": active_persona,
+                "active_room": active_room,
+                "active_persona": active_persona,
+            },
+            "reason": "Answered a room/persona role question from the authoritative room and persona registry.",
+        }
+
+    def route_control_room_governance_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip().lower())
+        if not text:
+            return None
+        if not any(hint in text for hint in self.CONTROL_ROOM_GOVERNANCE_HINTS):
+            return None
+        ctx = self.current_context(workspace_id)
+        active_room = str(ctx.get("active_room") or "lobby")
+        active_persona = str(ctx.get("active_persona") or "Receptionist")
+        if active_room != "control_room" or active_persona != "Navigator":
+            return None
+
+        gate_state = {}
+        try:
+            gate_state = dict((self.kernel.get_state(workspace_id) or {}).get("gates") or {})
+        except Exception:
+            gate_state = {}
+        active_workspace_gates = [name for name, enabled in gate_state.items() if bool(enabled)]
+        registry_gates = self.governance_registry_service.active_gate_objects()
+        registry_gate_names = [str(row.get("object_id") or "").strip() for row in registry_gates if str(row.get("object_id") or "").strip()]
+
+        registry_path = str(self.governance_registry_service.registry_path).replace("\\", "/")
+        governance_guide_path = str(self.governance_registry_service.governance_guide_path).replace("\\", "/")
+        room_state_model_path = str(self.governance_registry_service.room_state_model_path).replace("\\", "/")
+        mailroom_contract_path = str(self.governance_registry_service.mailroom_contract_path).replace("\\", "/")
+        persona_registry_path = str(self.governance_registry_service.persona_registry_path).replace("\\", "/")
+        room_registry_path = str(self.governance_registry_service.room_registry_path).replace("\\", "/")
+
+        if "what gates" in text:
+            workspace_gate_text = ", ".join(active_workspace_gates) if active_workspace_gates else "none"
+            registry_gate_text = ", ".join(registry_gate_names[:8]) if registry_gate_names else "none"
+            response_text = (
+                f"The currently active workspace gates are {workspace_gate_text}. "
+                f"The broader governance gate definitions are in {registry_path}, including {registry_gate_text}."
+            )
+        elif "guidelines" in text or "system rules" in text or "hard rules" in text or "rules govern the app" in text:
+            response_text = (
+                "Veridex follows a few core rules: one active room at a time, no implicit room switching, "
+                "Navigator acts as the governance authority, tool-backed actions must be real, "
+                f"mailroom dispatch does not change the active room, and active workspace gates currently include {', '.join(active_workspace_gates) or 'none'}. "
+                f"The user-facing summary is in {governance_guide_path}. "
+                f"The canonical enforcement sources remain {registry_path}, {room_state_model_path}, {mailroom_contract_path}, {persona_registry_path}, and {room_registry_path}."
+            )
+        else:
+            response_text = (
+                f"As Navigator, I am governed by the active governance registry in {registry_path}, "
+                f"the room-state rules in {room_state_model_path}, "
+                f"the mailroom contract in {mailroom_contract_path}, "
+                f"and the active workspace gates ({', '.join(active_workspace_gates) or 'none'})."
+            )
+        return {
+            "route_kind": "clarify",
+            "workspace_id": workspace_id,
+            "request": request_text,
+            "capability": "control_room.governance",
+            "tool": "office.capability_info",
+            "arguments": {
+                "response_text": response_text,
+                "speaker": "Navigator",
+                "active_room": active_room,
+                "active_persona": active_persona,
+                "workspace_gates": active_workspace_gates,
+                "registry_gates": registry_gate_names,
+            },
+            "reason": "Answered a Control Room governance question from the governance registry and active workspace state.",
+        }
+
     def route_contextual_followup(
         self,
         workspace_id: str,
@@ -2668,8 +2823,14 @@ class RequestPipeline:
         to_persona: str,
         subject: str,
         dest_room_title: str,
+        reply_text: str = "",
+        reply_room: str = "",
+        reply_persona: str = "",
+        is_refusal: bool = False,
+        closure_appended: bool = False,
     ) -> Dict[str, Any]:
         header = self.mailroom_header(to_persona, dest_room_title, subject)
+        response_text = f"{header}\n{reply_text}".rstrip() if str(reply_text or "").strip() else header
         return {
             "structuredContent": {
                 "workspace_id": workspace_id,
@@ -2678,11 +2839,15 @@ class RequestPipeline:
                 "to_room": to_room,
                 "to_persona": to_persona,
                 "subject": subject,
-                "is_refusal": False,
-                "closure_appended": False,
-                "response_text": header,
+                "speaker": str(reply_persona or to_persona or "").strip(),
+                "reply_text": str(reply_text or "").strip(),
+                "reply_room": str(reply_room or "").strip(),
+                "reply_persona": str(reply_persona or "").strip(),
+                "is_refusal": bool(is_refusal),
+                "closure_appended": bool(closure_appended),
+                "response_text": response_text,
             },
-            "content": [{"type": "text", "text": header}],
+            "content": [{"type": "text", "text": response_text}],
         }
 
     def memos_list_response(self, workspace_id: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -2692,13 +2857,23 @@ class RequestPipeline:
         }
 
     def memo_get_text(self, obj: Dict[str, Any], body: str) -> str:
-        return (
+        header = (
             f"Memo {obj.get('memo_id')}\n"
             f"From: {obj.get('from_room')}\n"
             f"To: {obj.get('to_room')} ({obj.get('to_persona')})\n"
             f"Subject: {obj.get('subject')}\n\n"
-            f"{body}"
         )
+        reply_text = str(obj.get("reply_text") or "").strip()
+        if reply_text:
+            reply_persona = str(obj.get("reply_persona") or obj.get("to_persona") or "").strip()
+            reply_room = str(obj.get("reply_room") or obj.get("to_room") or "").strip()
+            return (
+                f"{header}"
+                f"{body}\n\n"
+                f"Response from {reply_persona} ({reply_room}):\n"
+                f"{reply_text}"
+            )
+        return f"{header}{body}"
 
     def memo_get_response(self, obj: Dict[str, Any], body: str) -> Dict[str, Any]:
         return {

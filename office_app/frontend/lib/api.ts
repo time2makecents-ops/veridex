@@ -5,6 +5,9 @@ export type LobbyResponse = {
     user?: {
       display_name?: string;
       name?: string;
+      user_id?: string;
+      role?: string;
+      is_admin?: boolean;
     };
     [key: string]: unknown;
   };
@@ -84,6 +87,42 @@ export type WorkspaceRecord = {
   last_active_at?: string;
   last_session_id?: string;
   [key: string]: unknown;
+};
+
+export type UserRecord = {
+  user_id: string;
+  name?: string;
+  display_name?: string;
+  pin_code?: string;
+  role?: string;
+  is_admin?: boolean;
+  onboarding_complete?: boolean;
+  default_workspace_id?: string;
+  last_active_workspace_id?: string;
+  last_active_session_id?: string;
+  created_at?: string;
+  updated_at?: string;
+  session_count?: number;
+  workspace_count?: number;
+  [key: string]: unknown;
+};
+
+export type AdminUserDetail = {
+  user: UserRecord;
+  sessions: SessionRecord[];
+  workspaces: WorkspaceRecord[];
+  artifacts?: Array<{
+    artifact_id: string;
+    workspace_id?: string;
+    display_name?: string;
+    artifact_type?: string;
+    content_preview?: string;
+    updated_at?: string;
+    created_at?: string;
+    [key: string]: unknown;
+  }>;
+  user_folder?: string;
+  profile_path?: string;
 };
 
 type FileListEnvelope = {
@@ -460,4 +499,67 @@ export async function resetTestData(): Promise<void> {
   if (!response.ok) {
     throw new Error(await readResponseError(response));
   }
+}
+
+export async function getCurrentUser(): Promise<UserRecord> {
+  const response = await authorizedGetJson<LobbyResponse>("/me");
+  const structured = response.structuredContent as { user?: UserRecord } | undefined;
+  if (!structured?.user || typeof structured.user.user_id !== "string") {
+    throw new Error("Unable to load current user.");
+  }
+  return structured.user;
+}
+
+export async function adminListUsers(): Promise<UserRecord[]> {
+  const response = await authorizedGetJson<LobbyResponse>("/admin/users");
+  const structured = response.structuredContent as { users?: UserRecord[] } | undefined;
+  return Array.isArray(structured?.users) ? structured.users : [];
+}
+
+export async function adminCreateUser(payload: {
+  name: string;
+  display_name: string;
+  pin_code: string;
+  face_photo_data?: string;
+}): Promise<LobbyResponse> {
+  const sessionId = typeof window === "undefined" ? "" : window.localStorage.getItem("veridex.session_id") ?? "";
+  if (!sessionId) {
+    throw new Error("Session ID required");
+  }
+  return postJson<LobbyResponse>("/admin/users", payload, { "X-Session-Id": sessionId });
+}
+
+export async function adminGetUser(userId: string): Promise<AdminUserDetail> {
+  const response = await authorizedGetJson<LobbyResponse>(`/admin/users/${encodeURIComponent(userId)}`);
+  const structured = response.structuredContent as AdminUserDetail | undefined;
+  if (!structured?.user || typeof structured.user.user_id !== "string") {
+    throw new Error("Unable to load user detail.");
+  }
+  return structured;
+}
+
+export async function adminDeleteUser(userId: string): Promise<LobbyResponse> {
+  const sessionId = typeof window === "undefined" ? "" : window.localStorage.getItem("veridex.session_id") ?? "";
+  if (!sessionId) {
+    throw new Error("Session ID required");
+  }
+  const response = await fetchJsonWithTimeout(`/admin/users/${encodeURIComponent(userId)}`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Session-Id": sessionId,
+    },
+  });
+  if (!response.ok) {
+    throw new Error(await readResponseError(response));
+  }
+  return (await response.json()) as LobbyResponse;
+}
+
+export async function adminLoadTranscript(userId: string, targetSessionId: string, limit = 400): Promise<TranscriptEntry[]> {
+  const response = await authorizedGetJson<LobbyResponse>(
+    `/admin/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(targetSessionId)}/transcript?limit=${limit}`,
+  );
+  const structured = response.structuredContent as { entries?: TranscriptEntry[] } | undefined;
+  return Array.isArray(structured?.entries) ? structured.entries : [];
 }

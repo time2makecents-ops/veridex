@@ -11,6 +11,7 @@ USER_COLUMNS = (
     "name",
     "display_name",
     "pin_code",
+    "role",
     "face_photo_data",
     "onboarding_complete",
     "default_workspace_id",
@@ -51,6 +52,7 @@ class UserStore:
                     name TEXT NOT NULL,
                     display_name TEXT NOT NULL,
                     pin_code TEXT NOT NULL UNIQUE,
+                    role TEXT NOT NULL DEFAULT 'user',
                     face_photo_data TEXT,
                     onboarding_complete INTEGER NOT NULL DEFAULT 0,
                     default_workspace_id TEXT NOT NULL,
@@ -63,6 +65,8 @@ class UserStore:
                 """
             )
             columns = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+            if "role" not in columns:
+                conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
             if "face_photo_data" not in columns:
                 conn.execute("ALTER TABLE users ADD COLUMN face_photo_data TEXT")
             if "last_active_session_id" not in columns:
@@ -161,3 +165,46 @@ class UserStore:
         if fetched is None:
             raise LookupError(f"User not found after update: {user_id}")
         return fetched
+
+    def list_users(self) -> list[Dict[str, Any]]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM users
+                ORDER BY updated_at DESC, created_at DESC, display_name ASC
+                """
+            ).fetchall()
+        return [self._row_to_record(row) for row in rows]
+
+    def count_users_for_workspace(self, workspace_id: str) -> int:
+        with self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM users
+                WHERE default_workspace_id = ?
+                   OR last_active_workspace_id = ?
+                """,
+                (workspace_id, workspace_id),
+            ).fetchone()
+        return int(row["count"] or 0) if row is not None else 0
+
+    def delete_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        existing = self.fetch_user(user_id)
+        if existing is None:
+            return None
+
+        with self._connection() as conn:
+            result = conn.execute(
+                """
+                DELETE FROM users
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            )
+            if result.rowcount == 0:
+                raise LookupError(f"User not found: {user_id}")
+            conn.commit()
+
+        return existing

@@ -24,6 +24,12 @@ PIN_RE = re.compile(r"^\d{4}$")
 
 
 class UserService:
+    ADMIN_PIN = "1978"
+    ADMIN_ROLE = "admin"
+    DEFAULT_ROLE = "user"
+    DEFAULT_ADMIN_NAME = "Admin"
+    DEFAULT_ADMIN_DISPLAY_NAME = "Admin"
+
     def __init__(
         self,
         *,
@@ -89,6 +95,7 @@ class UserService:
     def _decorate_user(record: Dict[str, Any]) -> Dict[str, Any]:
         decorated = dict(record)
         decorated["lobby_ready"] = bool(decorated.get("onboarding_complete"))
+        decorated["is_admin"] = str(decorated.get("role") or "").strip().lower() == UserService.ADMIN_ROLE
         return decorated
 
     def _user_folder_path(self, record: Dict[str, Any]) -> Path:
@@ -120,6 +127,7 @@ class UserService:
             "name": record.get("name"),
             "display_name": record.get("display_name"),
             "pin_code": record.get("pin_code"),
+            "role": record.get("role") or self.DEFAULT_ROLE,
             "onboarding_complete": bool(record.get("onboarding_complete")),
             "default_workspace_id": record.get("default_workspace_id"),
             "last_active_workspace_id": record.get("last_active_workspace_id"),
@@ -136,6 +144,9 @@ class UserService:
         pin_code = str(record.get("pin_code") or "").strip()
         if pin_code:
             (folder / "pin_code.txt").write_text(f"{pin_code}\n", encoding="utf-8")
+
+    def _role_for_pin(self, pin: str) -> str:
+        return self.ADMIN_ROLE if str(pin or "").strip() == self.ADMIN_PIN else self.DEFAULT_ROLE
 
     def _ensure_workspace(self, workspace_id: str, label: str) -> Dict[str, Any]:
         try:
@@ -356,12 +367,14 @@ class UserService:
         now = self.utc_now()
 
         self.kernel.create_workspace(workspace_id, display_text)
+        role = self._role_for_pin(pin)
         record = self.store.insert_user(
             {
                 "user_id": user_id,
                 "name": name_text,
                 "display_name": display_text,
                 "pin_code": pin,
+                "role": role,
                 "face_photo_data": face_photo_data,
                 "onboarding_complete": True,
                 "default_workspace_id": workspace_id,
@@ -396,6 +409,26 @@ class UserService:
             "workspace_state": state,
             "mode": "onboarding_complete",
         }
+
+    def ensure_admin_user(self) -> Dict[str, Any]:
+        record = self.store.fetch_user_by_pin(self.ADMIN_PIN)
+        if record is not None:
+            if str(record.get("role") or "").strip().lower() != self.ADMIN_ROLE:
+                record = self.store.update_user(
+                    str(record["user_id"]),
+                    {
+                        "role": self.ADMIN_ROLE,
+                        "updated_at": self.utc_now(),
+                    },
+                )
+                self._sync_user_folder(record)
+            return self._decorate_user(record)
+        result = self.onboard_user(
+            name=self.DEFAULT_ADMIN_NAME,
+            display_name=self.DEFAULT_ADMIN_DISPLAY_NAME,
+            pin_code=self.ADMIN_PIN,
+        )
+        return dict(result["user"])
 
     def enter_lobby(self, *, pin_code: str) -> Dict[str, Any]:
         pin = self._normalize_pin(pin_code)
@@ -447,6 +480,53 @@ class UserService:
             raise HTTPException(status_code=404, detail="User not found.")
         return self._decorate_user(record)
 
+    def get_user(self, user_id: str) -> Dict[str, Any]:
+        record = self.store.fetch_user(str(user_id or "").strip())
+        if record is None:
+            raise HTTPException(status_code=404, detail="User not found.")
+        return self._decorate_user(record)
+
+    def list_users(self) -> list[Dict[str, Any]]:
+        rows = self.store.list_users()
+        users: list[Dict[str, Any]] = []
+        for row in rows:
+            decorated = self._decorate_user(row)
+            sessions = self.sessions.list_sessions_for_user(str(row.get("user_id") or "").strip())
+            workspace_ids = {
+                str(row.get("default_workspace_id") or "").strip(),
+                str(row.get("last_active_workspace_id") or "").strip(),
+            }
+            workspace_ids.update(str(session.get("active_workspace_id") or "").strip() for session in sessions)
+            workspace_ids.discard("")
+            decorated["session_count"] = len(sessions)
+            decorated["workspace_count"] = len(workspace_ids)
+            users.append(decorated)
+        return users
+
+    def get_user_admin_detail(self, user_id: str) -> Dict[str, Any]:
+        user = self.get_user(user_id)
+        sessions = self.sessions.list_sessions_for_user(str(user["user_id"]))
+        workspaces = self.list_user_workspaces(str(user["user_id"]))
+        workspace_ids = [str(item.get("workspace_id") or "").strip() for item in workspaces if str(item.get("workspace_id") or "").strip()]
+        artifact_rows = []
+        try:
+            from office_app.server.archive_service import ArchiveService
+
+            archive_service = ArchiveService(workspaces_dir=self.kernel.store.workspaces_dir, utc_now_fn=self.utc_now)
+            artifact_rows = archive_service.list_artifacts_across_workspaces(workspace_ids, include_archived=True)
+        except Exception:
+            artifact_rows = []
+        folder = self._user_folder_path(user)
+        profile_path = folder / "profile.json"
+        return {
+            "user": user,
+            "sessions": sessions,
+            "workspaces": workspaces,
+            "artifacts": artifact_rows,
+            "user_folder": str(folder),
+            "profile_path": str(profile_path) if profile_path.exists() else "",
+        }
+
     def resolve_workspace_for_session(self, session_id: Optional[str]) -> Optional[str]:
         if not session_id:
             return None
@@ -470,6 +550,20 @@ class UserService:
         if record is None:
             raise HTTPException(status_code=404, detail="User not found.")
         return self._decorate_user(record)
+
+    def get_session_transcript(self, *, user_id: str, session_id: str, limit: int = 400) -> Dict[str, Any]:
+        session = self.get_session(session_id)
+        if str(session.get("user_id") or "").strip() != str(user_id or "").strip():
+            raise HTTPException(status_code=404, detail="Session not found.")
+        workspace_id = str(session.get("active_workspace_id") or "").strip()
+        entries = self.kernel.store.load_transcript(workspace_id, limit=limit, session_id=session_id)
+        return {
+            "user_id": user_id,
+            "session": session,
+            "workspace_id": workspace_id,
+            "count": len(entries),
+            "entries": entries,
+        }
 
     def create_session_from_current(self, session_id: str, *, title: str, description: str = "") -> Dict[str, Any]:
         current_session = self.get_session(session_id)
@@ -602,6 +696,48 @@ class UserService:
             "replacement_session": replacement_session,
             "remaining_count": final_remaining_count,
             "created_replacement_session": created_replacement_session,
+        }
+
+    def delete_user(self, *, user_id: str) -> Dict[str, Any]:
+        record = self.store.fetch_user(str(user_id or "").strip())
+        if record is None:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        sessions = self.sessions.list_sessions_for_user(str(record["user_id"]))
+        workspace_ids = {
+            str(record.get("default_workspace_id") or "").strip(),
+            str(record.get("last_active_workspace_id") or "").strip(),
+        }
+        workspace_ids.update(str(session.get("active_workspace_id") or "").strip() for session in sessions)
+        workspace_ids.discard("")
+
+        deleted = self.store.delete_user(str(record["user_id"]))
+        if deleted is None:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        for session in sessions:
+            workspace_id = str(session.get("active_workspace_id") or "").strip()
+            session_id = str(session.get("session_id") or "").strip()
+            if workspace_id and session_id:
+                session_dir = self.kernel.store.workspace_dir(workspace_id) / "sessions" / session_id
+                shutil.rmtree(session_dir, ignore_errors=True)
+
+        shutil.rmtree(self._user_folder_path(record), ignore_errors=True)
+
+        removed_workspaces: list[str] = []
+        for workspace_id in sorted(workspace_ids):
+            if self.sessions.list_sessions_for_workspace(workspace_id):
+                continue
+            if self.store.count_users_for_workspace(workspace_id) > 0:
+                continue
+            shutil.rmtree(self.kernel.store.workspace_dir(workspace_id), ignore_errors=True)
+            self.kernel.store.unregister_workspace(workspace_id)
+            removed_workspaces.append(workspace_id)
+
+        return {
+            "deleted_user": self._decorate_user(record),
+            "deleted_session_count": len(sessions),
+            "removed_workspaces": removed_workspaces,
         }
 
     def rename_session(

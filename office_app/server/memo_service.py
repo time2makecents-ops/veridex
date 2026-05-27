@@ -60,6 +60,33 @@ class MemoService:
             "dest_room_title": dest_room["title"],
         }
 
+    def record_memo_reply(
+        self,
+        *,
+        workspace_id: str,
+        memo_id: str,
+        reply_text: str,
+        reply_room: str,
+        reply_persona: str,
+        reply_is_refusal: bool = False,
+        reply_closure_appended: bool = False,
+    ) -> Dict[str, Any]:
+        mstore = self.memo_store_for(workspace_id)
+        memos_dir = getattr(mstore, "dir", None) or self.store.memos_dir(workspace_id)
+        path = Path(memos_dir) / f"{memo_id}.json"
+        if not path.exists():
+            raise error_memo_not_found(memo_id)
+
+        obj = self._read_json(path, {})
+        obj["reply_text"] = str(reply_text or "").strip()
+        obj["reply_room"] = str(reply_room or "").strip()
+        obj["reply_persona"] = str(reply_persona or "").strip()
+        obj["replied_utc"] = self.utc_now()
+        obj["reply_is_refusal"] = bool(reply_is_refusal)
+        obj["reply_closure_appended"] = bool(reply_closure_appended)
+        path.write_text(__import__("json").dumps(obj, indent=2), encoding="utf-8")
+        return obj
+
     def list_memos(self, workspace_id: str, limit: int) -> List[Dict[str, Any]]:
         limit = max(1, min(limit, 200))
         mstore = self.memo_store_for(workspace_id)

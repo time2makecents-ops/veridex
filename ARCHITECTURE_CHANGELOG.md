@@ -1,4 +1,31 @@
 Veridex Architecture Change Log
+Version 1.3.1 - Mailroom Response Flow Clarified
+
+Date: 5/27/2026
+Status: Implemented and validated
+
+Summary
+
+Aligned the Mail Room implementation and documentation with the original contract requirement that a dispatched memo immediately returns a destination-room response.
+
+Changes
+
+- `mailroom.dispatch` now returns the memo header followed by the destination persona response.
+- memo records now persist the destination response fields for later retrieval.
+- `office.memo_get` now includes the stored response when one exists.
+- contract wording was clarified to remove the contradictory "transport only" phrase while preserving the no-canon-mutation rule.
+
+Validation
+
+Coverage includes:
+
+- memo dispatch response body generation
+- insufficiency-response fallback behavior
+- memo retrieval with stored reply text
+
+---
+
+Version 1.3.0 - Archive & Nancy Subsystems Introduced
 Version 1.3.0 — Archive & Nancy Subsystems Introduced
 
 Date: 3/11/2026

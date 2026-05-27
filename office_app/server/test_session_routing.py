@@ -8,6 +8,7 @@ import unittest
 from fastapi import HTTPException
 
 from office_app.server.app import (
+    AdminUserCreateRequest,
     LobbyOnboardRequest,
     NaturalLanguageRequest,
     RequestPipeline,
@@ -21,6 +22,11 @@ from office_app.server.app import (
     RUNTIME_DIR,
     WORKSPACES_DIR,
     LEGACY_MEMOS_DIR,
+    admin_create_user,
+    admin_delete_user,
+    admin_get_user_transcript,
+    admin_list_users,
+    current_user,
     utc_now,
     app as fastapi_app,
     handle_natural_language_request,
@@ -31,7 +37,116 @@ from office_app.server.search_service import SearchServiceError
 
 
 class SessionRoutingTests(unittest.TestCase):
-    def test_navigator_health_memo_attaches_recipient_response(self) -> None:
+    def test_admin_endpoints_require_admin_and_return_user_data(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_session_routing_test_admin_endpoints"
+        workspaces_dir = runtime_dir / "workspaces"
+        legacy_memos_dir = runtime_dir / "memos"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+        legacy_memos_dir.mkdir(parents=True, exist_ok=True)
+
+        original = {
+            "store": app_module.store,
+            "kernel": app_module.kernel,
+            "memo_service": app_module.memo_service,
+            "archive_service": app_module.archive_service,
+            "user_service": app_module.user_service,
+            "receptionist_context_service": app_module.receptionist_context_service,
+            "nancy_service": app_module.nancy_service,
+            "router": app_module.router,
+            "pipeline": app_module.pipeline,
+        }
+
+        try:
+            temp_store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_kernel = WorkspaceKernel(store=temp_store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_archive = ArchiveService(workspaces_dir=workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_user = app_module.UserService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_receptionist_context = app_module.ReceptionistContextService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_memo = MemoService(store=temp_store, legacy_memos_dir=legacy_memos_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_nancy = NancyService(
+                kernel=temp_kernel,
+                archive_service=temp_archive,
+                store=temp_store,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            )
+            temp_router = CommandRouter()
+            temp_pipeline = RequestPipeline(
+                kernel=temp_kernel,
+                navigator_control=NAVIGATOR_CONTROL,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+                tool_names=[],
+                app_version="1.3.0",
+            )
+
+            app_module.store = temp_store
+            app_module.kernel = temp_kernel
+            app_module.memo_service = temp_memo
+            app_module.archive_service = temp_archive
+            app_module.user_service = temp_user
+            app_module.receptionist_context_service = temp_receptionist_context
+            app_module.nancy_service = temp_nancy
+            app_module.router = temp_router
+            app_module.pipeline = temp_pipeline
+            app_module.refresh_handler_bindings()
+
+            admin = temp_user.ensure_admin_user()
+            normal = lobby_onboard(LobbyOnboardRequest(name="Nina", pin_code="8844"))
+            normal_session_id = normal["structuredContent"]["session_id"]
+
+            with self.assertRaises(HTTPException):
+                admin_list_users(session_id=normal_session_id)
+
+            admin_session_id = temp_user.enter_lobby(pin_code="1978")["session_id"]
+            created = admin_create_user(
+                AdminUserCreateRequest(name="Otis", display_name="Otis Vale", pin_code="7744"),
+                x_session_id=admin_session_id,
+            )
+            created_user = created["structuredContent"]["user"]
+            created_session_id = created["structuredContent"]["session_id"]
+            created_workspace_id = created["structuredContent"]["workspace_id"]
+            temp_store.append_transcript(
+                created_workspace_id,
+                "assistant",
+                "sales_department",
+                "Admin transcript review line.",
+                speaker="Sales Director",
+                session_id=created_session_id,
+            )
+
+            me = current_user(session_id=admin_session_id)
+            self.assertTrue(me["structuredContent"]["user"]["is_admin"])
+
+            users_response = admin_list_users(session_id=admin_session_id)
+            users = users_response["structuredContent"]["users"]
+            self.assertTrue(any(row["user_id"] == admin["user_id"] for row in users))
+            self.assertTrue(any(row["user_id"] == created_user["user_id"] for row in users))
+
+            transcript_response = admin_get_user_transcript(
+                created_user["user_id"],
+                created_session_id,
+                session_id=admin_session_id,
+                limit=50,
+            )
+            self.assertEqual(transcript_response["structuredContent"]["count"], 1)
+            self.assertIn("Admin transcript review line.", transcript_response["structuredContent"]["entries"][0]["text"])
+
+            delete_response = admin_delete_user(created_user["user_id"], x_session_id=admin_session_id)
+            self.assertEqual(delete_response["structuredContent"]["deleted_user"]["display_name"], "Otis Vale")
+        finally:
+            app_module.store = original["store"]
+            app_module.kernel = original["kernel"]
+            app_module.memo_service = original["memo_service"]
+            app_module.archive_service = original["archive_service"]
+            app_module.user_service = original["user_service"]
+            app_module.receptionist_context_service = original["receptionist_context_service"]
+            app_module.nancy_service = original["nancy_service"]
+            app_module.router = original["router"]
+            app_module.pipeline = original["pipeline"]
+            app_module.refresh_handler_bindings()
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_navigator_health_memo_does_not_attach_synthetic_response(self) -> None:
         result = {
             "structuredContent": {
                 "workspace_id": "ws_test",
@@ -44,16 +159,110 @@ class SessionRoutingTests(unittest.TestCase):
             },
             "content": [{"type": "text", "text": "Memo filed to: Navigator (Control Room)\nSubject: System Health\n"}],
         }
-        enriched = app_module._attach_memo_recipient_response(
-            workspace_id="ws_test",
-            session_id="sess_test",
-            result=result,
-            body="how is system health?",
-        )
-        text = enriched["content"][0]["text"]
+        text = result["content"][0]["text"]
         self.assertIn("Memo filed to: Navigator", text)
-        self.assertIn("Navigator response:", text)
-        self.assertIn("System health is nominal", text)
+        self.assertNotIn("Navigator response:", text)
+        self.assertNotIn("System health is nominal", text)
+
+    def test_control_room_governance_questions_answer_from_local_sources(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_session_routing_test_control_room_governance"
+        workspaces_dir = runtime_dir / "workspaces"
+        legacy_memos_dir = runtime_dir / "memos"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+        legacy_memos_dir.mkdir(parents=True, exist_ok=True)
+
+        original = {
+            "store": app_module.store,
+            "kernel": app_module.kernel,
+            "memo_service": app_module.memo_service,
+            "archive_service": app_module.archive_service,
+            "user_service": app_module.user_service,
+            "receptionist_context_service": app_module.receptionist_context_service,
+            "nancy_service": app_module.nancy_service,
+            "router": app_module.router,
+            "pipeline": app_module.pipeline,
+        }
+
+        try:
+            temp_store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_kernel = WorkspaceKernel(store=temp_store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_archive = ArchiveService(workspaces_dir=workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_user = app_module.UserService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_receptionist_context = app_module.ReceptionistContextService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_memo = MemoService(store=temp_store, legacy_memos_dir=legacy_memos_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_nancy = NancyService(
+                kernel=temp_kernel,
+                archive_service=temp_archive,
+                store=temp_store,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            )
+            temp_router = CommandRouter()
+            temp_pipeline = RequestPipeline(
+                kernel=temp_kernel,
+                navigator_control=NAVIGATOR_CONTROL,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+                tool_names=[],
+                app_version="1.3.0",
+            )
+
+            app_module.store = temp_store
+            app_module.kernel = temp_kernel
+            app_module.memo_service = temp_memo
+            app_module.archive_service = temp_archive
+            app_module.user_service = temp_user
+            app_module.receptionist_context_service = temp_receptionist_context
+            app_module.nancy_service = temp_nancy
+            app_module.router = temp_router
+            app_module.pipeline = temp_pipeline
+            app_module.refresh_handler_bindings()
+
+            onboard_result = None
+            for _ in range(20):
+                pin_code = f"{uuid.uuid4().int % 10000:04d}"
+                try:
+                    onboard_result = lobby_onboard(LobbyOnboardRequest(name="Mira", pin_code=pin_code))
+                    break
+                except Exception:
+                    continue
+
+            self.assertIsNotNone(onboard_result)
+            session_id = onboard_result["structuredContent"]["session_id"]
+            temp_user.remember_session_room(session_id, active_room="control_room", active_persona="Navigator")
+
+            role_response = handle_natural_language_request(
+                NaturalLanguageRequest(
+                    text="what is your role in the app?",
+                    session_id=session_id,
+                )
+            )
+            self.assertEqual(role_response["structuredContent"]["speaker"], "Navigator")
+            self.assertIn("system governance authority", role_response["structuredContent"]["response_text"].lower())
+
+            guidelines_response = handle_natural_language_request(
+                NaturalLanguageRequest(
+                    text="what are the veridex guidelines?",
+                    session_id=session_id,
+                )
+            )
+            text = guidelines_response["structuredContent"]["response_text"]
+            self.assertEqual(guidelines_response["structuredContent"]["speaker"], "Navigator")
+            self.assertIn("one active room at a time", text)
+            self.assertIn("Veridex_Governance_Guide_v1.0.0.md", text)
+            self.assertIn("registry.csv", text)
+            self.assertNotIn("don't have the specific details", text.lower())
+        finally:
+            app_module.store = original["store"]
+            app_module.kernel = original["kernel"]
+            app_module.memo_service = original["memo_service"]
+            app_module.archive_service = original["archive_service"]
+            app_module.user_service = original["user_service"]
+            app_module.receptionist_context_service = original["receptionist_context_service"]
+            app_module.nancy_service = original["nancy_service"]
+            app_module.router = original["router"]
+            app_module.pipeline = original["pipeline"]
+            app_module.refresh_handler_bindings()
+            shutil.rmtree(runtime_dir, ignore_errors=True)
 
     def test_grounded_entity_search_failure_fails_closed_in_sales_department(self) -> None:
         runtime_dir = Path.cwd() / "office_app" / "runtime" / "_session_routing_test_grounded_entity_search"

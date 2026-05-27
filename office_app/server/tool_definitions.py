@@ -49,7 +49,12 @@ VERIDEX_TOOL_DEFINITIONS = {
     "office.search_reviews": tool_definition("office.search_reviews", "search.reviews", "Search reviews.", requires_workspace=True),
     "office.search_places": tool_definition("office.search_places", "search.places", "Search places.", requires_workspace=True),
     "office.ocr_extract": tool_definition("office.ocr_extract", "document.ocr", "Extract text from a document or image.", requires_workspace=True),
-    "mailroom.dispatch": tool_definition("mailroom.dispatch", "memo.dispatch", "Send a memo to another room.", requires_workspace=True),
+    "mailroom.dispatch": tool_definition(
+        "mailroom.dispatch",
+        "memo.dispatch",
+        "Send a memo to another room and return the destination room's response.",
+        requires_workspace=True,
+    ),
     "office.memos_list": tool_definition("office.memos_list", "memo.list", "List memos.", requires_workspace=True),
     "office.memo_get": tool_definition("office.memo_get", "memo.get", "Get a memo.", requires_workspace=True),
     "office.artifact_create": tool_definition("office.artifact_create", "artifact.create", "Create an artifact.", requires_workspace=True),

@@ -135,18 +135,10 @@ function Start-Backend {
 }
 
 function Start-Frontend {
-  $nodePath = (Get-Command node -ErrorAction Stop).Source
-  foreach ($logPath in @($frontendStdoutLog, $frontendStderrLog)) {
-    if (Test-Path $logPath) {
-      Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
-    }
-  }
   Start-Process `
-    -FilePath $nodePath `
-    -ArgumentList "server.cjs" `
-    -WorkingDirectory $frontendDir `
-    -RedirectStandardOutput $frontendStdoutLog `
-    -RedirectStandardError $frontendStderrLog | Out-Null
+    -FilePath "cmd.exe" `
+    -ArgumentList "/c", 'start "Veridex Frontend" cmd /k node server.cjs' `
+    -WorkingDirectory $frontendDir | Out-Null
 }
 
 switch ($Action) {

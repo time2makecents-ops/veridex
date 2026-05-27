@@ -12,6 +12,7 @@ import {
   deleteSession,
   extractFileText,
   fileDownloadUrl,
+  getCurrentUser,
   listFiles,
   listSessions,
   listWorkspaces,
@@ -21,9 +22,10 @@ import {
   renameSession,
   uploadFile,
   type FileRecord,
-  type WorkspaceRecord,
   type SessionRecord,
   type TranscriptEntry,
+  type UserRecord,
+  type WorkspaceRecord,
 } from "@/lib/api";
 import { clearStoredSessionId, getSessionShortLabel, getStoredSessionId, setStoredSessionId } from "@/lib/session";
 import { ROOM_GROUPS, ROOMS, type RoomInfo } from "@/lib/rooms";
@@ -151,6 +153,7 @@ export default function ChatPage() {
   const [roomStatus, setRoomStatus] = useState("Waiting for room state.");
   const [backendBanner, setBackendBanner] = useState("");
   const [providerBadge, setProviderBadge] = useState<ProviderBadge | null>(null);
+  const [currentUser, setCurrentUser] = useState<UserRecord | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
   const draftRef = useRef<HTMLTextAreaElement>(null);
@@ -214,6 +217,29 @@ export default function ChatPage() {
       cancelled = true;
     };
   }, [router, sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) {
+      return;
+    }
+    let cancelled = false;
+    const loadUser = async () => {
+      try {
+        const user = await getCurrentUser();
+        if (!cancelled) {
+          setCurrentUser(user);
+        }
+      } catch {
+        if (!cancelled) {
+          setCurrentUser(null);
+        }
+      }
+    };
+    void loadUser();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
 
   const sessionLabel = useMemo(() => getSessionShortLabel(sessionId), [sessionId]);
   const currentWorkspace = useMemo(
@@ -922,6 +948,11 @@ export default function ChatPage() {
               <div className="muted">{currentSessionDescription || "No session description yet."}</div>
             </div>
             <div className="session-inline">
+              {currentUser?.is_admin ? (
+                <button type="button" className="option-button admin-link-button" onClick={() => router.push("/admin")}>
+                  Admin
+                </button>
+              ) : null}
               <button
                 type="button"
                 className={`ghost workspace-inline ${workspaceMenuOpen ? "toolbar-button-active" : ""}`}

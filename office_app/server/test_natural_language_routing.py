@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from office_app.server.persona_registry import persona_profile_for_name
 from office_app.server.request_pipeline import RequestPipeline
 
 
@@ -10,12 +11,14 @@ class DummyKernel:
         self,
         active_room: str = "lobby",
         active_persona: str = "Receptionist",
+        gates: dict[str, bool] | None = None,
         transcript_rows: list[dict[str, str]] | None = None,
         grounded_search_by_session: dict[str, dict[str, object]] | None = None,
         pending_break_room_jokes: dict[str, dict[str, str]] | None = None,
     ):
         self.active_room = active_room
         self.active_persona = active_persona
+        self.gates = gates or {"SAVE_GATE": True, "PREFLIGHT": True, "VERIFICATION": True}
         self.store = DummyStore(transcript_rows or [])
         self.grounded_search_by_session = grounded_search_by_session or {}
         self.pending_break_room_jokes = pending_break_room_jokes or {}
@@ -24,7 +27,7 @@ class DummyKernel:
         return {
             "active_room": self.active_room,
             "active_persona": self.active_persona,
-            "active_persona_profile": {"name": self.active_persona},
+            "active_persona_profile": persona_profile_for_name(self.active_persona),
         }
 
     def list_workspaces(self):
@@ -34,6 +37,7 @@ class DummyKernel:
         return {
             "active_room": self.active_room,
             "active_persona": self.active_persona,
+            "gates": self.gates,
             "grounded_search_by_session": self.grounded_search_by_session,
             "pending_break_room_jokes": self.pending_break_room_jokes,
         }
@@ -84,6 +88,63 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["route_kind"], "tool")
         self.assertEqual(routed["capability"], "session.list")
         self.assertEqual(routed["tool"], "office.sessions_list")
+
+    def test_list_rooms_routes_to_room_directory(self) -> None:
+        routed = self.pipeline.route_user_request("default", "list rooms")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "room.directory")
+        self.assertEqual(routed["tool"], "office.capability_info")
+
+    def test_list_all_departments_and_rooms_routes_to_room_directory(self) -> None:
+        routed = self.pipeline.route_user_request("default", "list all departments and rooms")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "room.directory")
+        self.assertEqual(routed["tool"], "office.capability_info")
+
+    def test_control_room_role_question_routes_to_capability_info(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="control_room", active_persona="Navigator"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "what is your role in the app?")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "room.persona_role")
+        self.assertEqual(routed["tool"], "office.capability_info")
+        self.assertIn("Navigator", routed["arguments"]["response_text"])
+        self.assertIn("system governance authority", routed["arguments"]["response_text"].lower())
+
+    def test_control_room_guidelines_question_routes_to_governance_registry_answer(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="control_room", active_persona="Navigator"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "what are the veridex guidelines?")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "control_room.governance")
+        self.assertEqual(routed["tool"], "office.capability_info")
+        self.assertIn("one active room at a time", routed["arguments"]["response_text"])
+        self.assertIn("Veridex_Governance_Guide_v1.0.0.md", routed["arguments"]["response_text"])
+        self.assertIn("registry.csv", routed["arguments"]["response_text"])
+
+    def test_control_room_gates_question_routes_to_governance_registry_answer(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="control_room", active_persona="Navigator"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "what gates do you enforce?")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "control_room.governance")
+        self.assertIn("SAVE_GATE", routed["arguments"]["response_text"])
+        self.assertIn("GATE-PREFLIGHT", routed["arguments"]["response_text"])
 
     def test_what_sessions_are_in_this_workspace_routes_to_clarify(self) -> None:
         routed = self.pipeline.route_user_request("default", "what sessions are in this workspace")

@@ -226,6 +226,13 @@ class LobbyEnterRequest(BaseModel):
     pin_code: str = Field(..., description="4-digit PIN code")
 
 
+class AdminUserCreateRequest(BaseModel):
+    name: str = Field(..., description="User name")
+    pin_code: str = Field(..., description="4-digit PIN code")
+    display_name: Optional[str] = Field(default=None, description="Optional display name")
+    face_photo_data: Optional[str] = Field(default=None, description="Optional face photo data URL")
+
+
 class FileUploadRequest(BaseModel):
     name: str = Field(..., description="Original file name")
     content_text: Optional[str] = Field(default=None, description="Text content to upload")
@@ -320,6 +327,15 @@ def _resolve_http_workspace_id(workspace_id: Optional[str], session_id: Optional
     if workspace:
         return workspace
     raise HTTPException(status_code=400, detail="Workspace ID required")
+
+
+def _require_admin_user(session_id: Optional[str]) -> Dict[str, Any]:
+    profile = _session_user_profile(session_id)
+    if not profile:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    if not bool(profile.get("is_admin")):
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    return profile
 
 
 def _pending_break_room_jokes(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -439,51 +455,6 @@ def _generate_break_room_joke(workspace_id: str, session_id: str) -> Dict[str, A
     }
 
 
-def _memo_recipient_response_text(*, workspace_id: str, session_id: str, result: Dict[str, Any], body: str) -> str:
-    structured = result.get("structuredContent") if isinstance(result, dict) else None
-    if not isinstance(structured, dict):
-        return ""
-    to_room = str(structured.get("to_room") or "").strip()
-    to_persona = str(structured.get("to_persona") or "").strip()
-    body_text = str(body or "").strip().lower()
-    if to_room != "control_room" and to_persona.lower() != "navigator":
-        return ""
-    if not any(term in body_text for term in ("system health", "health", "status", "are you ok", "are you okay")):
-        return ""
-    try:
-        state = kernel.get_state(workspace_id)
-    except Exception:
-        state = {}
-    active_room = str(state.get("active_room") or "unknown")
-    active_persona = str(state.get("active_persona") or "unknown")
-    return (
-        "Navigator response:\n"
-        "System health is nominal from the local control layer. "
-        f"Backend request handling is active for workspace {workspace_id}, session {session_id}. "
-        f"Current room state is {active_room} with persona {active_persona}. "
-        "No backend exception was recorded for this memo exchange."
-    )
-
-
-def _attach_memo_recipient_response(*, workspace_id: str, session_id: str, result: Dict[str, Any], body: str) -> Dict[str, Any]:
-    recipient_text = _memo_recipient_response_text(
-        workspace_id=workspace_id,
-        session_id=session_id,
-        result=result,
-        body=body,
-    )
-    if not recipient_text:
-        return result
-    existing_text = request_text_from_response(result)
-    response_text = f"{existing_text}\n{recipient_text}" if existing_text else recipient_text
-    structured = result.get("structuredContent")
-    if isinstance(structured, dict):
-        structured["recipient_response_text"] = recipient_text
-        structured["response_text"] = response_text
-    result["content"] = [{"type": "text", "text": response_text}]
-    return result
-
-
 @app.post("/request")
 def handle_natural_language_request(
     payload: NaturalLanguageRequest,
@@ -571,6 +542,7 @@ def handle_natural_language_request(
             store=store,
             receptionist_context_service=receptionist_context_service,
             user_profile=user_profile,
+            speaker=_response_speaker(enriched),
         )
         return enriched
     pending_session_list = _pending_session_list(current_state, session_id)
@@ -886,13 +858,6 @@ def handle_natural_language_request(
                 )
                 return enriched
             raise
-        if str(routed.get("capability") or "") == "memo.dispatch":
-            result = _attach_memo_recipient_response(
-                workspace_id=workspace_id,
-                session_id=session_id,
-                result=result,
-                body=str(args.get("body") or ""),
-            )
         result = synthesize_search_response(
             routed=routed,
             result=result,
@@ -1198,6 +1163,83 @@ def lobby_enter(payload: LobbyEnterRequest) -> Dict[str, Any]:
                 ),
             }
         ],
+    }
+
+
+@app.get("/me")
+def current_user(session_id: Optional[str] = None) -> Dict[str, Any]:
+    profile = _session_user_profile(session_id)
+    if not profile:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    return {"structuredContent": {"user": profile}, "content": [{"type": "text", "text": profile.get("display_name", "User")}]}
+
+
+@app.get("/admin/users")
+def admin_list_users(session_id: Optional[str] = None) -> Dict[str, Any]:
+    _require_admin_user(session_id)
+    users = user_service.list_users()
+    return {
+        "structuredContent": {"count": len(users), "users": users},
+        "content": [{"type": "text", "text": f"Found {len(users)} user(s)."}],
+    }
+
+
+@app.post("/admin/users")
+def admin_create_user(
+    payload: AdminUserCreateRequest,
+    x_session_id: Optional[str] = Header(default=None, alias="X-Session-Id"),
+) -> Dict[str, Any]:
+    _require_admin_user(x_session_id)
+    result = user_service.onboard_user(
+        name=payload.name,
+        pin_code=payload.pin_code,
+        display_name=payload.display_name,
+        face_photo_data=payload.face_photo_data,
+    )
+    return {
+        "structuredContent": result,
+        "content": [{"type": "text", "text": f"Created user {result['user']['display_name']}."}],
+    }
+
+
+@app.get("/admin/users/{user_id}")
+def admin_get_user(user_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    _require_admin_user(session_id)
+    detail = user_service.get_user_admin_detail(user_id)
+    return {
+        "structuredContent": detail,
+        "content": [{"type": "text", "text": f"Loaded user {detail['user']['display_name']}."}],
+    }
+
+
+@app.get("/admin/users/{user_id}/sessions/{target_session_id}/transcript")
+def admin_get_user_transcript(
+    user_id: str,
+    target_session_id: str,
+    session_id: Optional[str] = None,
+    limit: int = 400,
+) -> Dict[str, Any]:
+    _require_admin_user(session_id)
+    transcript = user_service.get_session_transcript(user_id=user_id, session_id=target_session_id, limit=max(1, min(limit, 2000)))
+    return {
+        "structuredContent": transcript,
+        "content": [{"type": "text", "text": f"Loaded transcript for {target_session_id}."}],
+    }
+
+
+@app.delete("/admin/users/{user_id}")
+def admin_delete_user(
+    user_id: str,
+    x_session_id: Optional[str] = Header(default=None, alias="X-Session-Id"),
+) -> Dict[str, Any]:
+    admin_user = _require_admin_user(x_session_id)
+    if str(admin_user.get("user_id") or "").strip() == str(user_id or "").strip():
+        raise HTTPException(status_code=409, detail="Admin cannot delete the currently authenticated account.")
+    result = user_service.delete_user(user_id=user_id)
+    deleted_user = result["deleted_user"]
+    return {
+        "structuredContent": result,
+        "content": [{"type": "text", "text": f"Deleted user {deleted_user['display_name']}."}],
     }
 
 

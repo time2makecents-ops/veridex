@@ -151,6 +151,14 @@ class WorkspaceStore:
         if changed:
             self.save_index(idx)
 
+    def unregister_workspace(self, workspace_id: str) -> None:
+        idx = self.load_index()
+        rows = idx.get("workspaces", [])
+        next_rows = [row for row in rows if str(row.get("workspace_id") or "").strip() != str(workspace_id or "").strip()]
+        if len(next_rows) != len(rows):
+            idx["workspaces"] = next_rows
+            self.save_index(idx)
+
 
 class WorkspaceKernel:
     def __init__(self, store: WorkspaceStore, utc_now_fn):
