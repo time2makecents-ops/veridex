@@ -21,6 +21,54 @@ def normalize_room_text(value: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def room_reference_aliases(room: Dict[str, Any]) -> List[str]:
+    room_id = str(room.get("id") or "").strip()
+    title = str(room.get("title") or room_id).strip()
+    raw_aliases = {
+        room_id,
+        title,
+        title.replace("&", "and"),
+        title.replace("Department", "").replace("department", ""),
+        room_id.replace("_department", "").replace("_room", "").replace("_office", ""),
+    }
+
+    id_base = room_id
+    for suffix in ("_department", "_room", "_office"):
+        if id_base.endswith(suffix):
+            id_base = id_base[: -len(suffix)]
+            break
+    id_base_words = id_base.replace("_", " ").strip()
+    if id_base_words:
+        raw_aliases.update(
+            {
+                id_base_words,
+                f"{id_base_words} room",
+                f"{id_base_words} department",
+                f"{id_base_words} office",
+            }
+        )
+
+    special_aliases = {
+        "control_room": ("navigator", "navigator room", "control"),
+        "marketing_room": ("marketing", "marketing room", "advertising", "advertising room"),
+        "art_department": ("art", "art room", "creative", "creative room"),
+        "records_archive": ("archive", "archive room", "records", "records room"),
+        "rnd_room": ("r d", "r and d", "rnd", "rnd room", "research", "research room", "research and development"),
+        "hr_department": ("hr", "hr room", "human resources", "human resources room"),
+        "it_department": ("it", "it room", "tech", "tech room", "technical support"),
+        "my_office": ("office", "my office", "nancy", "nancy office"),
+        "lobby": ("reception", "reception desk", "front desk"),
+    }
+    raw_aliases.update(special_aliases.get(room_id, ()))
+
+    aliases: List[str] = []
+    for alias in raw_aliases:
+        normalized = normalize_room_text(alias)
+        if normalized and normalized not in aliases:
+            aliases.append(normalized)
+    return aliases
+
+
 class RequestPipeline:
     ARTIFACT_CREATE_TRIGGERS = (
         "save this",
@@ -856,16 +904,15 @@ class RequestPipeline:
             room_title = str(room.get("title") or room_id).strip()
             if not room_id or not room_title:
                 continue
-            room_id_norm = normalize_room_text(room_id)
-            room_title_norm = normalize_room_text(room_title)
-            if normalized == room_id_norm or normalized == room_title_norm:
+            aliases = room_reference_aliases(room)
+            if normalized in aliases:
                 return room
-            if normalized in {room_id_norm, room_title_norm}:
+            if normalized.startswith("the ") and normalized[4:] in aliases:
                 return room
             candidates.append(
                 {
                     "room": room,
-                    "aliases": [room_id_norm, room_title_norm],
+                    "aliases": aliases,
                 }
             )
 
@@ -879,7 +926,7 @@ class RequestPipeline:
                     alias_keys.append(alias)
 
         if alias_keys:
-            matches = difflib.get_close_matches(normalized, alias_keys, n=1, cutoff=0.78)
+            matches = difflib.get_close_matches(normalized, alias_keys, n=1, cutoff=0.86)
             if matches:
                 return alias_map[matches[0]]
 
@@ -1335,15 +1382,7 @@ class RequestPipeline:
             return None
 
         for room in rooms_payload():
-            room_id = str(room.get("id") or "").strip()
-            title = str(room.get("title") or room_id).strip()
-            aliases = {
-                normalize_room_text(room_id),
-                normalize_room_text(title),
-                normalize_room_text(title.replace("&", "and")),
-                normalize_room_text(title.replace("Department", "").replace("department", "")),
-                normalize_room_text(room_id.replace("_department", "").replace("_room", "")),
-            }
+            aliases = set(room_reference_aliases(room))
             if normalized in aliases or normalized_without_article in aliases:
                 return room
 

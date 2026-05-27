@@ -197,6 +197,47 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertFalse(routed.get("requires_confirmation", False))
         self.assertEqual(routed["tool"], "office.room_set")
 
+    def test_art_room_routes_to_art_department_not_vr_room(self) -> None:
+        for phrase in (
+            "go to art room",
+            "take me to art room",
+            "send me to art room",
+            "route me to art room",
+            "direct me to art room",
+        ):
+            with self.subTest(phrase=phrase):
+                routed = self.pipeline.route_user_request("default", phrase)
+                self.assertEqual(routed["route_kind"], "navigation")
+                self.assertEqual(routed["room_id"], "art_department")
+                self.assertEqual(routed["room_title"], "Art Department")
+
+    def test_room_navigation_aliases_route_to_correct_rooms(self) -> None:
+        cases = (
+            ("go to reception", "lobby"),
+            ("go to conference room", "conference_room"),
+            ("go to navigator room", "control_room"),
+            ("go to infrastructure room", "infrastructure_room"),
+            ("go to sales room", "sales_department"),
+            ("go to marketing room", "marketing_room"),
+            ("go to hr room", "hr_department"),
+            ("go to it room", "it_department"),
+            ("go to art room", "art_department"),
+            ("go to law room", "law_office"),
+            ("go to finance room", "finance_department"),
+            ("go to my office", "my_office"),
+            ("go to vr room", "vr_room"),
+            ("go to records room", "records_archive"),
+            ("go to rnd room", "rnd_room"),
+            ("go to security room", "security_room"),
+            ("go to break room", "break_room"),
+        )
+        for phrase, expected_room in cases:
+            with self.subTest(phrase=phrase):
+                routed = self.pipeline.route_user_request("default", phrase)
+                self.assertEqual(routed["route_kind"], "navigation")
+                self.assertEqual(routed["room_id"], expected_room)
+                self.assertEqual(routed["tool"], "office.room_set")
+
     def test_meta_question_stays_in_model_route(self) -> None:
         routed = self.sales_pipeline.route_user_request("default", "why did you respond that way")
         self.assertEqual(routed["route_kind"], "model")
@@ -1335,6 +1376,30 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["arguments"]["to_room"], "control_room")
         self.assertEqual(routed["arguments"]["explicit_persona"], "Navigator")
         self.assertEqual(routed["arguments"]["body"], "how is system health?")
+
+    def test_send_memo_to_routes_to_mailroom_dispatch_in_all_rooms(self) -> None:
+        rooms = (
+            ("lobby", "Receptionist"),
+            ("sales_department", "Sales Director"),
+            ("marketing_room", "Marketing Director"),
+            ("break_room", "Break Room Host"),
+        )
+        for active_room, active_persona in rooms:
+            with self.subTest(active_room=active_room):
+                pipeline = RequestPipeline(
+                    kernel=DummyKernel(active_room=active_room, active_persona=active_persona),
+                    navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+                    utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+                    tool_names=[],
+                    app_version="1.3.0",
+                )
+                routed = pipeline.route_user_request("default", "send a memo to sales. please review this lead")
+                self.assertEqual(routed["route_kind"], "tool")
+                self.assertEqual(routed["capability"], "memo.dispatch")
+                self.assertEqual(routed["tool"], "mailroom.dispatch")
+                self.assertEqual(routed["arguments"]["to_room"], "sales_department")
+                self.assertEqual(routed["arguments"]["explicit_persona"], "Sales Director")
+                self.assertEqual(routed["arguments"]["body"], "please review this lead")
 
     def test_break_room_can_dispatch_question_memo(self) -> None:
         self.pipeline.assert_mailroom_allowed("break_room", "control_room")
