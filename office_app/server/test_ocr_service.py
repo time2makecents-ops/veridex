@@ -59,6 +59,34 @@ class OcrServiceTests(unittest.TestCase):
         self.assertEqual(result["text"], "Extracted image text")
         self.assertIn("inline_data", captured["payload"]["contents"][0]["parts"][1])
 
+    def test_uses_filename_mime_when_uploaded_mime_is_octet_stream(self) -> None:
+        captured = {}
+
+        def fake_fetch(url: str, payload: dict) -> dict:
+            captured["payload"] = payload
+            return {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {"text": "Extracted PDF text"}
+                            ]
+                        }
+                    }
+                ]
+            }
+
+        service = OcrService(api_key="test-key", fetch_json=fake_fetch)
+        result = service.extract_text(
+            file_name="uploaded.pdf",
+            mime_type="application/octet-stream",
+            content_bytes=b"%PDF-1.5",
+        )
+        self.assertEqual(result["method"], "gemini_vision")
+        self.assertEqual(result["mime_type"], "application/pdf")
+        self.assertEqual(result["text"], "Extracted PDF text")
+        self.assertEqual(captured["payload"]["contents"][0]["parts"][1]["inline_data"]["mime_type"], "application/pdf")
+
 
 if __name__ == "__main__":
     unittest.main()

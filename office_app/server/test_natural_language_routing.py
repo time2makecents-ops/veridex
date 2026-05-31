@@ -1607,6 +1607,13 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["tool"], "office.ocr_extract")
         self.assertEqual(routed["arguments"]["file_name"], "JW_Cover.rtf")
 
+    def test_ocr_request_routes_to_document_ocr_by_filename_with_spaces(self) -> None:
+        routed = self.pipeline.route_user_request("default", "extract text from chicken blues lyrics.pdf")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "document.ocr")
+        self.assertEqual(routed["tool"], "office.ocr_extract")
+        self.assertEqual(routed["arguments"]["file_name"], "chicken blues lyrics.pdf")
+
     def test_read_named_file_is_not_intercepted_as_capability_question(self) -> None:
         routed = self.pipeline.route_user_request("default", "can you read file JW_Cover.rtf?")
         self.assertEqual(routed["route_kind"], "tool")

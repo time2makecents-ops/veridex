@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from office_app.server.handlers.ai_handlers import build_ai_handlers
 from office_app.server.handlers.dependencies import HandlerDeps
 from office_app.server.model_router import ModelRouteResult, ModelRoutingError
+from office_app.server.ocr_service import OcrServiceError
 
 
 class FakeKernel:
@@ -50,6 +51,11 @@ class FakeOcrService:
             "text": content_bytes.decode("utf-8"),
             "file_name": file_name,
         }
+
+
+class FailingOcrService:
+    def extract_text(self, *, file_name: str, mime_type: Optional[str], content_bytes: bytes) -> Dict[str, Any]:
+        raise OcrServiceError("Gemini API key is not configured for OCR.")
 
 
 class FakeSearchService:
@@ -255,6 +261,7 @@ class AiHandlerTests(unittest.TestCase):
         workspace_rows: List[Dict[str, Any]],
         search_service: Optional[Any] = None,
         *,
+        ocr_service: Optional[Any] = None,
         model_text: Optional[str] = None,
         receptionist_summary: str = "",
         receptionist_recent_turns: Optional[List[str]] = None,
@@ -280,7 +287,7 @@ class AiHandlerTests(unittest.TestCase):
             workspace_file_service=workspace_service,
             private_file_service=private_service,
             search_service=search_service,
-            ocr_service=FakeOcrService(),
+            ocr_service=ocr_service or FakeOcrService(),
             model_router=FakeModelRouter(model_text or "Default model response."),
             user_service=None,
             utc_now=lambda: "2026-04-24T12:00:00Z",
@@ -314,6 +321,31 @@ class AiHandlerTests(unittest.TestCase):
         self.assertEqual(result["structuredContent"]["file_id"], "file_123")
         self.assertEqual(result["structuredContent"]["original_name"], "JW_Cover.rtf")
         self.assertEqual(result["content"][0]["text"], "Extracted contents")
+
+    def test_ocr_extract_surfaces_specific_ocr_failure_message(self) -> None:
+        deps = self._deps(
+            [
+                {
+                    "workspace_id": "ws_1",
+                    "file_id": "file_123",
+                    "original_name": "scan.pdf",
+                    "mime_type": "application/pdf",
+                    "scope": "workspace",
+                    "scope_ref": "workspace",
+                }
+            ],
+            ocr_service=FailingOcrService(),
+        )
+        handlers = build_ai_handlers(deps)
+        with self.assertRaises(HTTPException) as cm:
+            handlers["office.ocr_extract"](
+                {
+                    "workspace_id": "ws_1",
+                    "file_id": "file_123",
+                }
+            )
+        self.assertEqual(cm.exception.status_code, 502)
+        self.assertEqual(cm.exception.detail["message"], "Gemini API key is not configured for OCR.")
 
     def test_search_places_passes_needs_location_to_service(self) -> None:
         search_service = FakeSearchService()

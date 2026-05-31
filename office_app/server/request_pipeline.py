@@ -176,6 +176,12 @@ class RequestPipeline:
         r"(?P<name>[A-Za-z0-9_().-]{1,120}\.(?:txt|rtf|pdf|png|jpg|jpeg|webp|gif|bmp|tif|tiff|md|csv|json|xml|html|htm|doc|docx))",
         re.IGNORECASE,
     )
+    OCR_FILE_NAME_WITH_SPACES_RE = re.compile(
+        r"""\b(?:from|file)\s+[“"'`]?
+        (?P<name>(?:[A-Za-z0-9_().-]+\s+)*[A-Za-z0-9_().-]+\.(?:txt|rtf|pdf|png|jpg|jpeg|webp|gif|bmp|tif|tiff|md|csv|json|xml|html|htm|doc|docx))
+        [”"'`]?(?=\s|$|[?.!,])""",
+        re.IGNORECASE | re.VERBOSE,
+    )
     ARTIFACT_DELETE_NUMBER_RE = re.compile(
         r"^(?:delete|remove|trash)\s+(?:number\s+|item\s+|artifact\s+|#)?(?P<index>\d+)\b.*$",
         re.IGNORECASE,
@@ -2710,6 +2716,16 @@ class RequestPipeline:
                     "file_id": match.group(0),
                 },
                 "reason": "Matched OCR request with a file id.",
+            }
+        spaced_name_match = self.OCR_FILE_NAME_WITH_SPACES_RE.search(request_text)
+        if spaced_name_match:
+            return {
+                "capability": "document.ocr",
+                "tool": "office.ocr_extract",
+                "arguments": {
+                    "file_name": spaced_name_match.group("name").strip(),
+                },
+                "reason": "Matched OCR request with a file name.",
             }
         file_name_match = self.FILE_NAME_RE.search(request_text)
         if not file_name_match:

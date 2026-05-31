@@ -81,7 +81,7 @@ class OcrService:
         self._fetch_json = fetch_json or self._default_fetch_json
 
     def extract_text(self, *, file_name: str, mime_type: Optional[str], content_bytes: bytes) -> Dict[str, Any]:
-        normalized_mime = (mime_type or mimetypes.guess_type(file_name)[0] or "application/octet-stream").strip().lower()
+        normalized_mime = self._normalized_mime_type(file_name=file_name, mime_type=mime_type)
         suffix = Path(file_name).suffix.lower()
 
         if self._is_local_text(mime_type=normalized_mime, suffix=suffix):
@@ -101,6 +101,17 @@ class OcrService:
             }
 
         raise OcrServiceError(f"OCR is not available for {file_name} ({normalized_mime}).")
+
+    @staticmethod
+    def _normalized_mime_type(*, file_name: str, mime_type: Optional[str]) -> str:
+        provided = str(mime_type or "").strip().lower()
+        guessed = str(mimetypes.guess_type(file_name)[0] or "").strip().lower()
+        # application/octet-stream is generic; prefer extension-based detection when available.
+        if provided and provided != "application/octet-stream":
+            return provided
+        if guessed:
+            return guessed
+        return provided or "application/octet-stream"
 
     def _is_local_text(self, *, mime_type: str, suffix: str) -> bool:
         return any(mime_type.startswith(prefix) for prefix in self.TEXT_MIME_PREFIXES) or suffix in self.TEXT_EXTENSIONS
