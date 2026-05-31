@@ -124,6 +124,7 @@ export default function ChatPage() {
   const [recentRooms, setRecentRooms] = useState<string[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([]);
   const [workspacesLoading, setWorkspacesLoading] = useState(false);
+  const [newWorkspaceTitleDraft, setNewWorkspaceTitleDraft] = useState("");
   const [workspaceTitleDraft, setWorkspaceTitleDraft] = useState("");
   const [workspaceDescriptionDraft, setWorkspaceDescriptionDraft] = useState("");
   const [workspaceSelectionId, setWorkspaceSelectionId] = useState("");
@@ -312,9 +313,9 @@ export default function ChatPage() {
     return next.slice(0, 3);
   }
 
-  async function refreshWorkspaces(activeWorkspaceId?: string) {
+  async function refreshWorkspaces(activeWorkspaceId?: string): Promise<WorkspaceRecord[]> {
     if (!sessionId) {
-      return;
+      return [];
     }
     setWorkspacesLoading(true);
     try {
@@ -330,10 +331,12 @@ export default function ChatPage() {
           setWorkspaceSelectionId(String(active.workspace_id || ""));
         }
       }
+      return response;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to load workspaces.";
       setError(message);
       setBackendBanner(backendDisconnectedMessage(message));
+      return [];
     } finally {
       setWorkspacesLoading(false);
     }
@@ -497,7 +500,7 @@ export default function ChatPage() {
   }
 
   async function handleCreateWorkspace() {
-    const title = workspaceTitleDraft.trim() || "New Workspace";
+    const title = newWorkspaceTitleDraft.trim() || "New Workspace";
     setError("");
     setBackendBanner("");
     try {
@@ -514,6 +517,7 @@ export default function ChatPage() {
       setChatScope("room");
       setRecentRooms((current) => pushRecentRoom(current, "lobby"));
       setWorkspaceTitleDraft(String(created.label || title));
+      setNewWorkspaceTitleDraft("");
       const transcriptEntries = await loadTranscript(120, nextSessionId);
       applyHydratedMessages("lobby", "Receptionist", transcriptEntries, nextSessionId);
       await refreshWorkspaces(nextWorkspaceId);
@@ -527,14 +531,16 @@ export default function ChatPage() {
     }
   }
 
-  async function loadWorkspaceSelection(targetWorkspaceId: string) {
+  async function loadWorkspaceSelection(targetWorkspaceId: string, preserveDrafts = false) {
     if (!targetWorkspaceId) {
       return;
     }
     setWorkspaceSelectionId(targetWorkspaceId);
-    const selectedWorkspace = workspaces.find((item) => String(item.workspace_id) === targetWorkspaceId);
-    setWorkspaceTitleDraft(String(selectedWorkspace?.label || ""));
-    setWorkspaceDescriptionDraft(String(selectedWorkspace?.description || ""));
+    if (!preserveDrafts) {
+      const selectedWorkspace = workspaces.find((item) => String(item.workspace_id) === targetWorkspaceId);
+      setWorkspaceTitleDraft(String(selectedWorkspace?.label || ""));
+      setWorkspaceDescriptionDraft(String(selectedWorkspace?.description || ""));
+    }
     setWorkspaceSelectionLoading(true);
     try {
       const [sessionsForWorkspace, artifactsForWorkspace, filesForWorkspace] = await Promise.all([
@@ -570,8 +576,13 @@ export default function ChatPage() {
         label: workspaceTitleDraft.trim() || String(selectedWorkspace?.label || currentWorkspaceLabel || targetWorkspaceId),
         description: workspaceDescriptionDraft.trim(),
       });
-      await refreshWorkspaces(workspaceId);
-      await loadWorkspaceSelection(targetWorkspaceId);
+      const refreshed = await refreshWorkspaces(workspaceId);
+      const refreshedSelected = refreshed.find((item) => String(item.workspace_id) === targetWorkspaceId);
+      if (refreshedSelected) {
+        setWorkspaceTitleDraft(String(refreshedSelected.label || ""));
+        setWorkspaceDescriptionDraft(String(refreshedSelected.description || ""));
+      }
+      await loadWorkspaceSelection(targetWorkspaceId, true);
       setSessionActionNotice("Workspace details saved.");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to save workspace details.";
@@ -1083,9 +1094,9 @@ export default function ChatPage() {
                   <input
                     className="session-input"
                     type="text"
-                    value={workspaceTitleDraft}
+                    value={newWorkspaceTitleDraft}
                     placeholder="Resume"
-                    onChange={(event) => setWorkspaceTitleDraft(event.target.value)}
+                    onChange={(event) => setNewWorkspaceTitleDraft(event.target.value)}
                   />
                   <div className="toolbar-row">
                     <button type="button" className="primary" onClick={() => void handleCreateWorkspace()}>

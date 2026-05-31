@@ -1,7 +1,6 @@
 const fs = require("fs");
 const https = require("https");
 const path = require("path");
-const url = require("url");
 
 const next = require("next");
 
@@ -27,8 +26,7 @@ app.prepare().then(() => {
         cert: fs.readFileSync(certPath),
       },
       (req, res) => {
-        const parsedUrl = url.parse(req.url, true);
-        handle(req, res, parsedUrl);
+        handle(req, res);
       },
     )
     .listen(port, host, () => {

@@ -1315,13 +1315,16 @@ button {
 
 @media (max-width: 640px) {
   .lobby-page {
-    min-height: 100svh;
-    height: 100svh;
+    min-height: 100dvh;
+    height: 100dvh;
     overflow-y: auto;
   }
 
   .lobby-page-plain {
-    padding: 12px 10px max(10px, env(safe-area-inset-bottom));
+    padding-top: max(12px, env(safe-area-inset-top));
+    padding-right: 10px;
+    padding-left: 10px;
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
     gap: 10px;
   }
 
