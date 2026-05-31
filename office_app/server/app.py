@@ -190,14 +190,14 @@ def resolve_workspace_id(tool: str, args: Dict[str, Any]) -> str:
         return workspace_id
     if tool == "office.workspace_activate" and workspace_id:
         return workspace_id
+    if workspace_id:
+        return workspace_id
     if session_id:
         session = user_service.get_session(session_id)
         resolved = str(session.get("active_workspace_id") or "").strip()
         if resolved:
             return resolved
         raise HTTPException(status_code=409, detail="Session is missing an active workspace.")
-    if workspace_id:
-        return workspace_id
     definition = VERIDEX_TOOL_DEFINITIONS.get(tool)
     if definition is not None and definition.requires_workspace:
         raise HTTPException(status_code=400, detail="Workspace ID required")
@@ -617,6 +617,86 @@ def handle_natural_language_request(
             )
             return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
     pending_navigation = pending_room_navigation(current_state)
+    pending_workspace_switch = _pending_workspace_switch(current_state, session_id)
+    if pending_workspace_switch and request_text:
+        record_user_turn(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            request_text=request_text,
+            kernel=kernel,
+            store=store,
+            receptionist_context_service=receptionist_context_service,
+            user_profile=user_profile,
+        )
+        target_workspace_id = str(pending_workspace_switch.get("workspace_id") or "").strip()
+        target_label = str(pending_workspace_switch.get("label") or target_workspace_id).strip() or target_workspace_id
+        if _is_confirmation_yes(request_text) and target_workspace_id:
+            current_state = _clear_pending_workspace_switch(current_state, session_id)
+            store.save_state(workspace_id, current_state)
+            result = router.dispatch_capability(
+                "workspace.activate",
+                {
+                    "workspace_id": target_workspace_id,
+                    "session_id": session_id,
+                },
+                preferred_tool="office.workspace_activate",
+            )
+            next_session_id = session_id
+            if isinstance(result, dict):
+                structured = result.get("structuredContent")
+                if isinstance(structured, dict):
+                    next_session_id = str(structured.get("session_id") or session_id).strip() or session_id
+                    structured["routing"] = {
+                        "route_kind": "tool",
+                        "capability": "workspace.activate",
+                        "tool": "office.workspace_activate",
+                        "reason": "Confirmed pending workspace switch.",
+                    }
+                    response_text = (
+                        f"Switched to workspace \"{target_label}\" ({target_workspace_id}) "
+                        f"and started a new session ({next_session_id})."
+                    )
+                    result["content"] = [{"type": "text", "text": response_text}]
+            enriched = attach_request_context(result, workspace_id=target_workspace_id, session_id=next_session_id)
+            record_assistant_turn(
+                workspace_id=target_workspace_id,
+                session_id=next_session_id,
+                response_text=request_text_from_response(enriched),
+                kernel=kernel,
+                store=store,
+                receptionist_context_service=receptionist_context_service,
+                user_profile=user_profile,
+            )
+            return enriched
+        if _is_confirmation_no(request_text) or _is_cancel_text(request_text):
+            current_state = _clear_pending_workspace_switch(current_state, session_id)
+            store.save_state(workspace_id, current_state)
+            response_text = f"Okay. I created workspace \"{target_label}\" ({target_workspace_id}) and will keep you here."
+            response = {
+                "structuredContent": {
+                    "workspace_id": workspace_id,
+                    "session_id": session_id,
+                    "response_text": response_text,
+                    "routing": {
+                        "route_kind": "clarify",
+                        "capability": "workspace.switch.confirmation",
+                        "tool": "office.capability_info",
+                        "reason": "Cancelled pending workspace switch request.",
+                    },
+                },
+                "content": [{"type": "text", "text": response_text}],
+            }
+            record_assistant_turn(
+                workspace_id=workspace_id,
+                session_id=session_id,
+                response_text=response_text,
+                kernel=kernel,
+                store=store,
+                receptionist_context_service=receptionist_context_service,
+                user_profile=user_profile,
+            )
+            return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
+
     if pending_navigation and request_text:
         if _is_confirmation_yes(request_text):
             current_state.pop("pending_room_navigation", None)
@@ -884,6 +964,41 @@ def handle_natural_language_request(
                     "reason": routed["reason"],
                 }
         enriched = attach_request_context(result, workspace_id=workspace_id, session_id=session_id)
+        if str(routed.get("capability") or "").strip() == "workspace.create":
+            structured = (enriched or {}).get("structuredContent") if isinstance(enriched, dict) else None
+            created_workspace_id = str((structured or {}).get("workspace_id") or "").strip()
+            created_label = str((structured or {}).get("label") or created_workspace_id).strip() or created_workspace_id
+            if created_workspace_id and session_id:
+                current_state = kernel.get_state(workspace_id)
+                current_state = _set_pending_workspace_switch(
+                    current_state,
+                    session_id,
+                    workspace_id=created_workspace_id,
+                    label=created_label,
+                )
+                store.save_state(workspace_id, current_state)
+                response_text = (
+                    f"Created workspace \"{created_label}\" ({created_workspace_id}). "
+                    "Do you want to switch to it now? I will start a new session there."
+                )
+                response = {
+                    "structuredContent": {
+                        **(structured or {}),
+                        "workspace_id": workspace_id,
+                        "session_id": session_id,
+                        "created_workspace_id": created_workspace_id,
+                        "created_workspace_label": created_label,
+                        "response_text": response_text,
+                        "routing": {
+                            "route_kind": "clarify",
+                            "capability": "workspace.switch.confirmation",
+                            "tool": "office.capability_info",
+                            "reason": "Created a workspace and requested switch confirmation.",
+                        },
+                    },
+                    "content": [{"type": "text", "text": response_text}],
+                }
+                enriched = attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
         record_assistant_turn(
             workspace_id=workspace_id,
             session_id=session_id,
@@ -1512,6 +1627,44 @@ def _clear_pending_session_list(state: Dict[str, Any], session_id: str) -> Dict[
     return state
 
 
+def _pending_workspace_switch(state: Dict[str, Any], session_id: str) -> Optional[Dict[str, Any]]:
+    pending_map = state.get("pending_workspace_switch_by_session")
+    if not isinstance(pending_map, dict):
+        return None
+    pending = pending_map.get(session_id)
+    return pending if isinstance(pending, dict) else None
+
+
+def _set_pending_workspace_switch(
+    state: Dict[str, Any],
+    session_id: str,
+    *,
+    workspace_id: str,
+    label: str,
+) -> Dict[str, Any]:
+    pending_map = dict(state.get("pending_workspace_switch_by_session") or {})
+    pending_map[session_id] = {
+        "workspace_id": str(workspace_id or "").strip(),
+        "label": str(label or "").strip(),
+        "ts": utc_now(),
+    }
+    state["pending_workspace_switch_by_session"] = pending_map
+    return state
+
+
+def _clear_pending_workspace_switch(state: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+    pending_map = state.get("pending_workspace_switch_by_session")
+    if not isinstance(pending_map, dict):
+        return state
+    next_map = dict(pending_map)
+    next_map.pop(session_id, None)
+    if next_map:
+        state["pending_workspace_switch_by_session"] = next_map
+    else:
+        state.pop("pending_workspace_switch_by_session", None)
+    return state
+
+
 def _resolve_routed_request(*, workspace_id: str, session_id: str, request_text: str) -> Dict[str, Any]:
     routed = pipeline.route_user_request(workspace_id, request_text, session_id=session_id)
     if routed["route_kind"] != "model":
@@ -1694,6 +1847,7 @@ def _remember_grounded_search_context(
 def refresh_handler_bindings() -> None:
     global handle_workspaces_list
     global handle_workspace_new
+    global handle_workspace_update
     global handle_workspace_activate
     global handle_office_bootstrap
     global handle_office_state_get
@@ -1773,6 +1927,7 @@ def refresh_handler_bindings() -> None:
 
     handle_workspaces_list = workspace_handlers["office.workspaces_list"]
     handle_workspace_new = workspace_handlers["office.workspace_new"]
+    handle_workspace_update = workspace_handlers["office.workspace_update"]
     handle_workspace_activate = workspace_handlers["office.workspace_activate"]
     handle_office_bootstrap = workspace_handlers["office.bootstrap"]
     handle_office_state_get = workspace_handlers["office.state_get"]
@@ -1831,6 +1986,7 @@ def refresh_handler_bindings() -> None:
         {
             "office.workspaces_list": handle_workspaces_list,
             "office.workspace_new": handle_workspace_new,
+            "office.workspace_update": handle_workspace_update,
             "office.workspace_activate": handle_workspace_activate,
             "office.bootstrap": handle_office_bootstrap,
             "office.state_get": handle_office_state_get,
@@ -1891,6 +2047,7 @@ register_tools(
     {
         "office.workspaces_list": handle_workspaces_list,
         "office.workspace_new": handle_workspace_new,
+        "office.workspace_update": handle_workspace_update,
         "office.workspace_activate": handle_workspace_activate,
         "office.bootstrap": handle_office_bootstrap,
         "office.state_get": handle_office_state_get,

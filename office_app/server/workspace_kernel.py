@@ -118,12 +118,13 @@ class WorkspaceStore:
     def save_index(self, index: Dict[str, Any]) -> None:
         _write_json(self.index_path, index)
 
-    def register_workspace(self, workspace_id: str, label: str) -> None:
+    def register_workspace(self, workspace_id: str, label: str, description: str = "") -> None:
         idx = self.load_index()
         rows = idx["workspaces"]
         for row in rows:
             if row.get("workspace_id") == workspace_id:
                 row["label"] = label
+                row["description"] = str(description or row.get("description") or "").strip()
                 row["last_seen_utc"] = self.utc_now()
                 self.save_index(idx)
                 return
@@ -131,12 +132,35 @@ class WorkspaceStore:
             {
                 "workspace_id": workspace_id,
                 "label": label,
+                "description": str(description or "").strip(),
                 "created_utc": self.utc_now(),
                 "last_seen_utc": self.utc_now(),
                 "last_room": "lobby",
             }
         )
         self.save_index(idx)
+
+    def update_workspace_metadata(
+        self,
+        workspace_id: str,
+        *,
+        label: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        idx = self.load_index()
+        rows = idx.get("workspaces", [])
+        normalized_id = str(workspace_id or "").strip()
+        for row in rows:
+            if str(row.get("workspace_id") or "").strip() != normalized_id:
+                continue
+            if label is not None:
+                row["label"] = str(label or "").strip() or str(row.get("label") or normalized_id)
+            if description is not None:
+                row["description"] = str(description or "").strip()
+            row["last_seen_utc"] = self.utc_now()
+            self.save_index(idx)
+            return row
+        raise error_workspace_not_initialized(normalized_id)
 
     def touch_workspace(self, workspace_id: str, room_id: Optional[str] = None) -> None:
         idx = self.load_index()
@@ -179,8 +203,8 @@ class WorkspaceKernel:
             "vr_session": {},
         }
 
-    def create_workspace(self, workspace_id: str, label: str) -> Dict[str, Any]:
-        self.store.register_workspace(workspace_id, label)
+    def create_workspace(self, workspace_id: str, label: str, description: str = "") -> Dict[str, Any]:
+        self.store.register_workspace(workspace_id, label, description=description)
         state = self.build_workspace_state(workspace_id)
         self.store.save_state(workspace_id, state)
         self.store.append_transcript(workspace_id, "system", "lobby", f"Workspace created: {label}")

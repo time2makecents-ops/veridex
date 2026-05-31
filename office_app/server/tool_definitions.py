@@ -29,6 +29,7 @@ def tool_definition(tool_name: str, capability: str, description: str = "", **kw
 VERIDEX_TOOL_DEFINITIONS = {
     "office.workspaces_list": tool_definition("office.workspaces_list", "workspace.list", "List workspaces."),
     "office.workspace_new": tool_definition("office.workspace_new", "workspace.create", "Create a workspace."),
+    "office.workspace_update": tool_definition("office.workspace_update", "workspace.update", "Update workspace metadata.", requires_workspace=True),
     "office.workspace_activate": tool_definition("office.workspace_activate", "workspace.activate", "Activate a workspace.", requires_workspace=True),
     "office.bootstrap": tool_definition("office.bootstrap", "workspace.bootstrap", "Bootstrap a workspace.", requires_workspace=True),
     "office.state_get": tool_definition("office.state_get", "workspace.state.get", "Read workspace state.", requires_workspace=True),

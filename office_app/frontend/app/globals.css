@@ -1314,6 +1314,51 @@ button {
 }
 
 @media (max-width: 640px) {
+  .lobby-page {
+    min-height: 100svh;
+    height: 100svh;
+    overflow-y: auto;
+  }
+
+  .lobby-page-plain {
+    padding: 12px 10px max(10px, env(safe-area-inset-bottom));
+    gap: 10px;
+  }
+
+  .lobby-page .card:last-child,
+  .lobby-page .composer {
+    margin-bottom: 0;
+  }
+
+  .lobby-title-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .session-inline {
+    white-space: normal;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .session-inline > .workspace-inline,
+  .session-inline > button.workspace-inline {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .session-inline > button.workspace-inline {
+    min-height: 40px;
+    text-align: left;
+  }
+
+  .workspace-inline-value {
+    word-break: break-word;
+  }
+
   .calibration-field-grid {
     grid-template-columns: 1fr;
   }
@@ -1568,7 +1613,7 @@ button {
   font-size: 0.76rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgba(141, 253, 167, 0.78);
+  color: #1f2a37;
   margin-bottom: 10px;
 }
 

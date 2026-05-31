@@ -1931,6 +1931,35 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "session.create.name_required")
         self.assertEqual(routed["arguments"]["response_text"], "What should I name the new session?")
 
+    def test_create_workspace_routes_to_real_workspace_tool(self) -> None:
+        routed = self.pipeline.route_user_request("default", "create workspace werkin test list")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "workspace.create")
+        self.assertEqual(routed["tool"], "office.workspace_new")
+        self.assertEqual(routed["arguments"]["label"], "werkin test list")
+
+    def test_create_new_workspace_routes_to_real_workspace_tool(self) -> None:
+        routed = self.pipeline.route_user_request("default", "create new workspace werkin test list")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "workspace.create")
+        self.assertEqual(routed["tool"], "office.workspace_new")
+        self.assertEqual(routed["arguments"]["label"], "werkin test list")
+
+    def test_create_workspace_list_ambiguous_phrase_requires_clarification(self) -> None:
+        routed = self.pipeline.route_user_request("default", "create workspace/list werkin test list")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "workspace_or_list.create.confirmation")
+        self.assertEqual(routed["tool"], "office.capability_info")
+        self.assertIn("workspace or a saved list artifact", routed["arguments"]["response_text"])
+
+    def test_create_list_routes_to_artifact_create(self) -> None:
+        routed = self.pipeline.route_user_request("default", "create list weekly targets")
+        self.assertEqual(routed["route_kind"], "artifact")
+        self.assertEqual(routed["capability"], "artifact.create")
+        self.assertEqual(routed["tool"], "office.artifact_create")
+        self.assertEqual(routed["arguments"]["artifact_type"], "list")
+        self.assertEqual(routed["arguments"]["title"], "weekly targets")
+
     def test_session_name_question_routes_to_session_info(self) -> None:
         routed = self.pipeline.route_user_request("default", "what is the name of this session?")
         self.assertEqual(routed["route_kind"], "tool")

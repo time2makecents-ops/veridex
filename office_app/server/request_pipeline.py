@@ -686,6 +686,18 @@ class RequestPipeline:
         "show session objects",
         "list session objects",
     )
+    WORKSPACE_CREATE_RE = re.compile(
+        r"^(?:please\s+)?(?:create|make|start)\s+(?:a\s+|an\s+|the\s+)?(?:new\s+)?workspace(?:\s+(?:called|named))?\s*(?P<name>.*)$",
+        re.IGNORECASE,
+    )
+    LIST_CREATE_RE = re.compile(
+        r"^(?:please\s+)?(?:create|make|start)\s+(?:a\s+|an\s+|the\s+)?list(?:\s+(?:called|named))?\s*(?P<name>.*)$",
+        re.IGNORECASE,
+    )
+    WORKSPACE_LIST_CREATE_AMBIGUOUS_RE = re.compile(
+        r"^(?:please\s+)?(?:create|make|start)\s+(?:a\s+|an\s+|the\s+)?workspace\s*/\s*list\b(?:\s+(?:called|named))?\s*(?P<name>.*)$",
+        re.IGNORECASE,
+    )
     CONTEXTUAL_REFERENCE_HINTS = (
         "which one",
         "what one",
@@ -818,10 +830,10 @@ class RequestPipeline:
             "content": [{"type": "text", "text": f"Found {len(idx.get('workspaces', []))} workspace(s)."}],
         }
 
-    def workspace_new_response(self, workspace_id: str, label: str) -> Dict[str, Any]:
+    def workspace_new_response(self, workspace_id: str, label: str, description: str = "") -> Dict[str, Any]:
         return {
-            "structuredContent": {"workspace_id": workspace_id, "label": label},
-            "content": [{"type": "text", "text": f"Created workspace {workspace_id}."}],
+            "structuredContent": {"workspace_id": workspace_id, "label": label, "description": str(description or "")},
+            "content": [{"type": "text", "text": f"Created workspace {workspace_id} ({label})."}],
         }
 
     def current_context(self, workspace_id: str) -> Dict[str, Any]:
@@ -1254,6 +1266,21 @@ class RequestPipeline:
                 "workspace_id": workspace_id,
                 "request": request_text,
                 **session_thread_route,
+            }
+
+        workspace_route = self.route_workspace_request(workspace_id, request_text)
+        if workspace_route is not None:
+            if "route_kind" in workspace_route:
+                return {
+                    "workspace_id": workspace_id,
+                    "request": request_text,
+                    **workspace_route,
+                }
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **workspace_route,
             }
 
         session_route = self.route_session_request(workspace_id, request_text)
@@ -2598,6 +2625,75 @@ class RequestPipeline:
             },
             "reason": "Matched a request to show the current session thread.",
         }
+
+    def route_workspace_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = str(request_text or "").strip()
+        if not text:
+            return None
+
+        ambiguous_match = self.WORKSPACE_LIST_CREATE_AMBIGUOUS_RE.match(text)
+        if ambiguous_match:
+            return {
+                "route_kind": "clarify",
+                "capability": "workspace_or_list.create.confirmation",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": "Do you want me to create a workspace or a saved list artifact?",
+                },
+                "reason": "Matched an ambiguous workspace/list create request.",
+            }
+
+        workspace_match = self.WORKSPACE_CREATE_RE.match(text)
+        if workspace_match:
+            label = str(workspace_match.group("name") or "").strip(" .,:;")
+            if not label:
+                return {
+                    "route_kind": "clarify",
+                    "capability": "workspace.create.name_required",
+                    "tool": "office.workspace_new",
+                    "arguments": {
+                        "response_text": "What should I name the new workspace?",
+                    },
+                    "reason": "Need a workspace name before creating a new workspace.",
+                }
+            return {
+                "capability": "workspace.create",
+                "tool": "office.workspace_new",
+                "arguments": {
+                    "label": label,
+                },
+                "reason": "Matched a workspace create request.",
+            }
+
+        list_match = self.LIST_CREATE_RE.match(text)
+        if list_match:
+            title = str(list_match.group("name") or "").strip(" .,:;")
+            if not title or title.lower().startswith("of "):
+                return {
+                    "route_kind": "clarify",
+                    "capability": "artifact.create.name_required",
+                    "tool": "office.artifact_create",
+                    "arguments": {
+                        "response_text": "What should I name the list artifact?",
+                    },
+                    "reason": "Need a list name before creating a saved list artifact.",
+                }
+            return {
+                "route_kind": "artifact",
+                "capability": "artifact.create",
+                "tool": "office.artifact_create",
+                "arguments": {
+                    "artifact_type": "list",
+                    "title": title,
+                    "content": "",
+                    "format": "text/plain",
+                    "status": "active",
+                    "created_by": "user",
+                },
+                "reason": "Matched a list create request and routed to artifact creation.",
+            }
+
+        return None
 
     def route_ocr_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         text = request_text.lower().strip()

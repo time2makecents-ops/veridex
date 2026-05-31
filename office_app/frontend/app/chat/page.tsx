@@ -14,18 +14,22 @@ import {
   fileDownloadUrl,
   getCurrentUser,
   listFiles,
+  listWorkspaceFiles,
+  listWorkspaceArtifacts,
   listSessions,
   listWorkspaces,
   loadTranscript,
   request,
   requestText,
   renameSession,
+  updateWorkspaceMetadata,
   uploadFile,
   type FileRecord,
   type SessionRecord,
   type TranscriptEntry,
   type UserRecord,
   type WorkspaceRecord,
+  type ArtifactRecord,
 } from "@/lib/api";
 import { clearStoredSessionId, getSessionShortLabel, getStoredSessionId, setStoredSessionId } from "@/lib/session";
 import { ROOM_GROUPS, ROOMS, type RoomInfo } from "@/lib/rooms";
@@ -121,6 +125,12 @@ export default function ChatPage() {
   const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([]);
   const [workspacesLoading, setWorkspacesLoading] = useState(false);
   const [workspaceTitleDraft, setWorkspaceTitleDraft] = useState("");
+  const [workspaceDescriptionDraft, setWorkspaceDescriptionDraft] = useState("");
+  const [workspaceSelectionId, setWorkspaceSelectionId] = useState("");
+  const [workspaceSelectionSessions, setWorkspaceSelectionSessions] = useState<SessionRecord[]>([]);
+  const [workspaceSelectionArtifacts, setWorkspaceSelectionArtifacts] = useState<ArtifactRecord[]>([]);
+  const [workspaceSelectionFiles, setWorkspaceSelectionFiles] = useState<FileRecord[]>([]);
+  const [workspaceSelectionLoading, setWorkspaceSelectionLoading] = useState(false);
   const [activeWorkspaceLabel, setActiveWorkspaceLabel] = useState("");
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -314,7 +324,11 @@ export default function ChatPage() {
       const active = response.find((item) => String(item.workspace_id) === targetId);
       if (active) {
         setWorkspaceTitleDraft(String(active.label || ""));
+        setWorkspaceDescriptionDraft(String(active.description || ""));
         setActiveWorkspaceLabel(String(active.label || active.workspace_id || ""));
+        if (!workspaceSelectionId) {
+          setWorkspaceSelectionId(String(active.workspace_id || ""));
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to load workspaces.";
@@ -513,6 +527,59 @@ export default function ChatPage() {
     }
   }
 
+  async function loadWorkspaceSelection(targetWorkspaceId: string) {
+    if (!targetWorkspaceId) {
+      return;
+    }
+    setWorkspaceSelectionId(targetWorkspaceId);
+    const selectedWorkspace = workspaces.find((item) => String(item.workspace_id) === targetWorkspaceId);
+    setWorkspaceTitleDraft(String(selectedWorkspace?.label || ""));
+    setWorkspaceDescriptionDraft(String(selectedWorkspace?.description || ""));
+    setWorkspaceSelectionLoading(true);
+    try {
+      const [sessionsForWorkspace, artifactsForWorkspace, filesForWorkspace] = await Promise.all([
+        listSessions(targetWorkspaceId),
+        listWorkspaceArtifacts(targetWorkspaceId),
+        listWorkspaceFiles(targetWorkspaceId),
+      ]);
+      setWorkspaceSelectionSessions(sessionsForWorkspace);
+      setWorkspaceSelectionArtifacts(artifactsForWorkspace);
+      setWorkspaceSelectionFiles(filesForWorkspace);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to load selected workspace details.";
+      setError(message);
+      setBackendBanner(backendDisconnectedMessage(message));
+      setWorkspaceSelectionSessions([]);
+      setWorkspaceSelectionArtifacts([]);
+      setWorkspaceSelectionFiles([]);
+    } finally {
+      setWorkspaceSelectionLoading(false);
+    }
+  }
+
+  async function handleSaveWorkspaceMetadata() {
+    const targetWorkspaceId = workspaceSelectionId || workspaceId;
+    if (!targetWorkspaceId) {
+      return;
+    }
+    setError("");
+    setBackendBanner("");
+    try {
+      const selectedWorkspace = workspaces.find((item) => String(item.workspace_id) === targetWorkspaceId);
+      await updateWorkspaceMetadata(targetWorkspaceId, {
+        label: workspaceTitleDraft.trim() || String(selectedWorkspace?.label || currentWorkspaceLabel || targetWorkspaceId),
+        description: workspaceDescriptionDraft.trim(),
+      });
+      await refreshWorkspaces(workspaceId);
+      await loadWorkspaceSelection(targetWorkspaceId);
+      setSessionActionNotice("Workspace details saved.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to save workspace details.";
+      setError(message);
+      setBackendBanner(backendDisconnectedMessage(message));
+    }
+  }
+
   async function handleSessionSelect(targetSessionId: string) {
     if (!targetSessionId || targetSessionId === sessionId) {
       setSessionMenuOpen(false);
@@ -542,6 +609,17 @@ export default function ChatPage() {
       setBackendBanner(backendDisconnectedMessage(message));
     }
   }
+
+  useEffect(() => {
+    if (!workspaceMenuOpen) {
+      return;
+    }
+    const initialId = workspaceSelectionId || workspaceId;
+    if (initialId) {
+      void loadWorkspaceSelection(initialId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceMenuOpen, workspaceId]);
 
   async function handleDeleteSession(targetSessionId: string) {
     if (!targetSessionId || deletingSessionId === targetSessionId) {
@@ -986,8 +1064,8 @@ export default function ChatPage() {
                     <button
                       key={workspace.workspace_id}
                       type="button"
-                      className={`ghost room-option ${String(workspace.workspace_id) === workspaceId ? "toolbar-button-active" : ""}`}
-                      onClick={() => void handleWorkspaceSelect(workspace.workspace_id)}
+                      className={`ghost room-option ${String(workspace.workspace_id) === workspaceSelectionId ? "toolbar-button-active" : ""}`}
+                      onClick={() => void loadWorkspaceSelection(workspace.workspace_id)}
                     >
                       <span>{workspace.label || workspace.workspace_id}</span>
                       <span className="room-option-persona">
@@ -1014,6 +1092,91 @@ export default function ChatPage() {
                       Create Workspace
                     </button>
                   </div>
+                </div>
+              </div>
+              <div className="dropdown-group">
+                <div className="dropdown-group-title">Selected Workspace Details</div>
+                <div className="toolbar-stack">
+                  <input
+                    className="session-input"
+                    type="text"
+                    value={workspaceTitleDraft}
+                    placeholder="Workspace name"
+                    onChange={(event) => setWorkspaceTitleDraft(event.target.value)}
+                  />
+                  <textarea
+                    className="session-input session-description"
+                    value={workspaceDescriptionDraft}
+                    placeholder="Workspace description"
+                    onChange={(event) => setWorkspaceDescriptionDraft(event.target.value)}
+                  />
+                  <div className="toolbar-row">
+                    <button type="button" className="primary" onClick={() => void handleSaveWorkspaceMetadata()}>
+                      Save Workspace Details
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => void handleWorkspaceSelect(workspaceSelectionId)}
+                      disabled={!workspaceSelectionId}
+                    >
+                      Go to Workspace
+                    </button>
+                  </div>
+                  <div className="muted">
+                    {workspaceSelectionId ? `Selected: ${workspaceSelectionId}` : "Select a workspace above."}
+                  </div>
+                </div>
+              </div>
+              <div className="dropdown-group">
+                <div className="dropdown-group-title">Sessions In Selected Workspace</div>
+                <div className="load-list">
+                  {workspaceSelectionLoading ? <div className="muted">Loading workspace details...</div> : null}
+                  {!workspaceSelectionLoading && !workspaceSelectionSessions.length ? (
+                    <div className="muted">No sessions found.</div>
+                  ) : null}
+                  {!workspaceSelectionLoading
+                    ? workspaceSelectionSessions.map((session) => (
+                        <div key={session.session_id} className="download-item">
+                          <div className="load-item-title">{session.title || session.session_id}</div>
+                          <div className="load-item-meta">{session.description || "No description"}</div>
+                        </div>
+                      ))
+                    : null}
+                </div>
+              </div>
+              <div className="dropdown-group">
+                <div className="dropdown-group-title">Saved Artifacts In Selected Workspace</div>
+                <div className="load-list">
+                  {workspaceSelectionLoading ? <div className="muted">Loading workspace details...</div> : null}
+                  {!workspaceSelectionLoading && !workspaceSelectionArtifacts.length ? (
+                    <div className="muted">No artifacts found.</div>
+                  ) : null}
+                  {!workspaceSelectionLoading
+                    ? workspaceSelectionArtifacts.map((artifact) => (
+                        <div key={artifact.artifact_id} className="download-item">
+                          <div className="load-item-title">{artifact.display_name || artifact.title || artifact.artifact_id}</div>
+                          <div className="load-item-meta">{artifact.artifact_type || "artifact"}</div>
+                        </div>
+                      ))
+                    : null}
+                </div>
+              </div>
+              <div className="dropdown-group">
+                <div className="dropdown-group-title">Files In Selected Workspace</div>
+                <div className="load-list">
+                  {workspaceSelectionLoading ? <div className="muted">Loading workspace details...</div> : null}
+                  {!workspaceSelectionLoading && !workspaceSelectionFiles.length ? (
+                    <div className="muted">No files found.</div>
+                  ) : null}
+                  {!workspaceSelectionLoading
+                    ? workspaceSelectionFiles.map((file) => (
+                        <div key={file.file_id} className="download-item">
+                          <div className="load-item-title">{file.original_name || file.file_id}</div>
+                          <div className="load-item-meta">{file.scope || "workspace"} · {file.kind || "file"}</div>
+                        </div>
+                      ))
+                    : null}
                 </div>
               </div>
             </div>

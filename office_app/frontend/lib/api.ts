@@ -80,12 +80,25 @@ export type SessionRecord = {
 export type WorkspaceRecord = {
   workspace_id: string;
   label?: string;
+  description?: string;
   created_utc?: string;
   last_seen_utc?: string;
   last_room?: string;
   session_count?: number;
   last_active_at?: string;
   last_session_id?: string;
+  [key: string]: unknown;
+};
+
+export type ArtifactRecord = {
+  artifact_id: string;
+  workspace_id?: string;
+  display_name?: string;
+  title?: string;
+  artifact_type?: string;
+  content_preview?: string;
+  created_at?: string;
+  updated_at?: string;
   [key: string]: unknown;
 };
 
@@ -293,8 +306,12 @@ export async function loadTranscript(limit = 100, sessionId?: string): Promise<T
   return Array.isArray(structured?.entries) ? (structured.entries as TranscriptEntry[]) : [];
 }
 
-export async function listSessions(): Promise<SessionRecord[]> {
-  const response = await callTool("office.sessions_list", {});
+export async function listSessions(workspace_id?: string): Promise<SessionRecord[]> {
+  const args: Record<string, unknown> = {};
+  if (workspace_id) {
+    args.workspace_id = workspace_id;
+  }
+  const response = await callTool("office.sessions_list", args);
   const structured = response.structuredContent as { sessions?: unknown } | undefined;
   return Array.isArray(structured?.sessions) ? (structured.sessions as SessionRecord[]) : [];
 }
@@ -343,6 +360,40 @@ export async function createWorkspace(label: string): Promise<WorkspaceRecord> {
     workspace_id: String(response.workspace_id || ""),
     label,
   };
+}
+
+export async function updateWorkspaceMetadata(
+  workspace_id: string,
+  payload: { label?: string; description?: string },
+): Promise<WorkspaceRecord> {
+  const response = await callTool("office.workspace_update", { workspace_id, ...payload });
+  const structured = response.structuredContent as WorkspaceRecord | undefined;
+  if (structured && typeof structured.workspace_id === "string") {
+    return structured;
+  }
+  return {
+    workspace_id,
+    label: String(payload.label || ""),
+    description: String(payload.description || ""),
+  };
+}
+
+export async function listWorkspaceArtifacts(workspace_id: string): Promise<ArtifactRecord[]> {
+  const response = await callTool("office.artifact_list", {
+    workspace_id,
+    retrieval_scope: "workspace",
+    include_archived: false,
+  });
+  const structured = response.structuredContent as { artifacts?: unknown } | undefined;
+  return Array.isArray(structured?.artifacts) ? (structured.artifacts as ArtifactRecord[]) : [];
+}
+
+export async function listWorkspaceFiles(workspace_id: string): Promise<FileRecord[]> {
+  const response = await callTool("office.file_list", {
+    workspace_id,
+  });
+  const structured = response.structuredContent as { files?: unknown } | undefined;
+  return Array.isArray(structured?.files) ? (structured.files as FileRecord[]) : [];
 }
 
 export async function activateWorkspace(workspace_id: string): Promise<{ workspace_id: string; session_id?: string; title?: string; description?: string }> {

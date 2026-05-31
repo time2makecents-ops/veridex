@@ -39,6 +39,7 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
 
     def handle_workspace_new(args: Dict[str, Any]) -> Dict[str, Any]:
         label = str(args.get("label") or f"Workspace {deps.utc_now()}")
+        description = str(args.get("description") or "").strip()
         label_key = label.strip().casefold()
         idx = deps.kernel.list_workspaces()
         for row in idx.get("workspaces", []):
@@ -46,10 +47,42 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             if existing_label and existing_label.casefold() == label_key:
                 workspace_id = str(row.get("workspace_id") or "").strip()
                 if workspace_id:
-                    return deps.pipeline.workspace_new_response(workspace_id, existing_label)
+                    if description and not str(row.get("description") or "").strip():
+                        deps.kernel.store.update_workspace_metadata(workspace_id, description=description)
+                    return deps.pipeline.workspace_new_response(
+                        workspace_id,
+                        existing_label,
+                        description=str(row.get("description") or description or "").strip(),
+                    )
         workspace_id = f"ws_{uuid.uuid4().hex[:8]}"
-        deps.kernel.create_workspace(workspace_id, label)
-        return deps.pipeline.workspace_new_response(workspace_id, label)
+        deps.kernel.create_workspace(workspace_id, label, description=description)
+        return deps.pipeline.workspace_new_response(workspace_id, label, description=description)
+
+    def handle_workspace_update(args: Dict[str, Any]) -> Dict[str, Any]:
+        workspace_id = str(args.get("workspace_id") or "").strip()
+        if not workspace_id:
+            raise error_missing_required_field("workspace_id")
+        label_value = args.get("label")
+        description_value = args.get("description")
+        label = None if label_value is None else str(label_value).strip()
+        description = None if description_value is None else str(description_value).strip()
+        if label is None and description is None:
+            raise error_missing_required_field("label_or_description")
+        row = deps.kernel.store.update_workspace_metadata(
+            workspace_id,
+            label=label,
+            description=description,
+        )
+        response_label = str(row.get("label") or workspace_id).strip() or workspace_id
+        response_description = str(row.get("description") or "").strip()
+        return {
+            "structuredContent": {
+                "workspace_id": workspace_id,
+                "label": response_label,
+                "description": response_description,
+            },
+            "content": [{"type": "text", "text": f"Updated workspace {workspace_id}."}],
+        }
 
     def handle_workspace_activate(args: Dict[str, Any]) -> Dict[str, Any]:
         session_id = str(args.get("session_id") or "").strip()
@@ -174,6 +207,7 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
     return {
         "office.workspaces_list": handle_workspaces_list,
         "office.workspace_new": handle_workspace_new,
+        "office.workspace_update": handle_workspace_update,
         "office.workspace_activate": handle_workspace_activate,
         "office.bootstrap": handle_office_bootstrap,
         "office.state_get": handle_office_state_get,

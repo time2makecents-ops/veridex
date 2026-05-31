@@ -320,6 +320,11 @@ class UserService:
         workspaces: Dict[str, Dict[str, Any]] = {}
         index = self.kernel.list_workspaces()
         labels = {str(row.get("workspace_id") or ""): str(row.get("label") or "") for row in index.get("workspaces", []) if isinstance(row, dict)}
+        descriptions = {
+            str(row.get("workspace_id") or ""): str(row.get("description") or "")
+            for row in index.get("workspaces", [])
+            if isinstance(row, dict)
+        }
         for session in sessions:
             workspace_id = str(session.get("active_workspace_id") or "").strip()
             if not workspace_id:
@@ -329,6 +334,7 @@ class UserService:
                 {
                     "workspace_id": workspace_id,
                     "label": labels.get(workspace_id) or workspace_id,
+                    "description": descriptions.get(workspace_id) or "",
                     "session_count": 0,
                     "last_active_at": "",
                     "last_session_id": "",
