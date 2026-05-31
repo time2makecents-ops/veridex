@@ -3,7 +3,12 @@ param(
   [string]$LogRoot = "C:\Office-App"
 )
 
-Start-Process `
+$frontendPidFile = Join-Path $LogRoot ".veridex-frontend-cmd.pid"
+$proc = Start-Process `
   -FilePath "cmd.exe" `
-  -ArgumentList "/c", 'start "Veridex Frontend" cmd /k node server.cjs' `
-  -WorkingDirectory $WorkingDirectory | Out-Null
+  -ArgumentList "/k", 'title Veridex Frontend && node server.cjs' `
+  -WorkingDirectory $WorkingDirectory `
+  -PassThru
+if ($proc -and $proc.Id) {
+  Set-Content -Path $frontendPidFile -Value "$($proc.Id)" -Encoding ascii
+}

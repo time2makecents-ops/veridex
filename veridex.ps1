@@ -13,6 +13,8 @@ $frontendDir = Join-Path $root "office_app\frontend"
 $frontendStdoutLog = Join-Path $root "frontend-https.out.log"
 $frontendStderrLog = Join-Path $root "frontend-https.err.log"
 $smokeScript = Join-Path $root "office_app\smoke_test.ps1"
+$backendPidFile = Join-Path $root ".veridex-backend-cmd.pid"
+$frontendPidFile = Join-Path $root ".veridex-frontend-cmd.pid"
 
 function Get-ListeningPids {
   param([int[]]$Ports)
@@ -38,20 +40,55 @@ function Get-ListeningPids {
 }
 
 function Stop-Veridex {
+  foreach ($pidFile in @($backendPidFile, $frontendPidFile)) {
+    if (Test-Path $pidFile) {
+      try {
+        $savedPid = [int](Get-Content -Path $pidFile -ErrorAction Stop | Select-Object -First 1)
+        if ($savedPid -gt 0) {
+          taskkill /PID $savedPid /T /F | Out-Null
+          Write-Host "Stopped saved PID $savedPid"
+        }
+      } catch {}
+      try { Remove-Item -Path $pidFile -Force -ErrorAction Stop } catch {}
+    }
+  }
   $pids = Get-ListeningPids -Ports @($backendPort, $frontendPort)
   if (-not $pids) {
     Write-Host "Veridex is not listening on $backendPort or $frontendPort."
-    return
   }
   foreach ($processId in $pids) {
     if ($processId -and $processId -ne 0) {
       try {
-        Stop-Process -Id $processId -Force -ErrorAction Stop
+        # Kill process tree so wrapper cmd windows close too.
+        taskkill /PID $processId /T /F | Out-Null
         Write-Host "Stopped PID $processId"
       } catch {
         Write-Host "Could not stop PID ${processId}: $($_.Exception.Message)"
       }
     }
+  }
+  # Also close lingering Veridex cmd windows by title and by command line.
+  $cmdCandidates = @()
+  $cmdByTitle = Get-Process -Name "cmd" -ErrorAction SilentlyContinue | Where-Object {
+    $_.MainWindowTitle -like "Veridex Frontend*" -or $_.MainWindowTitle -like "Veridex Backend*"
+  }
+  if ($cmdByTitle) { $cmdCandidates += $cmdByTitle.Id }
+  try {
+    $cmdByCommand = Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" -ErrorAction Stop | Where-Object {
+      $_.CommandLine -and (
+        $_.CommandLine -like "*title Veridex Frontend*" -or
+        $_.CommandLine -like "*title Veridex Backend*" -or
+        $_.CommandLine -like "*node server.cjs*" -or
+        $_.CommandLine -like "*run_server.cmd*"
+      )
+    }
+    if ($cmdByCommand) { $cmdCandidates += ($cmdByCommand | ForEach-Object { [int]$_.ProcessId }) }
+  } catch {}
+  foreach ($cmdPid in ($cmdCandidates | Sort-Object -Unique)) {
+    try {
+      taskkill /PID $cmdPid /T /F | Out-Null
+      Write-Host "Closed Veridex cmd PID $cmdPid"
+    } catch {}
   }
 }
 
@@ -131,14 +168,21 @@ function Start-Backend {
   if ($GroqFallbackTest) {
     $env:GEMINI_API_KEY = "invalid-gemini-key-for-groq-fallback-test"
   }
-  Start-Process -FilePath "cmd.exe" -ArgumentList "/k", "`"$backendCommand`"" -WorkingDirectory $root
+  $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/k", "title Veridex Backend && `"$backendCommand`"" -WorkingDirectory $root -PassThru
+  if ($proc -and $proc.Id) {
+    Set-Content -Path $backendPidFile -Value "$($proc.Id)" -Encoding ascii
+  }
 }
 
 function Start-Frontend {
-  Start-Process `
+  $proc = Start-Process `
     -FilePath "cmd.exe" `
-    -ArgumentList "/c", 'start "Veridex Frontend" cmd /k node server.cjs' `
-    -WorkingDirectory $frontendDir | Out-Null
+    -ArgumentList "/k", 'title Veridex Frontend && node server.cjs' `
+    -WorkingDirectory $frontendDir `
+    -PassThru
+  if ($proc -and $proc.Id) {
+    Set-Content -Path $frontendPidFile -Value "$($proc.Id)" -Encoding ascii
+  }
 }
 
 switch ($Action) {
