@@ -184,6 +184,103 @@ class UserServiceTests(unittest.TestCase):
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 
+    def test_enter_lobby_falls_back_from_archived_workspace(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_reentry_archived"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            service = UserService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+
+            created = service.onboard_user(name="Grace", pin_code="1356")
+            archived_workspace_id = created["workspace_id"]
+            archived_session_id = created["session_id"]
+            alt_session = service.create_session(
+                user_id=created["user"]["user_id"],
+                title="Alt Session",
+                description="Fallback workspace.",
+                workspace_id="ws_alt1234",
+                workspace_label="Alternate Workspace",
+            )
+
+            service.kernel.archive_workspace(
+                archived_workspace_id,
+                archived_by_user_id="usr_admin",
+                deleted_by_user_id=created["user"]["user_id"],
+            )
+            service.store.update_user(
+                created["user"]["user_id"],
+                {
+                    "last_active_workspace_id": archived_workspace_id,
+                    "last_active_session_id": archived_session_id,
+                    "updated_at": "2026-04-17T12:00:00Z",
+                },
+            )
+
+            with self.assertRaises(HTTPException):
+                service.activate_workspace(user_id=created["user"]["user_id"], workspace_id=archived_workspace_id)
+
+            restored = service.enter_lobby(pin_code="1356")
+            self.assertEqual(restored["workspace_id"], alt_session["active_workspace_id"])
+            self.assertEqual(restored["user"]["last_active_workspace_id"], alt_session["active_workspace_id"])
+            self.assertEqual(service.kernel.get_workspace(alt_session["active_workspace_id"])["status"], "active")
+            self.assertEqual(service.kernel.get_workspace(archived_workspace_id, include_archived=True)["status"], "archived")
+            self.assertNotIn(
+                archived_workspace_id,
+                [row["workspace_id"] for row in service.list_user_workspaces(created["user"]["user_id"])],
+            )
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_archive_workspace_for_user_rehomes_current_workspace(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_archive_workspace"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            service = UserService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+
+            created = service.onboard_user(name="Noa", pin_code="2469")
+            current_workspace_id = created["workspace_id"]
+            current_session_id = created["session_id"]
+            alt_session = service.create_session(
+                user_id=created["user"]["user_id"],
+                title="Alternate",
+                description="Fallback workspace.",
+                workspace_id="ws_alt2469",
+                workspace_label="Alternate Workspace",
+            )
+            service.store.update_user(
+                created["user"]["user_id"],
+                {
+                    "last_active_workspace_id": current_workspace_id,
+                    "last_active_session_id": current_session_id,
+                    "updated_at": "2026-04-17T12:00:00Z",
+                },
+            )
+
+            result = service.archive_workspace_for_user(user_id=created["user"]["user_id"], workspace_id=current_workspace_id)
+
+            self.assertTrue(result["switched_workspace"])
+            self.assertEqual(result["workspace_id"], alt_session["active_workspace_id"])
+            self.assertEqual(result["session_id"], alt_session["session_id"])
+            self.assertEqual(service.store.fetch_user(created["user"]["user_id"])["last_active_workspace_id"], alt_session["active_workspace_id"])
+            self.assertEqual(service.store.fetch_user(created["user"]["user_id"])["last_active_session_id"], alt_session["session_id"])
+            self.assertEqual(service.kernel.get_workspace(current_workspace_id, include_archived=True)["status"], "archived")
+            self.assertEqual(
+                [row["workspace_id"] for row in service.list_user_workspaces(created["user"]["user_id"])],
+                [alt_session["active_workspace_id"]],
+            )
+            self.assertIn(current_session_id, [row["session_id"] for row in service.list_sessions(created["user"]["user_id"])])
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
     def test_invalid_pin_rejected(self) -> None:
         runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_invalid"
         workspaces_dir = runtime_dir / "workspaces"
@@ -446,7 +543,41 @@ class UserServiceTests(unittest.TestCase):
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 
-    def test_delete_user_removes_user_sessions_and_workspace(self) -> None:
+    def test_admin_detail_includes_archived_workspace_status(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_admin_archived_detail"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            service = UserService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+
+            created = service.onboard_user(name="Tess", display_name="Tess Vale", pin_code="6678")
+            archived_workspace_id = created["workspace_id"]
+            service.create_session(
+                user_id=created["user"]["user_id"],
+                title="Secondary",
+                description="Secondary workspace.",
+                workspace_id="ws_secondary",
+                workspace_label="Secondary Workspace",
+            )
+            service.kernel.archive_workspace(
+                archived_workspace_id,
+                archived_by_user_id="usr_admin",
+                deleted_by_user_id=created["user"]["user_id"],
+            )
+
+            detail = service.get_user_admin_detail(created["user"]["user_id"])
+            archived_rows = [row for row in detail["workspaces"] if row["workspace_id"] == archived_workspace_id]
+            self.assertEqual(len(archived_rows), 1)
+            self.assertEqual(archived_rows[0]["status"], "archived")
+            self.assertTrue(archived_rows[0]["archived_at"])
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_delete_user_archives_workspace_and_preserves_history(self) -> None:
         runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_delete_user"
         workspaces_dir = runtime_dir / "workspaces"
         shutil.rmtree(runtime_dir, ignore_errors=True)
@@ -476,7 +607,13 @@ class UserServiceTests(unittest.TestCase):
             self.assertIsNone(service.store.fetch_user(user_id))
             self.assertEqual(service.sessions.list_sessions_for_user(user_id), [])
             self.assertFalse((runtime_dir / "users").exists() and any((runtime_dir / "users").iterdir()))
-            self.assertFalse((workspaces_dir / workspace_id).exists())
+            archived = service.kernel.get_workspace(workspace_id, include_archived=True)
+            self.assertIsNotNone(archived)
+            self.assertEqual(archived["status"], "archived")
+            self.assertTrue(archived["archived_at"])
+            self.assertEqual(archived["deleted_by_user_id"], user_id)
+            self.assertEqual(service.kernel.list_workspaces()["workspaces"], [])
+            self.assertTrue((workspaces_dir / workspace_id).exists())
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 

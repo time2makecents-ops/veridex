@@ -81,9 +81,13 @@ export type WorkspaceRecord = {
   workspace_id: string;
   label?: string;
   description?: string;
+  status?: string;
   created_utc?: string;
   last_seen_utc?: string;
   last_room?: string;
+  archived_at?: string;
+  archived_by_user_id?: string;
+  deleted_by_user_id?: string;
   session_count?: number;
   last_active_at?: string;
   last_session_id?: string;
@@ -136,6 +140,13 @@ export type AdminUserDetail = {
   }>;
   user_folder?: string;
   profile_path?: string;
+};
+
+export type AdminWorkspaceDetail = {
+  workspace: WorkspaceRecord;
+  sessions: SessionRecord[];
+  artifacts?: ArtifactRecord[];
+  files?: FileRecord[];
 };
 
 type FileListEnvelope = {
@@ -412,6 +423,10 @@ export async function activateWorkspace(workspace_id: string): Promise<{ workspa
   };
 }
 
+export async function deleteWorkspace(workspace_id: string): Promise<LobbyResponse> {
+  return callTool("office.workspace_delete", { workspace_id });
+}
+
 export async function activateSession(session_id: string): Promise<SessionRecord> {
   const response = await callTool("office.session_activate", { session_id });
   const structured = response.structuredContent as SessionRecord | undefined;
@@ -567,6 +582,21 @@ export async function adminListUsers(): Promise<UserRecord[]> {
   return Array.isArray(structured?.users) ? structured.users : [];
 }
 
+export async function adminListWorkspaces(): Promise<WorkspaceRecord[]> {
+  const response = await authorizedGetJson<LobbyResponse>("/admin/workspaces");
+  const structured = response.structuredContent as { workspaces?: WorkspaceRecord[] } | undefined;
+  return Array.isArray(structured?.workspaces) ? structured.workspaces : [];
+}
+
+export async function adminGetWorkspace(workspaceId: string): Promise<AdminWorkspaceDetail> {
+  const response = await authorizedGetJson<LobbyResponse>(`/admin/workspaces/${encodeURIComponent(workspaceId)}/detail`);
+  const structured = response.structuredContent as AdminWorkspaceDetail | undefined;
+  if (!structured?.workspace || typeof structured.workspace.workspace_id !== "string") {
+    throw new Error("Unable to load workspace detail.");
+  }
+  return structured;
+}
+
 export async function adminCreateUser(payload: {
   name: string;
   display_name: string;
@@ -595,6 +625,24 @@ export async function adminDeleteUser(userId: string): Promise<LobbyResponse> {
     throw new Error("Session ID required");
   }
   const response = await fetchJsonWithTimeout(`/admin/users/${encodeURIComponent(userId)}`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Session-Id": sessionId,
+    },
+  });
+  if (!response.ok) {
+    throw new Error(await readResponseError(response));
+  }
+  return (await response.json()) as LobbyResponse;
+}
+
+export async function adminDeleteWorkspace(workspaceId: string): Promise<LobbyResponse> {
+  const sessionId = typeof window === "undefined" ? "" : window.localStorage.getItem("veridex.session_id") ?? "";
+  if (!sessionId) {
+    throw new Error("Session ID required");
+  }
+  const response = await fetchJsonWithTimeout(`/admin/workspaces/${encodeURIComponent(workspaceId)}/delete`, {
     method: "DELETE",
     headers: {
       "Content-Type": "application/json",

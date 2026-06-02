@@ -10,6 +10,7 @@ import {
   createSession,
   createWorkspace,
   deleteSession,
+  deleteWorkspace,
   extractFileText,
   fileDownloadUrl,
   getCurrentUser,
@@ -124,6 +125,7 @@ export default function ChatPage() {
   const [recentRooms, setRecentRooms] = useState<string[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([]);
   const [workspacesLoading, setWorkspacesLoading] = useState(false);
+  const [deletingWorkspaceId, setDeletingWorkspaceId] = useState("");
   const [newWorkspaceTitleDraft, setNewWorkspaceTitleDraft] = useState("");
   const [workspaceTitleDraft, setWorkspaceTitleDraft] = useState("");
   const [workspaceDescriptionDraft, setWorkspaceDescriptionDraft] = useState("");
@@ -588,6 +590,67 @@ export default function ChatPage() {
       const message = err instanceof Error ? err.message : "Unable to save workspace details.";
       setError(message);
       setBackendBanner(backendDisconnectedMessage(message));
+    }
+  }
+
+  async function handleDeleteWorkspace(targetWorkspaceId: string) {
+    if (!targetWorkspaceId || deletingWorkspaceId === targetWorkspaceId) {
+      return;
+    }
+    const targetWorkspace = workspaces.find((item) => String(item.workspace_id) === targetWorkspaceId);
+    const targetLabel = targetWorkspace?.label || targetWorkspaceId;
+    if (!window.confirm(`Archive workspace "${targetLabel}"? It will disappear from your workspace list.`)) {
+      return;
+    }
+    setDeletingWorkspaceId(targetWorkspaceId);
+    setError("");
+    setBackendBanner("");
+    try {
+      const response = await deleteWorkspace(targetWorkspaceId);
+      const structured = response.structuredContent as {
+        workspace_id?: string;
+        session_id?: string;
+        workspace_state?: LobbyState;
+        archived_workspace?: WorkspaceRecord;
+        switched_workspace?: boolean;
+      } | undefined;
+      const nextWorkspaceId = String(structured?.workspace_id || response.workspace_id || workspaceId);
+      const nextSessionId = String(structured?.session_id || response.session_id || sessionId);
+      const nextRoom = String(structured?.workspace_state?.active_room || "lobby");
+      const nextPersona = String(structured?.workspace_state?.active_persona || "Receptionist");
+      const archivedLabel = String(structured?.archived_workspace?.label || targetLabel || targetWorkspaceId);
+      const switchedWorkspace = Boolean(structured?.switched_workspace);
+      const selectionDeleted = workspaceSelectionId === targetWorkspaceId;
+
+      const refreshed = await refreshWorkspaces(nextWorkspaceId);
+      if (selectionDeleted) {
+        setWorkspaceSelectionId(nextWorkspaceId);
+      }
+
+      if (switchedWorkspace || targetWorkspaceId === workspaceId || selectionDeleted) {
+        setStoredSessionId(nextSessionId);
+        setSessionId(nextSessionId);
+        setWorkspaceId(nextWorkspaceId);
+        setActiveWorkspaceLabel(refreshed.find((item) => String(item.workspace_id) === nextWorkspaceId)?.label || nextWorkspaceId);
+        setActiveRoom(nextRoom);
+        setActivePersona(nextPersona);
+        setChatScope("room");
+        setRecentRooms((current) => pushRecentRoom(current, nextRoom));
+        const transcriptEntries = await loadTranscript(120, nextSessionId);
+        applyHydratedMessages(nextRoom, nextPersona, transcriptEntries, nextSessionId);
+        await refreshSessions(nextSessionId);
+        await refreshFiles(nextSessionId, nextRoom);
+      }
+
+      await loadWorkspaceSelection(nextWorkspaceId, true);
+      setSessionActionNotice(`Archived workspace ${archivedLabel}.`);
+      setWorkspaceMenuOpen(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to archive workspace.";
+      setError(message);
+      setBackendBanner(backendDisconnectedMessage(message));
+    } finally {
+      setDeletingWorkspaceId("");
     }
   }
 
@@ -1072,22 +1135,31 @@ export default function ChatPage() {
                 <div className="dropdown-grid">
                   {workspacesLoading ? <div className="muted">Loading workspaces...</div> : null}
                   {workspaces.map((workspace) => (
-                    <button
-                      key={workspace.workspace_id}
-                      type="button"
-                      className={`ghost room-option ${String(workspace.workspace_id) === workspaceSelectionId ? "toolbar-button-active" : ""}`}
-                      onClick={() => void loadWorkspaceSelection(workspace.workspace_id)}
-                    >
-                      <span>{workspace.label || workspace.workspace_id}</span>
-                      <span className="room-option-persona">
-                        {workspace.session_count || 0} session(s)
-                        {workspace.last_room ? ` · ${roomById(String(workspace.last_room))?.title || workspace.last_room}` : ""}
-                      </span>
-                    </button>
+                    <div key={workspace.workspace_id} className="toolbar-stack" style={{ gap: 6 }}>
+                      <button
+                        type="button"
+                        className={`ghost room-option ${String(workspace.workspace_id) === workspaceSelectionId ? "toolbar-button-active" : ""}`}
+                        onClick={() => void loadWorkspaceSelection(workspace.workspace_id)}
+                      >
+                        <span>{workspace.label || workspace.workspace_id}</span>
+                        <span className="room-option-persona">
+                          {workspace.session_count || 0} session(s)
+                          {workspace.last_room ? ` · ${roomById(String(workspace.last_room))?.title || workspace.last_room}` : ""}
+                        </span>
+                      </button>
+                      <div className="toolbar-row" style={{ justifyContent: "flex-end" }}>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => void handleDeleteWorkspace(workspace.workspace_id)}
+                          disabled={deletingWorkspaceId === workspace.workspace_id}
+                        >
+                          {deletingWorkspaceId === workspace.workspace_id ? "Archiving..." : "Delete Workspace"}
+                        </button>
+                      </div>
+                    </div>
                   ))}
-                  {!workspacesLoading && !workspaces.length ? <div className="muted">No workspaces yet.</div> : null}
                 </div>
-              </div>
               <div className="dropdown-group">
                 <div className="dropdown-group-title">New Workspace</div>
                 <div className="toolbar-stack">
@@ -1104,6 +1176,7 @@ export default function ChatPage() {
                     </button>
                   </div>
                 </div>
+              </div>
               </div>
               <div className="dropdown-group">
                 <div className="dropdown-group-title">Selected Workspace Details</div>

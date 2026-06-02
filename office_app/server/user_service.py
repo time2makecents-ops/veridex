@@ -149,11 +149,13 @@ class UserService:
         return self.ADMIN_ROLE if str(pin or "").strip() == self.ADMIN_PIN else self.DEFAULT_ROLE
 
     def _ensure_workspace(self, workspace_id: str, label: str) -> Dict[str, Any]:
-        try:
+        workspace_row = self.kernel.get_workspace(workspace_id, include_archived=True)
+        if workspace_row is not None:
+            if str(workspace_row.get("status") or "active").strip().lower() == "archived":
+                raise HTTPException(status_code=409, detail="Workspace is archived and cannot be activated.")
             return self.kernel.get_state(workspace_id)
-        except HTTPException:
-            self.kernel.create_workspace(workspace_id, label)
-            return self.kernel.get_state(workspace_id)
+        self.kernel.create_workspace(workspace_id, label)
+        return self.kernel.get_state(workspace_id)
 
     def _default_session_title(self, workspace_label: str) -> str:
         text = self._normalize_text(workspace_label) or "Session"
@@ -196,13 +198,45 @@ class UserService:
 
     def _workspace_label_for(self, workspace_id: str) -> str:
         try:
-            index = self.kernel.list_workspaces()
+            row = self.kernel.get_workspace(workspace_id, include_archived=True)
         except Exception:
             return workspace_id
-        for row in index.get("workspaces", []):
-            if str(row.get("workspace_id") or "").strip() == workspace_id:
-                return str(row.get("label") or workspace_id).strip() or workspace_id
+        if row is not None:
+            return str(row.get("label") or workspace_id).strip() or workspace_id
         return workspace_id
+
+    def _workspace_is_archived(self, workspace_id: str) -> bool:
+        try:
+            row = self.kernel.get_workspace(workspace_id, include_archived=True)
+        except Exception:
+            return False
+        return bool(row and str(row.get("status") or "active").strip().lower() == "archived")
+
+    def _preferred_active_workspace_for_user(self, record: Dict[str, Any]) -> Optional[str]:
+        user_id = str(record.get("user_id") or "").strip()
+        candidates: list[str] = []
+        for key in ("last_active_workspace_id", "default_workspace_id"):
+            workspace_id = str(record.get(key) or "").strip()
+            if workspace_id and workspace_id not in candidates:
+                candidates.append(workspace_id)
+        sessions = self.sessions.list_sessions_for_user(user_id)
+        sessions = sorted(
+            sessions,
+            key=lambda row: (
+                str(row.get("last_active_at") or ""),
+                str(row.get("updated_at") or ""),
+                str(row.get("session_id") or ""),
+            ),
+            reverse=True,
+        )
+        for session in sessions:
+            workspace_id = str(session.get("active_workspace_id") or "").strip()
+            if workspace_id and workspace_id not in candidates:
+                candidates.append(workspace_id)
+        for workspace_id in candidates:
+            if not self._workspace_is_archived(workspace_id):
+                return workspace_id
+        return None
 
     def _activate_session(self, user_id: str, session_id: str) -> Dict[str, Any]:
         session = self.sessions.fetch_session(session_id)
@@ -315,13 +349,12 @@ class UserService:
     def list_sessions(self, user_id: str, workspace_id: Optional[str] = None) -> list[Dict[str, Any]]:
         return self.sessions.list_sessions_for_user(user_id, workspace_id=workspace_id)
 
-    def list_user_workspaces(self, user_id: str) -> list[Dict[str, Any]]:
+    def list_user_workspaces(self, user_id: str, *, include_archived: bool = False) -> list[Dict[str, Any]]:
         sessions = self.sessions.list_sessions_for_user(user_id)
         workspaces: Dict[str, Dict[str, Any]] = {}
-        index = self.kernel.list_workspaces()
-        labels = {str(row.get("workspace_id") or ""): str(row.get("label") or "") for row in index.get("workspaces", []) if isinstance(row, dict)}
-        descriptions = {
-            str(row.get("workspace_id") or ""): str(row.get("description") or "")
+        index = self.kernel.list_workspaces(include_archived=include_archived)
+        workspace_rows = {
+            str(row.get("workspace_id") or ""): dict(row)
             for row in index.get("workspaces", [])
             if isinstance(row, dict)
         }
@@ -329,17 +362,36 @@ class UserService:
             workspace_id = str(session.get("active_workspace_id") or "").strip()
             if not workspace_id:
                 continue
+            workspace_row = workspace_rows.get(workspace_id, {})
+            if not include_archived:
+                row_status = str(workspace_row.get("status") or "").strip().lower()
+                if row_status == "archived":
+                    continue
+                if not workspace_row:
+                    continue
             entry = workspaces.setdefault(
                 workspace_id,
                 {
                     "workspace_id": workspace_id,
-                    "label": labels.get(workspace_id) or workspace_id,
-                    "description": descriptions.get(workspace_id) or "",
+                    "label": str(workspace_row.get("label") or workspace_id).strip() or workspace_id,
+                    "description": str(workspace_row.get("description") or "").strip(),
+                    "status": str(workspace_row.get("status") or "active").strip().lower() or "active",
+                    "created_utc": str(workspace_row.get("created_utc") or "").strip(),
+                    "last_seen_utc": str(workspace_row.get("last_seen_utc") or "").strip(),
+                    "last_room": str(workspace_row.get("last_room") or "").strip(),
+                    "archived_at": str(workspace_row.get("archived_at") or "").strip(),
+                    "archived_by_user_id": str(workspace_row.get("archived_by_user_id") or "").strip(),
+                    "deleted_by_user_id": str(workspace_row.get("deleted_by_user_id") or "").strip(),
                     "session_count": 0,
                     "last_active_at": "",
                     "last_session_id": "",
                 },
             )
+            if workspace_row:
+                for key in ("label", "description", "status", "created_utc", "last_seen_utc", "last_room", "archived_at", "archived_by_user_id", "deleted_by_user_id"):
+                    value = workspace_row.get(key)
+                    if value is not None and str(value).strip():
+                        entry[key] = value
             entry["session_count"] += 1
             session_active_at = str(session.get("last_active_at") or session.get("updated_at") or "")
             if session_active_at >= str(entry.get("last_active_at") or ""):
@@ -442,14 +494,17 @@ class UserService:
         if record is None:
             raise HTTPException(status_code=401, detail="Invalid PIN code.")
 
-        workspace_id = str(record.get("last_active_workspace_id") or record.get("default_workspace_id") or "").strip()
+        workspace_id = self._preferred_active_workspace_for_user(record)
+        workspace_label = record.get("display_name") or record.get("name") or "Workspace"
         if not workspace_id:
-            raise HTTPException(status_code=409, detail="User profile is missing a workspace link.")
-
-        workspace_state = self._ensure_workspace(workspace_id, record.get("display_name") or record.get("name") or "Workspace")
+            workspace_id = f"ws_{uuid.uuid4().hex[:8]}"
+            self.kernel.create_workspace(workspace_id, str(workspace_label))
+            workspace_state = self.kernel.get_state(workspace_id)
+        else:
+            workspace_state = self._ensure_workspace(workspace_id, str(workspace_label))
         last_active_session_id = str(record.get("last_active_session_id") or "").strip()
         session = self.sessions.fetch_session(last_active_session_id) if last_active_session_id else None
-        if session is None:
+        if session is None or str(session.get("active_workspace_id") or "").strip() != workspace_id:
             session = self.sessions.fetch_session_for_user(record["user_id"], workspace_id=workspace_id)
         if session is None:
             session = self._create_session_record(
@@ -512,7 +567,7 @@ class UserService:
     def get_user_admin_detail(self, user_id: str) -> Dict[str, Any]:
         user = self.get_user(user_id)
         sessions = self.sessions.list_sessions_for_user(str(user["user_id"]))
-        workspaces = self.list_user_workspaces(str(user["user_id"]))
+        workspaces = self.list_user_workspaces(str(user["user_id"]), include_archived=True)
         workspace_ids = [str(item.get("workspace_id") or "").strip() for item in workspaces if str(item.get("workspace_id") or "").strip()]
         artifact_rows = []
         try:
@@ -704,7 +759,7 @@ class UserService:
             "created_replacement_session": created_replacement_session,
         }
 
-    def delete_user(self, *, user_id: str) -> Dict[str, Any]:
+    def delete_user(self, *, user_id: str, archived_by_user_id: Optional[str] = None) -> Dict[str, Any]:
         record = self.store.fetch_user(str(user_id or "").strip())
         if record is None:
             raise HTTPException(status_code=404, detail="User not found.")
@@ -721,13 +776,6 @@ class UserService:
         if deleted is None:
             raise HTTPException(status_code=404, detail="User not found.")
 
-        for session in sessions:
-            workspace_id = str(session.get("active_workspace_id") or "").strip()
-            session_id = str(session.get("session_id") or "").strip()
-            if workspace_id and session_id:
-                session_dir = self.kernel.store.workspace_dir(workspace_id) / "sessions" / session_id
-                shutil.rmtree(session_dir, ignore_errors=True)
-
         shutil.rmtree(self._user_folder_path(record), ignore_errors=True)
 
         removed_workspaces: list[str] = []
@@ -736,14 +784,100 @@ class UserService:
                 continue
             if self.store.count_users_for_workspace(workspace_id) > 0:
                 continue
-            shutil.rmtree(self.kernel.store.workspace_dir(workspace_id), ignore_errors=True)
-            self.kernel.store.unregister_workspace(workspace_id)
+            self.kernel.archive_workspace(
+                workspace_id,
+                archived_by_user_id=archived_by_user_id,
+                deleted_by_user_id=record["user_id"],
+            )
             removed_workspaces.append(workspace_id)
 
         return {
             "deleted_user": self._decorate_user(record),
             "deleted_session_count": len(sessions),
             "removed_workspaces": removed_workspaces,
+            "archived_workspaces": removed_workspaces,
+        }
+
+    def archive_workspace_for_user(self, *, user_id: str, workspace_id: str) -> Dict[str, Any]:
+        record = self.store.fetch_user(str(user_id or "").strip())
+        if record is None:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        target_workspace_id = str(workspace_id or "").strip()
+        if not target_workspace_id:
+            raise HTTPException(status_code=400, detail="Workspace ID required.")
+
+        workspace_row = self.kernel.get_workspace(target_workspace_id, include_archived=True)
+        if workspace_row is None:
+            raise HTTPException(status_code=404, detail="Workspace not found.")
+        if str(workspace_row.get("status") or "active").strip().lower() == "archived":
+            raise HTTPException(status_code=409, detail="Workspace is already archived.")
+
+        archived = self.kernel.archive_workspace(
+            target_workspace_id,
+            archived_by_user_id=user_id,
+            deleted_by_user_id=user_id,
+        )
+
+        original_workspace_id = str(record.get("last_active_workspace_id") or record.get("default_workspace_id") or "").strip()
+        current_workspace_id = original_workspace_id
+        needs_rehome = original_workspace_id == target_workspace_id or not original_workspace_id
+        active_session: Optional[Dict[str, Any]] = None
+        rehome_workspace_id = current_workspace_id
+
+        if needs_rehome or self._workspace_is_archived(current_workspace_id):
+            rehome_workspace_id = self._preferred_active_workspace_for_user(record)
+            if not rehome_workspace_id:
+                rehome_workspace_id = f"ws_{uuid.uuid4().hex[:8]}"
+                rehome_label = str(record.get("display_name") or record.get("name") or "Workspace")
+                self.kernel.create_workspace(rehome_workspace_id, rehome_label)
+            workspace_label = self._workspace_label_for(rehome_workspace_id)
+            active_session = self.sessions.fetch_session_for_user(str(record["user_id"]), workspace_id=rehome_workspace_id)
+            if active_session is None:
+                active_session = self.create_session(
+                    user_id=str(record["user_id"]),
+                    title=workspace_label,
+                    description=f"Workspace session for {workspace_label}.",
+                    workspace_id=rehome_workspace_id,
+                    workspace_label=workspace_label,
+                )
+            else:
+                active_session = self._activate_session(str(record["user_id"]), str(active_session["session_id"]))
+            self.store.update_user(
+                str(record["user_id"]),
+                {
+                    "last_active_workspace_id": rehome_workspace_id,
+                    "last_active_session_id": active_session["session_id"],
+                    "updated_at": self.utc_now(),
+                },
+            )
+            current_workspace_id = rehome_workspace_id
+        else:
+            active_session = self.sessions.fetch_session(str(record.get("last_active_session_id") or "").strip())
+            if active_session is None:
+                active_session = self.sessions.fetch_session_for_user(str(record["user_id"]), workspace_id=current_workspace_id)
+            if active_session is None:
+                workspace_label = self._workspace_label_for(current_workspace_id)
+                active_session = self.create_session(
+                    user_id=str(record["user_id"]),
+                    title=workspace_label,
+                    description=f"Workspace session for {workspace_label}.",
+                    workspace_id=current_workspace_id,
+                    workspace_label=workspace_label,
+                )
+
+        workspace_state: Dict[str, Any] = {}
+        try:
+            workspace_state = self.kernel.get_state(current_workspace_id)
+        except HTTPException:
+            workspace_state = {}
+
+        return {
+            "archived_workspace": archived,
+            "workspace_id": current_workspace_id,
+            "session_id": str(active_session.get("session_id") or ""),
+            "workspace_state": workspace_state,
+            "switched_workspace": current_workspace_id != original_workspace_id,
         }
 
     def rename_session(

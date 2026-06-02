@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -115,6 +116,31 @@ class WorkspaceStore:
             idx = {"workspaces": []}
         return idx
 
+    @staticmethod
+    def _normalize_workspace_row(row: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(row)
+        status = str(normalized.get("status") or "").strip().lower() or "active"
+        if status not in {"active", "archived"}:
+            status = "active"
+        normalized["status"] = status
+        if status == "archived":
+            archived_at = str(normalized.get("archived_at") or "").strip()
+            if not archived_at:
+                archived_at = str(normalized.get("updated_at") or normalized.get("last_seen_utc") or "").strip()
+            if archived_at:
+                normalized["archived_at"] = archived_at
+        return normalized
+
+    def fetch_workspace(self, workspace_id: str) -> Optional[Dict[str, Any]]:
+        normalized_id = str(workspace_id or "").strip()
+        if not normalized_id:
+            return None
+        idx = self.load_index()
+        for row in idx.get("workspaces", []):
+            if str(row.get("workspace_id") or "").strip() == normalized_id:
+                return self._normalize_workspace_row(row)
+        return None
+
     def save_index(self, index: Dict[str, Any]) -> None:
         _write_json(self.index_path, index)
 
@@ -126,6 +152,8 @@ class WorkspaceStore:
                 row["label"] = label
                 row["description"] = str(description or row.get("description") or "").strip()
                 row["last_seen_utc"] = self.utc_now()
+                if not str(row.get("status") or "").strip():
+                    row["status"] = "active"
                 self.save_index(idx)
                 return
         rows.append(
@@ -133,6 +161,7 @@ class WorkspaceStore:
                 "workspace_id": workspace_id,
                 "label": label,
                 "description": str(description or "").strip(),
+                "status": "active",
                 "created_utc": self.utc_now(),
                 "last_seen_utc": self.utc_now(),
                 "last_room": "lobby",
@@ -159,7 +188,7 @@ class WorkspaceStore:
                 row["description"] = str(description or "").strip()
             row["last_seen_utc"] = self.utc_now()
             self.save_index(idx)
-            return row
+            return self._normalize_workspace_row(row)
         raise error_workspace_not_initialized(normalized_id)
 
     def touch_workspace(self, workspace_id: str, room_id: Optional[str] = None) -> None:
@@ -182,6 +211,47 @@ class WorkspaceStore:
         if len(next_rows) != len(rows):
             idx["workspaces"] = next_rows
             self.save_index(idx)
+
+    def archive_workspace(
+        self,
+        workspace_id: str,
+        *,
+        archived_by_user_id: Optional[str] = None,
+        deleted_by_user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        idx = self.load_index()
+        normalized_id = str(workspace_id or "").strip()
+        for row in idx.get("workspaces", []):
+            if str(row.get("workspace_id") or "").strip() != normalized_id:
+                continue
+            row["status"] = "archived"
+            row["archived_at"] = self.utc_now()
+            if archived_by_user_id is not None:
+                row["archived_by_user_id"] = str(archived_by_user_id or "").strip()
+            if deleted_by_user_id is not None:
+                row["deleted_by_user_id"] = str(deleted_by_user_id or "").strip()
+            row["last_seen_utc"] = str(row.get("last_seen_utc") or self.utc_now()).strip() or self.utc_now()
+            self.save_index(idx)
+            return self._normalize_workspace_row(row)
+        raise error_workspace_not_initialized(normalized_id)
+
+    def hard_delete_workspace(self, workspace_id: str) -> Optional[Dict[str, Any]]:
+        idx = self.load_index()
+        normalized_id = str(workspace_id or "").strip()
+        rows = idx.get("workspaces", [])
+        remaining = []
+        removed: Optional[Dict[str, Any]] = None
+        for row in rows:
+            if str(row.get("workspace_id") or "").strip() == normalized_id:
+                removed = dict(row)
+                continue
+            remaining.append(row)
+        if removed is None:
+            return None
+        idx["workspaces"] = remaining
+        self.save_index(idx)
+        shutil.rmtree(self.workspaces_dir / normalized_id, ignore_errors=True)
+        return self._normalize_workspace_row(removed)
 
 
 class WorkspaceKernel:
@@ -230,8 +300,40 @@ class WorkspaceKernel:
 
         return self.store.load_state(workspace_id), created
 
-    def list_workspaces(self) -> Dict[str, Any]:
-        return self.store.load_index()
+    def list_workspaces(self, include_archived: bool = False) -> Dict[str, Any]:
+        idx = self.store.load_index()
+        rows = [
+            self.store._normalize_workspace_row(row)
+            for row in idx.get("workspaces", [])
+            if isinstance(row, dict)
+        ]
+        if not include_archived:
+            rows = [row for row in rows if str(row.get("status") or "active").strip().lower() != "archived"]
+        return {"workspaces": rows}
+
+    def get_workspace(self, workspace_id: str, *, include_archived: bool = True) -> Optional[Dict[str, Any]]:
+        row = self.store.fetch_workspace(workspace_id)
+        if row is None:
+            return None
+        if not include_archived and str(row.get("status") or "active").strip().lower() == "archived":
+            return None
+        return row
+
+    def archive_workspace(
+        self,
+        workspace_id: str,
+        *,
+        archived_by_user_id: Optional[str] = None,
+        deleted_by_user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return self.store.archive_workspace(
+            workspace_id,
+            archived_by_user_id=archived_by_user_id,
+            deleted_by_user_id=deleted_by_user_id,
+        )
+
+    def hard_delete_workspace(self, workspace_id: str) -> Optional[Dict[str, Any]]:
+        return self.store.hard_delete_workspace(workspace_id)
 
     def get_state(self, workspace_id: str) -> Dict[str, Any]:
         state = self.store.load_state(workspace_id)

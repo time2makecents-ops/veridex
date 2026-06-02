@@ -31,6 +31,7 @@ VERIDEX_TOOL_DEFINITIONS = {
     "office.workspace_new": tool_definition("office.workspace_new", "workspace.create", "Create a workspace."),
     "office.workspace_update": tool_definition("office.workspace_update", "workspace.update", "Update workspace metadata.", requires_workspace=True),
     "office.workspace_activate": tool_definition("office.workspace_activate", "workspace.activate", "Activate a workspace.", requires_workspace=True),
+    "office.workspace_delete": tool_definition("office.workspace_delete", "workspace.delete", "Archive a workspace for the current user.", requires_workspace=True),
     "office.bootstrap": tool_definition("office.bootstrap", "workspace.bootstrap", "Bootstrap a workspace.", requires_workspace=True),
     "office.state_get": tool_definition("office.state_get", "workspace.state.get", "Read workspace state.", requires_workspace=True),
     "office.transcript_get": tool_definition("office.transcript_get", "workspace.transcript.get", "Read recent workspace transcript.", requires_workspace=True),

@@ -6,12 +6,15 @@ import { useRouter } from "next/navigation";
 import {
   adminCreateUser,
   adminDeleteUser,
+  adminDeleteWorkspace,
   adminGetUser,
   adminListUsers,
+  adminListWorkspaces,
   adminLoadTranscript,
   getCurrentUser,
   type AdminUserDetail,
   type TranscriptEntry,
+  type WorkspaceRecord,
   type UserRecord,
 } from "@/lib/api";
 import { getStoredSessionId } from "@/lib/session";
@@ -32,11 +35,29 @@ function artifactPreviewText(value: unknown): string {
   return text.length > 220 ? `${text.slice(0, 217).trimEnd()}...` : text;
 }
 
+function workspaceStatusText(workspace: WorkspaceRecord): string {
+  const status = String(workspace.status || "active").trim().toLowerCase();
+  if (status === "archived") {
+    const archivedAt = String(workspace.archived_at || "").trim();
+    const deletedBy = String(workspace.deleted_by_user_id || "").trim();
+    const parts = ["Archived"];
+    if (deletedBy) {
+      parts.push("Removed by user");
+    }
+    if (archivedAt) {
+      parts.push(`Archived at ${archivedAt}`);
+    }
+    return parts.join(" - ");
+  }
+  return "Active";
+}
+
 export default function AdminPage() {
   const router = useRouter();
   const [sessionId, setSessionId] = useState("");
   const [currentUser, setCurrentUser] = useState<UserRecord | null>(null);
   const [users, setUsers] = useState<UserRecord[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([]);
   const [selectedUserId, setSelectedUserId] = useState("");
   const [detail, setDetail] = useState<AdminUserDetail | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -44,10 +65,12 @@ export default function AdminPage() {
   const [selectedTranscriptSessionId, setSelectedTranscriptSessionId] = useState("");
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
+  const [loadingWorkspaces, setLoadingWorkspaces] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingTranscript, setLoadingTranscript] = useState(false);
   const [creatingUser, setCreatingUser] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState("");
+  const [deletingWorkspaceId, setDeletingWorkspaceId] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [createName, setCreateName] = useState("");
@@ -70,14 +93,16 @@ export default function AdminPage() {
     let cancelled = false;
     const load = async () => {
       setLoadingUsers(true);
+      setLoadingWorkspaces(true);
       setError("");
       try {
-        const [user, allUsers] = await Promise.all([getCurrentUser(), adminListUsers()]);
+        const [user, allUsers, allWorkspaces] = await Promise.all([getCurrentUser(), adminListUsers(), adminListWorkspaces()]);
         if (cancelled) {
           return;
         }
         setCurrentUser(user);
         setUsers(allUsers);
+        setWorkspaces(allWorkspaces);
       } catch (err) {
         if (!cancelled) {
           const message = err instanceof Error ? err.message : "Unable to load admin tools.";
@@ -86,6 +111,7 @@ export default function AdminPage() {
       } finally {
         if (!cancelled) {
           setLoadingUsers(false);
+          setLoadingWorkspaces(false);
         }
       }
     };
@@ -169,9 +195,10 @@ export default function AdminPage() {
     return match?.title || selectedTranscriptSessionId;
   }, [detail?.sessions, selectedTranscriptSessionId]);
 
-  async function refreshUsers(preferredUserId?: string) {
-    const allUsers = await adminListUsers();
+  async function refreshAdminLists(preferredUserId?: string) {
+    const [allUsers, allWorkspaces] = await Promise.all([adminListUsers(), adminListWorkspaces()]);
     setUsers(allUsers);
+    setWorkspaces(allWorkspaces);
     if (preferredUserId && allUsers.some((user) => String(user.user_id) === preferredUserId)) {
       setSelectedUserId(preferredUserId);
       return;
@@ -199,7 +226,7 @@ export default function AdminPage() {
       setCreateDisplayName("");
       setCreatePin("");
       setNotice(`Created user ${structured?.user?.display_name || structured?.user?.name || "User"}.`);
-      await refreshUsers(createdUserId);
+      await refreshAdminLists(createdUserId);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to create user.";
       setError(message);
@@ -242,13 +269,49 @@ export default function AdminPage() {
       await adminDeleteUser(targetId);
       setNotice(`Deleted user ${targetName}.`);
       closeUserDetail();
-      await refreshUsers();
+      await refreshAdminLists();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to delete user.";
       setError(message);
     } finally {
       setDeletingUserId("");
     }
+  }
+
+  async function handleDeleteWorkspace(target: WorkspaceRecord) {
+    const targetId = String(target.workspace_id || "");
+    if (!targetId || deletingWorkspaceId === targetId) {
+      return;
+    }
+    const targetName = target.label || target.workspace_id || targetId;
+    if (String(target.status || "active").trim().toLowerCase() !== "archived") {
+      setError("Workspace must be archived before hard delete.");
+      return;
+    }
+    if (!window.confirm(`Hard delete archived workspace "${targetName}"? This cannot be undone.`)) {
+      return;
+    }
+    setDeletingWorkspaceId(targetId);
+    setError("");
+    setNotice("");
+    try {
+      await adminDeleteWorkspace(targetId);
+      setNotice(`Deleted workspace ${targetName}.`);
+      await refreshAdminLists();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to delete workspace.";
+      setError(message);
+    } finally {
+      setDeletingWorkspaceId("");
+    }
+  }
+
+  async function handleOpenWorkspaceDetail(target: WorkspaceRecord) {
+    const targetId = String(target.workspace_id || "");
+    if (!targetId) {
+      return;
+    }
+    router.push(`/admin/workspaces/${encodeURIComponent(targetId)}`);
   }
 
   return (
@@ -323,6 +386,48 @@ export default function AdminPage() {
               })}
             </div>
           </section>
+
+          <section className="admin-panel admin-workspaces-panel">
+            <div className="admin-panel-header">
+              <h2>Workspaces</h2>
+              <span className="muted">{loadingWorkspaces ? "Loading..." : `${workspaces.length} total`}</span>
+            </div>
+            <div className="admin-session-list">
+              {workspaces.map((workspace) => {
+                const workspaceId = String(workspace.workspace_id || "");
+                const archived = String(workspace.status || "active").trim().toLowerCase() === "archived";
+                return (
+                  <div key={workspaceId} className="admin-session-row admin-static-row">
+                    <div>
+                      <div>{workspace.label || workspaceId}</div>
+                      <div className="admin-session-meta">{workspaceId}</div>
+                    </div>
+                    <div className="admin-session-meta">
+                      <div>{workspaceStatusText(workspace)}</div>
+                      <div>{Number(workspace.session_count || 0)} session{Number(workspace.session_count || 0) === 1 ? "" : "s"}</div>
+                    </div>
+                    <div className="admin-inline-actions">
+                      <button
+                        type="button"
+                        className="option-button"
+                        onClick={() => void handleOpenWorkspaceDetail(workspace)}
+                      >
+                        View Workspace
+                      </button>
+                      <button
+                        type="button"
+                        className="option-button admin-danger-button"
+                        onClick={() => void handleDeleteWorkspace(workspace)}
+                        disabled={!archived || deletingWorkspaceId === workspaceId}
+                      >
+                        {deletingWorkspaceId === workspaceId ? "Deleting..." : archived ? "Hard Delete" : "Archived Only"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
         </div>
       )}
 
@@ -389,10 +494,33 @@ export default function AdminPage() {
                   <div className="admin-session-list">
                     {detail.workspaces.map((workspace) => (
                       <div key={workspace.workspace_id} className="admin-session-row admin-static-row">
-                        <span>{workspace.label || workspace.workspace_id}</span>
-                        <span className="admin-session-meta">
-                          {workspace.workspace_id} - {Number(workspace.session_count || 0)} session{Number(workspace.session_count || 0) === 1 ? "" : "s"}
-                        </span>
+                        <div>
+                          <div>{workspace.label || workspace.workspace_id}</div>
+                          <div className="admin-session-meta">{workspace.workspace_id}</div>
+                        </div>
+                        <div className="admin-session-meta">
+                          <div>{workspaceStatusText(workspace)}</div>
+                          <div>
+                            {Number(workspace.session_count || 0)} session{Number(workspace.session_count || 0) === 1 ? "" : "s"}
+                          </div>
+                        </div>
+                        <div className="admin-inline-actions">
+                          <button
+                            type="button"
+                            className="option-button"
+                            onClick={() => void handleOpenWorkspaceDetail(workspace)}
+                          >
+                            View Workspace
+                          </button>
+                          <button
+                            type="button"
+                            className="option-button admin-danger-button"
+                            onClick={() => void handleDeleteWorkspace(workspace)}
+                            disabled={String(workspace.status || "active").trim().toLowerCase() !== "archived"}
+                          >
+                            {deletingWorkspaceId === workspace.workspace_id ? "Deleting..." : "Hard Delete"}
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>

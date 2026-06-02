@@ -106,6 +106,32 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "content": [{"type": "text", "text": f"Activated workspace {workspace_id}."}],
         }
 
+    def handle_workspace_delete(args: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = str(args.get("session_id") or "").strip()
+        workspace_id = str(args.get("workspace_id") or "").strip()
+        if not session_id:
+            raise error_missing_required_field("session_id")
+        if not workspace_id:
+            raise error_missing_required_field("workspace_id")
+        user = deps.user_service.get_user_for_session(session_id)
+        result = deps.user_service.archive_workspace_for_user(user_id=str(user["user_id"]), workspace_id=workspace_id)
+        switched_workspace = bool(result.get("switched_workspace"))
+        archived_workspace = result.get("archived_workspace") if isinstance(result, dict) else {}
+        archived_label = str((archived_workspace or {}).get("label") or workspace_id).strip() or workspace_id
+        response_text = f"Archived workspace {archived_label}."
+        if switched_workspace:
+            response_text = f"Archived workspace {archived_label}. Switched to {result.get('workspace_id')}."
+        return {
+            "structuredContent": {
+                "workspace_id": result.get("workspace_id"),
+                "session_id": result.get("session_id"),
+                "archived_workspace": archived_workspace,
+                "workspace_state": result.get("workspace_state"),
+                "switched_workspace": switched_workspace,
+            },
+            "content": [{"type": "text", "text": response_text}],
+        }
+
     def handle_office_bootstrap(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
         state, created = deps.kernel.bootstrap_workspace(workspace_id)
@@ -209,6 +235,7 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         "office.workspace_new": handle_workspace_new,
         "office.workspace_update": handle_workspace_update,
         "office.workspace_activate": handle_workspace_activate,
+        "office.workspace_delete": handle_workspace_delete,
         "office.bootstrap": handle_office_bootstrap,
         "office.state_get": handle_office_state_get,
         "office.transcript_get": handle_office_transcript_get,

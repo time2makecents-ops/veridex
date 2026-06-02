@@ -1350,11 +1350,69 @@ def admin_delete_user(
     admin_user = _require_admin_user(x_session_id)
     if str(admin_user.get("user_id") or "").strip() == str(user_id or "").strip():
         raise HTTPException(status_code=409, detail="Admin cannot delete the currently authenticated account.")
-    result = user_service.delete_user(user_id=user_id)
+    result = user_service.delete_user(user_id=user_id, archived_by_user_id=str(admin_user.get("user_id") or "").strip() or None)
     deleted_user = result["deleted_user"]
     return {
         "structuredContent": result,
         "content": [{"type": "text", "text": f"Deleted user {deleted_user['display_name']}."}],
+    }
+
+
+@app.get("/admin/workspaces")
+def admin_list_workspaces(session_id: Optional[str] = None) -> Dict[str, Any]:
+    _require_admin_user(session_id)
+    workspaces = kernel.list_workspaces(include_archived=True).get("workspaces", [])
+    return {
+        "structuredContent": {"count": len(workspaces), "workspaces": workspaces},
+        "content": [{"type": "text", "text": f"Found {len(workspaces)} workspace(s)."}],
+    }
+
+
+@app.get("/admin/workspaces/{workspace_id}")
+def admin_get_workspace(
+    workspace_id: str,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    _require_admin_user(session_id)
+    workspace = kernel.get_workspace(workspace_id, include_archived=True)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+    sessions = user_service.sessions.list_sessions_for_workspace(workspace_id)
+    artifacts = archive_service.list_artifacts(workspace_id, include_archived=True)
+    files = workspace_file_service.list_files(workspace_id)
+    return {
+        "structuredContent": {
+            "workspace": workspace,
+            "sessions": sessions,
+            "artifacts": artifacts,
+            "files": files,
+        },
+        "content": [{"type": "text", "text": f"Loaded workspace {workspace.get('label') or workspace_id}."}],
+    }
+
+
+@app.delete("/admin/workspaces/{workspace_id}")
+def admin_delete_workspace(
+    workspace_id: str,
+    x_session_id: Optional[str] = Header(default=None, alias="X-Session-Id"),
+) -> Dict[str, Any]:
+    _require_admin_user(x_session_id)
+    workspace = kernel.get_workspace(workspace_id, include_archived=True)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+    if str(workspace.get("status") or "active").strip().lower() != "archived":
+        raise HTTPException(status_code=409, detail="Workspace must be archived before hard delete.")
+    if user_service.store.count_users_for_workspace(workspace_id) > 0:
+        raise HTTPException(status_code=409, detail="Workspace is still linked to one or more users.")
+    if user_service.sessions.list_sessions_for_workspace(workspace_id):
+        raise HTTPException(status_code=409, detail="Workspace still has sessions.")
+    removed = kernel.hard_delete_workspace(workspace_id)
+    if removed is None:
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+    label = str(removed.get("label") or workspace_id).strip() or workspace_id
+    return {
+        "structuredContent": {"deleted_workspace": removed},
+        "content": [{"type": "text", "text": f"Deleted workspace {label}."}],
     }
 
 
@@ -1849,6 +1907,7 @@ def refresh_handler_bindings() -> None:
     global handle_workspace_new
     global handle_workspace_update
     global handle_workspace_activate
+    global handle_workspace_delete
     global handle_office_bootstrap
     global handle_office_state_get
     global handle_office_transcript_get
@@ -1929,6 +1988,7 @@ def refresh_handler_bindings() -> None:
     handle_workspace_new = workspace_handlers["office.workspace_new"]
     handle_workspace_update = workspace_handlers["office.workspace_update"]
     handle_workspace_activate = workspace_handlers["office.workspace_activate"]
+    handle_workspace_delete = workspace_handlers["office.workspace_delete"]
     handle_office_bootstrap = workspace_handlers["office.bootstrap"]
     handle_office_state_get = workspace_handlers["office.state_get"]
     handle_office_transcript_get = workspace_handlers["office.transcript_get"]
@@ -1988,6 +2048,7 @@ def refresh_handler_bindings() -> None:
             "office.workspace_new": handle_workspace_new,
             "office.workspace_update": handle_workspace_update,
             "office.workspace_activate": handle_workspace_activate,
+            "office.workspace_delete": handle_workspace_delete,
             "office.bootstrap": handle_office_bootstrap,
             "office.state_get": handle_office_state_get,
             "office.transcript_get": handle_office_transcript_get,
@@ -2049,6 +2110,7 @@ register_tools(
         "office.workspace_new": handle_workspace_new,
         "office.workspace_update": handle_workspace_update,
         "office.workspace_activate": handle_workspace_activate,
+        "office.workspace_delete": handle_workspace_delete,
         "office.bootstrap": handle_office_bootstrap,
         "office.state_get": handle_office_state_get,
         "office.transcript_get": handle_office_transcript_get,
