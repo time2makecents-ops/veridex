@@ -281,6 +281,36 @@ class UserServiceTests(unittest.TestCase):
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 
+    def test_restore_workspace_returns_workspace_to_active_lists(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_restore_workspace"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            service = UserService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+
+            created = service.onboard_user(name="Rae", display_name="Rae Quinn", pin_code="3344")
+            workspace_id = created["workspace_id"]
+            user_id = created["user"]["user_id"]
+
+            archived = service.kernel.archive_workspace(
+                workspace_id,
+                archived_by_user_id="usr_admin",
+                deleted_by_user_id=user_id,
+            )
+            self.assertEqual(archived["status"], "archived")
+            self.assertNotIn(workspace_id, [row["workspace_id"] for row in service.list_user_workspaces(user_id)])
+
+            restored = service.kernel.restore_workspace(workspace_id)
+            self.assertEqual(restored["status"], "active")
+            self.assertIn(workspace_id, [row["workspace_id"] for row in service.list_user_workspaces(user_id)])
+            self.assertEqual(service.kernel.list_workspaces()["workspaces"][0]["workspace_id"], workspace_id)
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
     def test_invalid_pin_rejected(self) -> None:
         runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_invalid"
         workspaces_dir = runtime_dir / "workspaces"

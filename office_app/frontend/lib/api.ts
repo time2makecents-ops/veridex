@@ -124,6 +124,16 @@ export type UserRecord = {
   [key: string]: unknown;
 };
 
+export type IntegrationConnection = {
+  provider: string;
+  configured: boolean;
+  connected: boolean;
+  account_email: string;
+  scopes: string[];
+  access_token_expires_at: string;
+  updated_at: string;
+};
+
 export type AdminUserDetail = {
   user: UserRecord;
   sessions: SessionRecord[];
@@ -576,6 +586,40 @@ export async function getCurrentUser(): Promise<UserRecord> {
   return structured.user;
 }
 
+export async function listIntegrations(): Promise<IntegrationConnection[]> {
+  const response = await authorizedGetJson<LobbyResponse>("/integrations");
+  const structured = response.structuredContent as { connections?: IntegrationConnection[] } | undefined;
+  return Array.isArray(structured?.connections) ? structured.connections : [];
+}
+
+export async function startGoogleConnection(): Promise<string> {
+  const sessionId = typeof window === "undefined" ? "" : window.localStorage.getItem("veridex.session_id") ?? "";
+  if (!sessionId) {
+    throw new Error("Session ID required");
+  }
+  const response = await postJson<LobbyResponse>("/integrations/google/connect", {}, { "X-Session-Id": sessionId });
+  const structured = response.structuredContent as { authorization_url?: unknown } | undefined;
+  const url = typeof structured?.authorization_url === "string" ? structured.authorization_url : "";
+  if (!url) {
+    throw new Error("Google authorization URL was not returned.");
+  }
+  return url;
+}
+
+export async function disconnectIntegration(provider: string): Promise<void> {
+  const sessionId = typeof window === "undefined" ? "" : window.localStorage.getItem("veridex.session_id") ?? "";
+  if (!sessionId) {
+    throw new Error("Session ID required");
+  }
+  const response = await fetchJsonWithTimeout(`/integrations/${encodeURIComponent(provider)}`, {
+    method: "DELETE",
+    headers: { "X-Session-Id": sessionId },
+  });
+  if (!response.ok) {
+    throw new Error(await readResponseError(response));
+  }
+}
+
 export async function adminListUsers(): Promise<UserRecord[]> {
   const response = await authorizedGetJson<LobbyResponse>("/admin/users");
   const structured = response.structuredContent as { users?: UserRecord[] } | undefined;
@@ -644,6 +688,24 @@ export async function adminDeleteWorkspace(workspaceId: string): Promise<LobbyRe
   }
   const response = await fetchJsonWithTimeout(`/admin/workspaces/${encodeURIComponent(workspaceId)}/delete`, {
     method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Session-Id": sessionId,
+    },
+  });
+  if (!response.ok) {
+    throw new Error(await readResponseError(response));
+  }
+  return (await response.json()) as LobbyResponse;
+}
+
+export async function adminRestoreWorkspace(workspaceId: string): Promise<LobbyResponse> {
+  const sessionId = typeof window === "undefined" ? "" : window.localStorage.getItem("veridex.session_id") ?? "";
+  if (!sessionId) {
+    throw new Error("Session ID required");
+  }
+  const response = await fetchJsonWithTimeout(`/admin/workspaces/${encodeURIComponent(workspaceId)}/restore`, {
+    method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-Session-Id": sessionId,

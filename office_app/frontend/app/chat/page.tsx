@@ -48,6 +48,8 @@ type Message = {
   speaker?: string;
   room?: string;
   sessionId?: string;
+  confirmationId?: string;
+  confirmationLabel?: string;
 };
 
 type ProviderBadge = {
@@ -168,6 +170,8 @@ export default function ChatPage() {
   const [providerBadge, setProviderBadge] = useState<ProviderBadge | null>(null);
   const [currentUser, setCurrentUser] = useState<UserRecord | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [confirmingIntegrationId, setConfirmingIntegrationId] = useState("");
+  const [confirmedIntegrationIds, setConfirmedIntegrationIds] = useState<string[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
   const draftRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -872,6 +876,8 @@ export default function ChatPage() {
         routing?: { route_kind?: string };
         provider?: string;
         fallback_used?: boolean;
+        confirmation_id?: string;
+        action_kind?: string;
       } | undefined;
       const nextWorkspaceId = String(response.workspace_id || structuredResponse?.workspace_id || workspaceId);
       const nextSessionId = String(response.session_id || structuredResponse?.session_id || outgoingSessionId);
@@ -910,7 +916,16 @@ export default function ChatPage() {
       setRecentRooms((current) => pushRecentRoom(current, nextRoom));
       setMessages((current) => [
         ...current,
-        { id: crypto.randomUUID(), role: "assistant", speaker: nextSpeaker, text: assistantText, room: nextRoom, sessionId: nextSessionId },
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          speaker: nextSpeaker,
+          text: assistantText,
+          room: nextRoom,
+          sessionId: nextSessionId,
+          confirmationId: typeof structuredResponse?.confirmation_id === "string" ? structuredResponse.confirmation_id : undefined,
+          confirmationLabel: structuredResponse?.action_kind === "gmail.send" ? "Confirm Gmail Send" : undefined,
+        },
       ]);
       if (nextRoom !== activeRoom || nextPersona !== activePersona) {
         appendRoomTransition(nextRoom, nextPersona);
@@ -932,6 +947,26 @@ export default function ChatPage() {
       window.requestAnimationFrame(() => {
         draftRef.current?.focus();
       });
+    }
+  }
+
+  async function confirmIntegrationAction(confirmationId: string, room: string, targetSessionId: string) {
+    if (!confirmationId || confirmingIntegrationId) {
+      return;
+    }
+    setConfirmingIntegrationId(confirmationId);
+    setError("");
+    try {
+      const response = await callTool("office.integration_confirm", { confirmation_id: confirmationId, session_id: targetSessionId });
+      setConfirmedIntegrationIds((current) => [...current, confirmationId]);
+      setMessages((current) => [
+        ...current,
+        { id: crypto.randomUUID(), role: "assistant", speaker: "Nancy", text: requestText(response), room, sessionId: targetSessionId },
+      ]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to confirm the external action.");
+    } finally {
+      setConfirmingIntegrationId("");
     }
   }
 
@@ -1100,6 +1135,9 @@ export default function ChatPage() {
               <div className="muted">{currentSessionDescription || "No session description yet."}</div>
             </div>
             <div className="session-inline">
+              <button type="button" className="option-button admin-link-button" onClick={() => router.push("/profile")}>
+                Profile
+              </button>
               {currentUser?.is_admin ? (
                 <button type="button" className="option-button admin-link-button" onClick={() => router.push("/admin")}>
                   Admin
@@ -1640,6 +1678,16 @@ export default function ChatPage() {
                 {isNavigator ? <strong>Navigator</strong> : speakerLabel}
               </div>
               <div className="chat-text">{message.text}</div>
+              {message.confirmationId ? (
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={confirmingIntegrationId === message.confirmationId || confirmedIntegrationIds.includes(message.confirmationId)}
+                  onClick={() => void confirmIntegrationAction(message.confirmationId || "", message.room || activeRoom, message.sessionId || sessionId)}
+                >
+                  {confirmedIntegrationIds.includes(message.confirmationId) ? "Sent" : confirmingIntegrationId === message.confirmationId ? "Sending..." : message.confirmationLabel || "Confirm"}
+                </button>
+              ) : null}
               </div>
             );
           })}

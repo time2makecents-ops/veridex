@@ -201,6 +201,22 @@ class MemoHandlerTests(unittest.TestCase):
         self.assertFalse(response["structuredContent"]["is_refusal"])
         self.assertTrue(response["structuredContent"]["closure_appended"])
 
+    def test_email_memo_to_nancy_is_blocked_without_model_or_send_claim(self) -> None:
+        router = CapturingModelRouter("I will send the email.")
+        handlers = build_memo_handlers(self._deps(router))
+
+        response = handlers["mailroom.dispatch"](
+            {
+                "workspace_id": self.workspace_id,
+                "to_room": "my_office",
+                "body": "Send that drafted email.",
+            }
+        )
+
+        self.assertTrue(response["structuredContent"]["email_action_blocked"])
+        self.assertIn("No email was sent.", response["structuredContent"]["response_text"])
+        self.assertEqual(router.system_prompts, [])
+
 
 if __name__ == "__main__":
     unittest.main()

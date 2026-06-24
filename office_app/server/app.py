@@ -2,6 +2,7 @@
 
 import csv
 import json
+import os
 import re
 import sqlite3
 from datetime import datetime, timezone
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from office_app.server.archive_service import ArchiveService
@@ -33,6 +35,7 @@ from office_app.server.handlers.ai_handlers import build_ai_handlers
 from office_app.server.handlers.artifact_handlers import build_artifact_handlers
 from office_app.server.handlers.dependencies import HandlerDeps
 from office_app.server.handlers.file_handlers import build_file_handlers
+from office_app.server.handlers.integration_handlers import build_integration_handlers
 from office_app.server.handlers.memo_handlers import build_memo_handlers
 from office_app.server.handlers.session_handlers import build_session_handlers
 from office_app.server.handlers.workspace_handlers import build_workspace_handlers
@@ -42,6 +45,7 @@ from office_app.server.user_service import UserService
 from office_app.server.tools_registry import register_tools
 from office_app.server.workspace_file_service import PrivateFileService, WorkspaceFileService
 from office_app.server.workspace_kernel import WorkspaceKernel, WorkspaceStore
+from office_app.server.integration_service import IntegrationService
 
 SERVER_DIR = Path(__file__).resolve().parent
 PKG_DIR = SERVER_DIR.parent
@@ -82,6 +86,7 @@ kernel = WorkspaceKernel(store=store, utc_now_fn=utc_now)
 memo_service = MemoService(store=store, legacy_memos_dir=LEGACY_MEMOS_DIR, utc_now_fn=utc_now)
 archive_service = ArchiveService(workspaces_dir=WORKSPACES_DIR, utc_now_fn=utc_now)
 user_service = UserService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
+integration_service = IntegrationService(runtime_dir=RUNTIME_DIR)
 receptionist_context_service = ReceptionistContextService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
 workspace_file_service = WorkspaceFileService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
 private_file_service = PrivateFileService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
@@ -265,6 +270,11 @@ class ReceptionistContextUpdateRequest(BaseModel):
     session_summary_text: Optional[str] = None
     recent_turns: Optional[list[dict[str, Any]]] = None
     current_prompt_state: Optional[dict[str, Any]] = None
+
+
+class IntegrationActionRequest(BaseModel):
+    action_kind: str = Field(..., description="Google action: gmail.send, calendar.create, calendar.update, or calendar.cancel")
+    payload: Dict[str, Any] = Field(default_factory=dict)
 
 
 app = FastAPI(title="Veridex Office Server", version="1.3.0")
@@ -1286,7 +1296,63 @@ def current_user(session_id: Optional[str] = None) -> Dict[str, Any]:
     profile = _session_user_profile(session_id)
     if not profile:
         raise HTTPException(status_code=401, detail="Invalid session")
-    return {"structuredContent": {"user": profile}, "content": [{"type": "text", "text": profile.get("display_name", "User")}]}
+    return {"structuredContent": {"user": profile}, "content": [{"type": "text", "text": profile.get("display_name", "User")}]} 
+
+
+@app.get("/integrations")
+def list_integrations(session_id: Optional[str] = None) -> Dict[str, Any]:
+    profile = _session_user_profile(session_id)
+    if not profile:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    connections = integration_service.list_connections(str(profile["user_id"]))
+    return {"structuredContent": {"connections": connections}, "content": [{"type": "text", "text": f"Found {len(connections)} integration provider(s)."}]}
+
+
+@app.post("/integrations/google/connect")
+def begin_google_integration(x_session_id: Optional[str] = Header(default=None, alias="X-Session-Id")) -> Dict[str, Any]:
+    profile = _session_user_profile(x_session_id)
+    if not profile or not x_session_id:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    authorization_url = integration_service.begin_google_connect(user_id=str(profile["user_id"]), session_id=x_session_id)
+    return {"structuredContent": {"provider": "google", "authorization_url": authorization_url}, "content": [{"type": "text", "text": "Open the Google authorization URL to connect your account."}]}
+
+
+@app.get("/integrations/google/callback")
+def complete_google_integration(code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None):
+    if error:
+        raise HTTPException(status_code=400, detail=f"Google authorization was not completed: {error}")
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="Google authorization response is missing code or state.")
+    integration_service.complete_google_connect(code=code, state=state)
+    target = str(os.environ.get("VERIDEX_INTEGRATIONS_SUCCESS_URL") or "https://localhost:3000/profile?google=connected").strip()
+    return RedirectResponse(target, status_code=303)
+
+
+@app.delete("/integrations/{provider}")
+def disconnect_integration(provider: str, x_session_id: Optional[str] = Header(default=None, alias="X-Session-Id")) -> Dict[str, Any]:
+    profile = _session_user_profile(x_session_id)
+    if not profile:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    integration_service.disconnect(str(profile["user_id"]), provider)
+    return {"structuredContent": {"provider": provider, "disconnected": True}, "content": [{"type": "text", "text": f"Disconnected {provider}."}]}
+
+
+@app.post("/integrations/actions")
+def create_integration_action(payload: IntegrationActionRequest, x_session_id: Optional[str] = Header(default=None, alias="X-Session-Id")) -> Dict[str, Any]:
+    profile = _session_user_profile(x_session_id)
+    if not profile:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    pending = integration_service.create_pending_action(user_id=str(profile["user_id"]), action_kind=payload.action_kind, payload=payload.payload)
+    return {"structuredContent": pending, "content": [{"type": "text", "text": "External action is pending confirmation."}]}
+
+
+@app.post("/integrations/actions/{confirmation_id}/confirm")
+def confirm_integration_action(confirmation_id: str, x_session_id: Optional[str] = Header(default=None, alias="X-Session-Id")) -> Dict[str, Any]:
+    profile = _session_user_profile(x_session_id)
+    if not profile:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    result = integration_service.confirm_action(user_id=str(profile["user_id"]), confirmation_id=confirmation_id)
+    return {"structuredContent": {"result": result}, "content": [{"type": "text", "text": "External action completed."}]}
 
 
 @app.get("/admin/users")
@@ -1388,6 +1454,25 @@ def admin_get_workspace(
             "files": files,
         },
         "content": [{"type": "text", "text": f"Loaded workspace {workspace.get('label') or workspace_id}."}],
+    }
+
+
+@app.post("/admin/workspaces/{workspace_id}/restore")
+def admin_restore_workspace(
+    workspace_id: str,
+    x_session_id: Optional[str] = Header(default=None, alias="X-Session-Id"),
+) -> Dict[str, Any]:
+    _require_admin_user(x_session_id)
+    workspace = kernel.get_workspace(workspace_id, include_archived=True)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+    if str(workspace.get("status") or "active").strip().lower() != "archived":
+        raise HTTPException(status_code=409, detail="Workspace is not archived.")
+    restored = kernel.restore_workspace(workspace_id)
+    label = str(restored.get("label") or workspace_id).strip() or workspace_id
+    return {
+        "structuredContent": {"restored_workspace": restored},
+        "content": [{"type": "text", "text": f"Restored workspace {label}."}],
     }
 
 
@@ -1955,6 +2040,15 @@ def refresh_handler_bindings() -> None:
     global handle_search_reviews
     global handle_search_places
     global handle_ocr_extract
+    global handle_gmail_search
+    global handle_gmail_read
+    global handle_gmail_draft
+    global handle_gmail_send
+    global handle_calendar_list
+    global handle_calendar_create
+    global handle_calendar_update
+    global handle_calendar_cancel
+    global handle_integration_confirm
 
     handler_deps = HandlerDeps(
         kernel=kernel,
@@ -1983,6 +2077,7 @@ def refresh_handler_bindings() -> None:
     artifact_handlers = build_artifact_handlers(handler_deps)
     file_handlers = build_file_handlers(handler_deps)
     ai_handlers = build_ai_handlers(handler_deps)
+    integration_handlers = build_integration_handlers(integration_service=integration_service, user_service=user_service)
 
     handle_workspaces_list = workspace_handlers["office.workspaces_list"]
     handle_workspace_new = workspace_handlers["office.workspace_new"]
@@ -2040,6 +2135,15 @@ def refresh_handler_bindings() -> None:
     handle_search_reviews = ai_handlers["office.search_reviews"]
     handle_search_places = ai_handlers["office.search_places"]
     handle_ocr_extract = ai_handlers["office.ocr_extract"]
+    handle_gmail_search = integration_handlers["office.gmail_search"]
+    handle_gmail_read = integration_handlers["office.gmail_read"]
+    handle_gmail_draft = integration_handlers["office.gmail_draft"]
+    handle_gmail_send = integration_handlers["office.gmail_send"]
+    handle_calendar_list = integration_handlers["office.calendar_list"]
+    handle_calendar_create = integration_handlers["office.calendar_create"]
+    handle_calendar_update = integration_handlers["office.calendar_update"]
+    handle_calendar_cancel = integration_handlers["office.calendar_cancel"]
+    handle_integration_confirm = integration_handlers["office.integration_confirm"]
 
     register_tools(
         router,
@@ -2068,6 +2172,15 @@ def refresh_handler_bindings() -> None:
             "office.search_reviews": handle_search_reviews,
             "office.search_places": handle_search_places,
             "office.ocr_extract": handle_ocr_extract,
+            "office.gmail_search": handle_gmail_search,
+            "office.gmail_read": handle_gmail_read,
+            "office.gmail_draft": handle_gmail_draft,
+            "office.gmail_send": handle_gmail_send,
+            "office.calendar_list": handle_calendar_list,
+            "office.calendar_create": handle_calendar_create,
+            "office.calendar_update": handle_calendar_update,
+            "office.calendar_cancel": handle_calendar_cancel,
+            "office.integration_confirm": handle_integration_confirm,
             "mailroom.dispatch": handle_mailroom_dispatch,
             "office.artifact_create": handle_artifact_create,
             "office.artifact_get": handle_artifact_get,
@@ -2130,6 +2243,15 @@ register_tools(
         "office.search_reviews": handle_search_reviews,
         "office.search_places": handle_search_places,
         "office.ocr_extract": handle_ocr_extract,
+        "office.gmail_search": handle_gmail_search,
+        "office.gmail_read": handle_gmail_read,
+        "office.gmail_draft": handle_gmail_draft,
+        "office.gmail_send": handle_gmail_send,
+        "office.calendar_list": handle_calendar_list,
+        "office.calendar_create": handle_calendar_create,
+        "office.calendar_update": handle_calendar_update,
+        "office.calendar_cancel": handle_calendar_cancel,
+        "office.integration_confirm": handle_integration_confirm,
         "mailroom.dispatch": handle_mailroom_dispatch,
         "office.artifact_create": handle_artifact_create,
         "office.artifact_get": handle_artifact_get,

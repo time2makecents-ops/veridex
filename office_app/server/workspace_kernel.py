@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from fastapi import HTTPException
 from office_app.server.errors import error_workspace_not_initialized
 from office_app.server.persona_registry import persona_profile_for_name
 from office_app.server.room_policy_registry import load_room_policies
@@ -331,6 +332,23 @@ class WorkspaceKernel:
             archived_by_user_id=archived_by_user_id,
             deleted_by_user_id=deleted_by_user_id,
         )
+
+    def restore_workspace(self, workspace_id: str) -> Dict[str, Any]:
+        idx = self.store.load_index()
+        normalized_id = str(workspace_id or "").strip()
+        for row in idx.get("workspaces", []):
+            if str(row.get("workspace_id") or "").strip() != normalized_id:
+                continue
+            if str(row.get("status") or "active").strip().lower() != "archived":
+                raise HTTPException(status_code=409, detail="Workspace is not archived.")
+            row["status"] = "active"
+            row.pop("archived_at", None)
+            row.pop("archived_by_user_id", None)
+            row.pop("deleted_by_user_id", None)
+            row["last_seen_utc"] = self.utc_now()
+            self.store.save_index(idx)
+            return self.store._normalize_workspace_row(row)
+        raise error_workspace_not_initialized(normalized_id)
 
     def hard_delete_workspace(self, workspace_id: str) -> Optional[Dict[str, Any]]:
         return self.store.hard_delete_workspace(workspace_id)

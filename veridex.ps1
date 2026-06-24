@@ -39,20 +39,37 @@ function Get-ListeningPids {
   $pids | Sort-Object -Unique
 }
 
+function Get-VeridexProcessPids {
+  try {
+    $processes = Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+      $_.CommandLine -and (
+        $_.CommandLine -like "*office_app\\frontend*server.cjs*" -or
+        $_.CommandLine -like "*uvicorn office_app.server.app:app*"
+      )
+    }
+    return @($processes | ForEach-Object { [int]$_.ProcessId } | Sort-Object -Unique)
+  } catch {
+    return @()
+  }
+}
+
 function Stop-Veridex {
   foreach ($pidFile in @($backendPidFile, $frontendPidFile)) {
     if (Test-Path $pidFile) {
       try {
         $savedPid = [int](Get-Content -Path $pidFile -ErrorAction Stop | Select-Object -First 1)
         if ($savedPid -gt 0) {
-          taskkill /PID $savedPid /T /F | Out-Null
+          taskkill /PID $savedPid /T /F 2>$null | Out-Null
           Write-Host "Stopped saved PID $savedPid"
         }
       } catch {}
       try { Remove-Item -Path $pidFile -Force -ErrorAction Stop } catch {}
     }
   }
-  $pids = Get-ListeningPids -Ports @($backendPort, $frontendPort)
+  $pids = @(
+    Get-ListeningPids -Ports @($backendPort, $frontendPort)
+    Get-VeridexProcessPids
+  ) | Sort-Object -Unique
   if (-not $pids) {
     Write-Host "Veridex is not listening on $backendPort or $frontendPort."
   }
@@ -60,7 +77,7 @@ function Stop-Veridex {
     if ($processId -and $processId -ne 0) {
       try {
         # Kill process tree so wrapper cmd windows close too.
-        taskkill /PID $processId /T /F | Out-Null
+        taskkill /PID $processId /T /F 2>$null | Out-Null
         Write-Host "Stopped PID $processId"
       } catch {
         Write-Host "Could not stop PID ${processId}: $($_.Exception.Message)"
@@ -86,7 +103,7 @@ function Stop-Veridex {
   } catch {}
   foreach ($cmdPid in ($cmdCandidates | Sort-Object -Unique)) {
     try {
-      taskkill /PID $cmdPid /T /F | Out-Null
+      taskkill /PID $cmdPid /T /F 2>$null | Out-Null
       Write-Host "Closed Veridex cmd PID $cmdPid"
     } catch {}
   }
@@ -104,6 +121,27 @@ function Wait-Port {
         return $true
       }
     } catch {}
+    Start-Sleep -Milliseconds 500
+  }
+  return $false
+}
+
+function Test-BackendReady {
+  try {
+    $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$backendPort/health" -TimeoutSec 3
+    return ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400)
+  } catch {
+    return $false
+  }
+}
+
+function Wait-BackendReady {
+  param([int]$TimeoutSeconds = 30)
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-BackendReady) {
+      return $true
+    }
     Start-Sleep -Milliseconds 500
   }
   return $false
@@ -177,7 +215,7 @@ function Start-Backend {
 function Start-Frontend {
   $proc = Start-Process `
     -FilePath "cmd.exe" `
-    -ArgumentList "/k", 'title Veridex Frontend && node server.cjs' `
+    -ArgumentList "/k", "title Veridex Frontend && set PORT=$frontendPort && node server.cjs" `
     -WorkingDirectory $frontendDir `
     -PassThru
   if ($proc -and $proc.Id) {
@@ -190,7 +228,7 @@ switch ($Action) {
     Stop-Veridex
   }
   "status" {
-    $backendUp = Test-NetConnection 127.0.0.1 -Port $backendPort -InformationLevel Quiet
+    $backendUp = Test-BackendReady
     $frontendUp = Test-FrontendReady
     Write-Host "Backend ($backendPort): $backendUp"
     Write-Host "Frontend ($frontendPort): $frontendUp"
@@ -198,6 +236,11 @@ switch ($Action) {
       Write-Host "Run smoke test:" -ForegroundColor Green
       Write-Host "  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $smokeScript"
     } elseif (-not $backendUp -or -not $frontendUp) {
+      $unmanagedPids = Get-VeridexProcessPids
+      if ($unmanagedPids.Count -gt 0) {
+        Write-Host "Detected Veridex process PID(s) outside the healthy managed state: $($unmanagedPids -join ', ')" -ForegroundColor Yellow
+        Write-Host "Run: C:\Office-App\veridex.ps1 restart" -ForegroundColor Yellow
+      }
       Show-StartupHelp
     }
   }
@@ -205,7 +248,7 @@ switch ($Action) {
     Stop-Veridex
     Start-Sleep -Seconds 2
     Start-Backend
-    if (-not (Wait-Port -Port $backendPort -TimeoutSeconds 30)) {
+    if (-not (Wait-BackendReady -TimeoutSeconds 30)) {
       Show-StartupHelp
       throw "Backend failed to start on port $backendPort."
     }
@@ -221,7 +264,7 @@ switch ($Action) {
     }
   }
   default {
-    $backendUp = Test-NetConnection 127.0.0.1 -Port $backendPort -InformationLevel Quiet
+    $backendUp = Test-BackendReady
     $frontendUp = Test-FrontendReady
     if ($backendUp -and $frontendUp) {
       Write-Host "Veridex is already running."
@@ -229,7 +272,7 @@ switch ($Action) {
     }
     if (-not $backendUp) {
       Start-Backend
-      if (-not (Wait-Port -Port $backendPort -TimeoutSeconds 30)) {
+      if (-not (Wait-BackendReady -TimeoutSeconds 30)) {
         Show-StartupHelp
         throw "Backend failed to start on port $backendPort."
       }

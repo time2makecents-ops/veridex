@@ -29,6 +29,7 @@ from office_app.server.app import (
     admin_get_workspace,
     admin_list_users,
     admin_list_workspaces,
+    admin_restore_workspace,
     current_user,
     utc_now,
     app as fastapi_app,
@@ -445,6 +446,100 @@ class SessionRoutingTests(unittest.TestCase):
             delete_response = admin_delete_workspace(workspace_id, x_session_id=admin_session_id)
             self.assertEqual(delete_response["structuredContent"]["deleted_workspace"]["workspace_id"], workspace_id)
             self.assertIsNone(temp_kernel.get_workspace(workspace_id, include_archived=True))
+        finally:
+            app_module.store = original["store"]
+            app_module.kernel = original["kernel"]
+            app_module.memo_service = original["memo_service"]
+            app_module.archive_service = original["archive_service"]
+            app_module.user_service = original["user_service"]
+            app_module.receptionist_context_service = original["receptionist_context_service"]
+            app_module.workspace_file_service = original["workspace_file_service"]
+            app_module.nancy_service = original["nancy_service"]
+            app_module.router = original["router"]
+            app_module.pipeline = original["pipeline"]
+            app_module.refresh_handler_bindings()
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_admin_can_restore_archived_workspace(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_session_routing_test_admin_restore_workspace"
+        workspaces_dir = runtime_dir / "workspaces"
+        legacy_memos_dir = runtime_dir / "memos"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+        legacy_memos_dir.mkdir(parents=True, exist_ok=True)
+
+        original = {
+            "store": app_module.store,
+            "kernel": app_module.kernel,
+            "memo_service": app_module.memo_service,
+            "archive_service": app_module.archive_service,
+            "user_service": app_module.user_service,
+            "receptionist_context_service": app_module.receptionist_context_service,
+            "workspace_file_service": app_module.workspace_file_service,
+            "nancy_service": app_module.nancy_service,
+            "router": app_module.router,
+            "pipeline": app_module.pipeline,
+        }
+
+        try:
+            temp_store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_kernel = WorkspaceKernel(store=temp_store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_archive = ArchiveService(workspaces_dir=workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_user = app_module.UserService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_receptionist_context = app_module.ReceptionistContextService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_memo = MemoService(store=temp_store, legacy_memos_dir=legacy_memos_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_workspace_files = app_module.WorkspaceFileService(
+                kernel=temp_kernel,
+                runtime_dir=runtime_dir,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            )
+            temp_nancy = NancyService(
+                kernel=temp_kernel,
+                archive_service=temp_archive,
+                store=temp_store,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            )
+            temp_router = CommandRouter()
+            temp_pipeline = RequestPipeline(
+                kernel=temp_kernel,
+                navigator_control=NAVIGATOR_CONTROL,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+                tool_names=[],
+                app_version="1.3.0",
+            )
+
+            app_module.store = temp_store
+            app_module.kernel = temp_kernel
+            app_module.memo_service = temp_memo
+            app_module.archive_service = temp_archive
+            app_module.user_service = temp_user
+            app_module.receptionist_context_service = temp_receptionist_context
+            app_module.workspace_file_service = temp_workspace_files
+            app_module.nancy_service = temp_nancy
+            app_module.router = temp_router
+            app_module.pipeline = temp_pipeline
+            app_module.refresh_handler_bindings()
+
+            admin = temp_user.ensure_admin_user()
+            admin_session_id = temp_user.enter_lobby(pin_code="1978")["session_id"]
+            created = lobby_onboard(LobbyOnboardRequest(name="Iris", pin_code="8856"))
+            workspace_id = created["structuredContent"]["workspace_id"]
+            user_id = created["structuredContent"]["user"]["user_id"]
+            temp_user.delete_user(user_id=user_id, archived_by_user_id=admin["user_id"])
+
+            archived = temp_kernel.get_workspace(workspace_id, include_archived=True)
+            self.assertIsNotNone(archived)
+            self.assertEqual(archived["status"], "archived")
+            self.assertNotIn(workspace_id, [row["workspace_id"] for row in temp_kernel.list_workspaces()["workspaces"]])
+
+            restore_response = admin_restore_workspace(workspace_id, x_session_id=admin_session_id)
+            self.assertEqual(restore_response["structuredContent"]["restored_workspace"]["status"], "active")
+            self.assertEqual(temp_kernel.get_workspace(workspace_id)["status"], "active")
+            self.assertIn(workspace_id, [row["workspace_id"] for row in temp_kernel.list_workspaces()["workspaces"]])
+            self.assertEqual(
+                next(row for row in temp_kernel.list_workspaces()["workspaces"] if row["workspace_id"] == workspace_id)["status"],
+                "active",
+            )
         finally:
             app_module.store = original["store"]
             app_module.kernel = original["kernel"]

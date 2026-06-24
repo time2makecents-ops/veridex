@@ -191,6 +191,21 @@ def build_memo_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         body = str(args["body"]).strip()
         explicit_persona = str(args.get("explicit_persona", "")).strip() or None
 
+        # Mailroom memos are text-only. Do not let a model reply imply that Nancy sent email.
+        if str(to_room_raw or "").strip().lower() in {"my_office", "nancy", "nancy office"} and re.search(r"\b(?:draft|send)\b.*\b(?:email|gmail)\b|\bsend\s+that\s+drafted\s+email\b", body, re.IGNORECASE):
+            response_text = (
+                "No email was sent. Email actions cannot run through a memo to Nancy. "
+                "Use: Nancy, send an email to name@example.com subject: Your subject body: Your message."
+            )
+            return {
+                "structuredContent": {
+                    "workspace_id": workspace_id,
+                    "response_text": response_text,
+                    "email_action_blocked": True,
+                },
+                "content": [{"type": "text", "text": response_text}],
+            }
+
         state = deps.kernel.get_state(workspace_id)
         from_room_external = state.get("active_room", "lobby")
         memo_result = deps.memo_service.dispatch_memo(

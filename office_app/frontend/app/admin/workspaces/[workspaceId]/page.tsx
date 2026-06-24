@@ -7,6 +7,7 @@ import {
   adminDeleteWorkspace,
   adminGetWorkspace,
   adminLoadTranscript,
+  adminRestoreWorkspace,
   type AdminWorkspaceDetail,
   type ArtifactRecord,
   type FileRecord,
@@ -60,6 +61,7 @@ export default function AdminWorkspaceDetailPage() {
   const [detail, setDetail] = useState<AdminWorkspaceDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [selectedSessionId, setSelectedSessionId] = useState("");
@@ -169,6 +171,31 @@ export default function AdminWorkspaceDetailPage() {
     }
   }
 
+  async function handleRestoreWorkspace() {
+    if (!detail?.workspace) {
+      return;
+    }
+    const targetName = detail.workspace.label || detail.workspace.workspace_id || workspaceId;
+    if (String(detail.workspace.status || "active").trim().toLowerCase() !== "archived") {
+      setError("Workspace is not archived.");
+      return;
+    }
+    setRestoring(true);
+    setError("");
+    setNotice("");
+    try {
+      await adminRestoreWorkspace(workspaceId);
+      const nextDetail = await adminGetWorkspace(workspaceId);
+      setDetail(nextDetail);
+      setNotice(`Restored workspace ${targetName}.`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to restore workspace.";
+      setError(message);
+    } finally {
+      setRestoring(false);
+    }
+  }
+
   const workspace = detail?.workspace || null;
   const sessions = detail?.sessions || [];
   const artifacts = detail?.artifacts || [];
@@ -187,6 +214,14 @@ export default function AdminWorkspaceDetailPage() {
           <div className="admin-inline-actions">
             <button type="button" className="option-button" onClick={() => router.push("/admin")}>
               Back
+            </button>
+            <button
+              type="button"
+              className="option-button"
+              onClick={() => void handleRestoreWorkspace()}
+              disabled={restoring || !workspace || String(workspace.status || "active").trim().toLowerCase() !== "archived"}
+            >
+              {restoring ? "Restoring..." : "Restore Workspace"}
             </button>
             <button
               type="button"

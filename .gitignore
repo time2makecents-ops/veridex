@@ -42,6 +42,7 @@ desktop.ini
 # =========================
 *.log
 logs/
+.veridex-*.pid
 
 # =========================
 # Runtime data (Veridex workspace state)

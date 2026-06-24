@@ -258,6 +258,7 @@ class RequestPipeline:
         r"^(?:please\s+)?(?:send|file|dispatch)\s+(?:a\s+)?memo\s+to\s+(?P<target>[^.?!:;,]+)[.?!:;,-]*\s*(?P<body>.*)$",
         re.IGNORECASE,
     )
+    NANCY_DIRECT_RE = re.compile(r"^(?:hey\s+)?nancy\s*[,.:\-]?\s*(?P<body>.+)$", re.IGNORECASE)
     ROOM_NAVIGATION_PREFIXES = (
         "go to ",
         "go back to ",
@@ -1217,6 +1218,15 @@ class RequestPipeline:
                 **session_objects_route,
             }
 
+        nancy_direct_route = self.route_nancy_direct_request(workspace_id, request_text)
+        if nancy_direct_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **nancy_direct_route,
+            }
+
         memo_dispatch_route = self.route_memo_dispatch_request(workspace_id, request_text)
         if memo_dispatch_route is not None:
             if "route_kind" in memo_dispatch_route:
@@ -1378,6 +1388,15 @@ class RequestPipeline:
                 "workspace_id": workspace_id,
                 "request": request_text,
                 **ocr_route,
+            }
+
+        integration_route = self.route_integration_request(workspace_id, request_text)
+        if integration_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **integration_route,
             }
 
         status_route = self.route_room_status_request(workspace_id, request_text)
@@ -1793,6 +1812,51 @@ class RequestPipeline:
                 "explicit_persona": persona or None,
             },
             "reason": f"Matched a memo dispatch request to {target_room.get('title') or room_id}.",
+        }
+
+    def route_nancy_direct_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        match = self.NANCY_DIRECT_RE.match(re.sub(r"\s+", " ", str(request_text or "").strip()))
+        if not match:
+            return None
+        body = str(match.group("body") or "").strip()
+        lowered = body.lower()
+        if not re.search(r"\b(?:draft|send)\s+(?:an?\s+)?(?:email|gmail)\b", lowered):
+            return {
+                "route_kind": "clarify",
+                "capability": "nancy.direct.unsupported",
+                "tool": "office.capability_info",
+                "arguments": {"response_text": "Nancy can draft an email or prepare it for confirmation. State the recipient, subject, and body."},
+                "reason": "Direct Nancy request was not an email action.",
+            }
+
+        recipient_match = re.search(r"\bto\s+(?:[^@\s.,]+\s+(?:at\s+)?)?(?P<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b", body, re.IGNORECASE)
+        subject_match = re.search(r"\bsubject(?:\s+line)?\s*(?:is|:)?\s*(?P<subject>.+?)(?=\s+\bbody\s*(?:is|:)?\s*|$)", body, re.IGNORECASE)
+        body_match = re.search(r"\bbody\s*(?:is|:)?\s*(?P<content>.+)$", body, re.IGNORECASE)
+        recipient = str(recipient_match.group("email") or "").strip() if recipient_match else ""
+        subject = str(subject_match.group("subject") or "").strip(" .") if subject_match else ""
+        email_body = str(body_match.group("content") or "").strip() if body_match else ""
+        if not recipient or not subject or not email_body:
+            missing = []
+            if not recipient:
+                missing.append("recipient email")
+            if not subject:
+                missing.append("subject")
+            if not email_body:
+                missing.append("body")
+            return {
+                "route_kind": "clarify",
+                "capability": "nancy.direct.email_details_required",
+                "tool": "office.capability_info",
+                "arguments": {"response_text": f"Nancy needs the {', '.join(missing)} before preparing an email."},
+                "reason": "Direct Nancy email request was missing required details.",
+            }
+
+        send_requested = bool(re.search(r"\bsend\s+(?:an?\s+)?(?:email|gmail)\b", lowered))
+        return {
+            "capability": "integration.gmail.send" if send_requested else "integration.gmail.draft",
+            "tool": "office.gmail_send" if send_requested else "office.gmail_draft",
+            "arguments": {"to": [recipient], "subject": subject, "body": email_body, "assistant_persona": "Nancy"},
+            "reason": "Matched a direct Nancy Gmail request.",
         }
 
     def resolve_memo_target_room(self, target_text: str) -> Optional[Dict[str, Any]]:
@@ -2753,6 +2817,30 @@ class RequestPipeline:
             },
             "reason": "Matched OCR request with a file name.",
         }
+
+    def route_integration_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", request_text.strip())
+        lowered = text.lower()
+        if not lowered:
+            return None
+        if "calendar" in lowered and re.search(r"\b(show|list|check|view|upcoming)\b", lowered):
+            return {
+                "capability": "integration.calendar.list",
+                "tool": "office.calendar_list",
+                "arguments": {},
+                "reason": "Matched a read-only Google Calendar request.",
+            }
+        email_match = re.search(r"\b(?:search|find|look for)\s+(?:my\s+)?(?:gmail|emails?|messages?)\s+(?:for|about)\s+(.+)$", text, re.IGNORECASE)
+        if email_match:
+            query = email_match.group(1).strip(" .?!")
+            if query:
+                return {
+                    "capability": "integration.gmail.search",
+                    "tool": "office.gmail_search",
+                    "arguments": {"query": query},
+                    "reason": "Matched a read-only Gmail search request.",
+                }
+        return None
 
     def is_explicit_room_navigation(self, request_text: str) -> bool:
         text = request_text.strip().lower()
