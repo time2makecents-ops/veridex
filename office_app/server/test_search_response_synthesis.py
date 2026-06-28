@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import unittest
 
+from fastapi import HTTPException
+
 from office_app.server.request_response_helpers import request_text_from_response
 from office_app.server.search_response_synthesis import (
     build_grounded_search_context,
     grounded_entity_followup_response,
     grounded_search_followup_response,
+    handle_search_tool_result,
     remember_grounded_search_context,
     synthesize_search_response,
 )
@@ -55,6 +58,18 @@ class CapturingRouter:
 class FailingRouter:
     def dispatch_capability(self, capability: str, args: dict, preferred_tool: str | None = None):
         raise RuntimeError("provider down")
+
+
+def apply_navigator_activation(response: dict, **kwargs) -> dict:
+    enriched = dict(response)
+    structured = dict(enriched.get("structuredContent") or {})
+    structured["navigator_activation"] = {
+        "activated": True,
+        "capability": kwargs.get("capability"),
+        "reason": kwargs.get("reason"),
+    }
+    enriched["structuredContent"] = structured
+    return enriched
 
 
 class SearchResponseSynthesisTests(unittest.TestCase):
@@ -301,6 +316,104 @@ class SearchResponseSynthesisTests(unittest.TestCase):
         )
 
         self.assertEqual(store.saved, [])
+
+    def test_handle_search_tool_result_synthesizes_and_remembers_search_context(self) -> None:
+        kernel = FakeKernel({"active_room": "sales_department", "active_persona": "Sales Director"})
+        store = CapturingStore()
+        router = CapturingRouter("Verified summary from results only.")
+        routed = {
+            "capability": "search.web",
+            "tool": "office.search_web",
+            "request": "search for blairally",
+            "grounding_required": True,
+            "entity_subject": "blairally",
+        }
+        result = {
+            "structuredContent": {
+                "provider": "serpapi",
+                "summary_text": "Web results for blairally",
+                "results": [
+                    {
+                        "title": "Blairally Vintage Arcade",
+                        "source": "Example",
+                        "snippet": "Blairally is a music venue in Eugene, Oregon.",
+                        "url": "https://example.com/blairally",
+                    }
+                ],
+            },
+            "content": [{"type": "text", "text": "Web results for blairally"}],
+        }
+
+        handled = handle_search_tool_result(
+            routed=routed,
+            dispatch_tool=lambda: result,
+            workspace_id="ws_1",
+            session_id="sess_1",
+            user_profile=None,
+            kernel=kernel,
+            store=store,
+            router=router,
+            request_text_from_response=request_text_from_response,
+            utc_now=lambda: "2026-06-28T00:00:00Z",
+            apply_navigator_activation=apply_navigator_activation,
+        )
+
+        self.assertIn("Verified summary from results only.", handled["content"][0]["text"])
+        self.assertEqual(len(store.saved), 1)
+        self.assertEqual(
+            store.saved[0]["state"]["grounded_search_by_session"]["sess_1"]["results"][0]["title"],
+            "Blairally Vintage Arcade",
+        )
+
+    def test_handle_search_tool_result_returns_non_search_result_unchanged(self) -> None:
+        kernel = FakeKernel({})
+        store = CapturingStore()
+        result = {"structuredContent": {"response_text": "Created."}, "content": [{"type": "text", "text": "Created."}]}
+
+        handled = handle_search_tool_result(
+            routed={"capability": "workspace.create", "tool": "office.workspace_new"},
+            dispatch_tool=lambda: result,
+            workspace_id="ws_1",
+            session_id="sess_1",
+            user_profile=None,
+            kernel=kernel,
+            store=store,
+            router=CapturingRouter(),
+            request_text_from_response=request_text_from_response,
+            utc_now=lambda: "2026-06-28T00:00:00Z",
+            apply_navigator_activation=apply_navigator_activation,
+        )
+
+        self.assertIs(handled, result)
+        self.assertEqual(store.saved, [])
+
+    def test_handle_search_tool_result_fails_closed_for_grounded_search_http_error(self) -> None:
+        def dispatch_tool():
+            raise HTTPException(status_code=502, detail={"message": "provider down"})
+
+        handled = handle_search_tool_result(
+            routed={
+                "capability": "search.web",
+                "tool": "office.search_web",
+                "grounding_required": True,
+                "entity_subject": "blairally",
+            },
+            dispatch_tool=dispatch_tool,
+            workspace_id="ws_1",
+            session_id="sess_1",
+            user_profile=None,
+            kernel=FakeKernel({}),
+            store=CapturingStore(),
+            router=CapturingRouter(),
+            request_text_from_response=request_text_from_response,
+            utc_now=lambda: "2026-06-28T00:00:00Z",
+            apply_navigator_activation=apply_navigator_activation,
+        )
+
+        structured = handled["structuredContent"]
+        self.assertEqual(structured["routing"]["capability"], "clarification.entity_grounding")
+        self.assertIn("I could not verify information about blairally", structured["response_text"])
+        self.assertTrue(structured["navigator_activation"]["activated"])
 
     def test_grounded_search_followup_can_answer_hours_from_preserved_results(self) -> None:
         response = grounded_search_followup_response(

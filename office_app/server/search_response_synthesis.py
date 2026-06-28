@@ -4,6 +4,8 @@ import re
 from urllib.parse import urlparse
 from typing import Any, Callable, Dict, List, Optional
 
+from fastapi import HTTPException
+
 
 ENTITY_FOLLOWUP_RULES = (
     {
@@ -242,6 +244,88 @@ def remember_grounded_search_context(
     session_map[session_id] = grounded_context
     state["grounded_search_by_session"] = session_map
     store.save_state(workspace_id, state)
+
+
+def grounded_search_failure_response(
+    *,
+    routed: Dict[str, Any],
+    workspace_id: str,
+    session_id: str,
+    apply_navigator_activation: Callable[..., Dict[str, Any]],
+) -> Dict[str, Any]:
+    entity_subject = str(routed.get("entity_subject") or "that entity").strip() or "that entity"
+    response_text = f"I could not verify information about {entity_subject} because the search failed. I should not guess."
+    response = {
+        "structuredContent": {
+            "workspace_id": workspace_id,
+            "session_id": session_id,
+            "response_text": response_text,
+            "routing": {
+                "route_kind": "clarify",
+                "capability": "clarification.entity_grounding",
+                "tool": routed.get("tool"),
+                "reason": "Grounded factual search failed closed.",
+            },
+        },
+        "content": [{"type": "text", "text": response_text}],
+    }
+    return apply_navigator_activation(
+        response,
+        capability="clarification.entity_grounding",
+        reason="Grounded factual search failed closed.",
+    )
+
+
+def handle_search_tool_result(
+    *,
+    routed: Dict[str, Any],
+    dispatch_tool: Callable[[], Dict[str, Any]],
+    workspace_id: str,
+    session_id: str,
+    user_profile: Optional[Dict[str, Any]],
+    kernel: Any,
+    store: Any,
+    router: Any,
+    request_text_from_response: Callable[[Dict[str, Any]], str],
+    utc_now: Callable[[], str],
+    apply_navigator_activation: Callable[..., Dict[str, Any]],
+) -> Dict[str, Any]:
+    is_search = str(routed.get("capability") or "").startswith("search.")
+    try:
+        result = dispatch_tool()
+    except HTTPException:
+        if routed.get("grounding_required") and is_search:
+            return grounded_search_failure_response(
+                routed=routed,
+                workspace_id=workspace_id,
+                session_id=session_id,
+                apply_navigator_activation=apply_navigator_activation,
+            )
+        raise
+
+    if not is_search:
+        return result
+
+    result = synthesize_search_response(
+        routed=routed,
+        result=result,
+        workspace_id=workspace_id,
+        session_id=session_id,
+        user_profile=user_profile,
+        kernel=kernel,
+        router=router,
+        request_text_from_response=request_text_from_response,
+    )
+    remember_grounded_search_context(
+        workspace_id=workspace_id,
+        session_id=session_id,
+        routed=routed,
+        result=result,
+        kernel=kernel,
+        store=store,
+        utc_now=utc_now,
+    )
+    return result
 
 
 def _compact_snippet(snippet: str, max_chars: int = 180) -> str:

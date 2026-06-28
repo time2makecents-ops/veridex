@@ -30,7 +30,7 @@ from office_app.server.request_response_helpers import (
     request_text_from_response,
 )
 from office_app.server.search_service import SearchService
-from office_app.server.search_response_synthesis import remember_grounded_search_context, synthesize_search_response
+from office_app.server.search_response_synthesis import handle_search_tool_result
 from office_app.server.handlers.ai_handlers import build_ai_handlers
 from office_app.server.handlers.artifact_handlers import build_artifact_handlers
 from office_app.server.handlers.dependencies import HandlerDeps
@@ -906,70 +906,26 @@ def handle_natural_language_request(
         args["workspace_id"] = workspace_id
         if session_id:
             args["session_id"] = session_id
-        try:
-            result = router.dispatch_capability(
+        result = handle_search_tool_result(
+            routed=routed,
+            dispatch_tool=lambda: router.dispatch_capability(
                 routed["capability"],
                 args,
                 preferred_tool=routed.get("tool"),
-            )
-        except HTTPException:
-            if routed.get("grounding_required") and str(routed.get("capability") or "").startswith("search."):
-                entity_subject = str(routed.get("entity_subject") or "that entity").strip() or "that entity"
-                response_text = f"I could not verify information about {entity_subject} because the search failed. I should not guess."
-                response = {
-                    "structuredContent": {
-                        "workspace_id": workspace_id,
-                        "session_id": session_id,
-                        "response_text": response_text,
-                        "routing": {
-                            "route_kind": "clarify",
-                            "capability": "clarification.entity_grounding",
-                            "tool": routed.get("tool"),
-                            "reason": "Grounded factual search failed closed.",
-                        },
-                    },
-                    "content": [{"type": "text", "text": response_text}],
-                }
-                response = _apply_navigator_activation(
-                    response,
-                    capability="clarification.entity_grounding",
-                    reason="Grounded factual search failed closed.",
-                )
-                enriched = attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
-                record_assistant_turn(
-                    workspace_id=workspace_id,
-                    session_id=session_id,
-                    response_text=response_text,
-                    kernel=kernel,
-                    store=store,
-                    receptionist_context_service=receptionist_context_service,
-                    user_profile=user_profile,
-                    speaker=_response_speaker(enriched),
-                )
-                return enriched
-            raise
-        result = synthesize_search_response(
-            routed=routed,
-            result=result,
+            ),
             workspace_id=workspace_id,
             session_id=session_id,
             user_profile=user_profile,
             kernel=kernel,
+            store=store,
             router=router,
             request_text_from_response=request_text_from_response,
-        )
-        remember_grounded_search_context(
-            workspace_id=workspace_id,
-            session_id=session_id,
-            routed=routed,
-            result=result,
-            kernel=kernel,
-            store=store,
             utc_now=utc_now,
+            apply_navigator_activation=_apply_navigator_activation,
         )
         if isinstance(result, dict):
             structured = result.get("structuredContent")
-            if isinstance(structured, dict):
+            if isinstance(structured, dict) and not isinstance(structured.get("routing"), dict):
                 structured["routing"] = {
                     "route_kind": "tool",
                     "capability": routed["capability"],
@@ -977,6 +933,21 @@ def handle_natural_language_request(
                     "reason": routed["reason"],
                 }
         enriched = attach_request_context(result, workspace_id=workspace_id, session_id=session_id)
+        structured = (enriched or {}).get("structuredContent") if isinstance(enriched, dict) else None
+        routing = (structured or {}).get("routing") if isinstance(structured, dict) else None
+        if isinstance(routing, dict) and str(routing.get("route_kind") or "").strip().lower() == "clarify":
+            response_text = request_text_from_response(enriched)
+            record_assistant_turn(
+                workspace_id=workspace_id,
+                session_id=session_id,
+                response_text=response_text,
+                kernel=kernel,
+                store=store,
+                receptionist_context_service=receptionist_context_service,
+                user_profile=user_profile,
+                speaker=_response_speaker(enriched),
+            )
+            return enriched
         if str(routed.get("capability") or "").strip() == "workspace.create":
             structured = (enriched or {}).get("structuredContent") if isinstance(enriched, dict) else None
             created_workspace_id = str((structured or {}).get("workspace_id") or "").strip()
