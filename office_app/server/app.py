@@ -30,7 +30,7 @@ from office_app.server.request_response_helpers import (
     request_text_from_response,
 )
 from office_app.server.search_service import SearchService
-from office_app.server.search_response_synthesis import build_grounded_search_context, synthesize_search_response
+from office_app.server.search_response_synthesis import remember_grounded_search_context, synthesize_search_response
 from office_app.server.handlers.ai_handlers import build_ai_handlers
 from office_app.server.handlers.artifact_handlers import build_artifact_handlers
 from office_app.server.handlers.dependencies import HandlerDeps
@@ -958,11 +958,14 @@ def handle_natural_language_request(
             router=router,
             request_text_from_response=request_text_from_response,
         )
-        _remember_grounded_search_context(
+        remember_grounded_search_context(
             workspace_id=workspace_id,
             session_id=session_id,
             routed=routed,
             result=result,
+            kernel=kernel,
+            store=store,
+            utc_now=utc_now,
         )
         if isinstance(result, dict):
             structured = result.get("structuredContent")
@@ -1965,26 +1968,6 @@ def _response_speaker(response: Dict[str, Any]) -> Optional[str]:
         if isinstance(activation, dict) and activation.get("activated"):
             return "Navigator"
     return None
-
-
-def _remember_grounded_search_context(
-    *,
-    workspace_id: str,
-    session_id: str,
-    routed: Dict[str, Any],
-    result: Dict[str, Any],
-) -> None:
-    if not session_id or not routed.get("grounding_required"):
-        return
-    grounded_context = build_grounded_search_context(routed=routed, result=result)
-    if not grounded_context.get("results"):
-        return
-    state = kernel.get_state(workspace_id)
-    session_map = dict(state.get("grounded_search_by_session") or {})
-    grounded_context["ts"] = utc_now()
-    session_map[session_id] = grounded_context
-    state["grounded_search_by_session"] = session_map
-    store.save_state(workspace_id, state)
 
 
 def refresh_handler_bindings() -> None:

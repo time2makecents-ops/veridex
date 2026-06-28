@@ -4,9 +4,10 @@ import { proxyRequest } from "@/lib/backend";
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { sessionId: string } },
+  { params }: { params: Promise<{ sessionId: string }> },
 ) {
-  const sessionId = encodeURIComponent(String(params.sessionId || "").trim());
+  const { sessionId: rawSessionId } = await params;
+  const sessionId = encodeURIComponent(String(rawSessionId || "").trim());
   const response = await proxyRequest(`/sessions/${sessionId}`, {
     method: "DELETE",
     headers: {

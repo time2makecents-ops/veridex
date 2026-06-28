@@ -221,6 +221,29 @@ def build_grounded_search_context(*, routed: Dict[str, Any], result: Dict[str, A
     }
 
 
+def remember_grounded_search_context(
+    *,
+    workspace_id: str,
+    session_id: str,
+    routed: Dict[str, Any],
+    result: Dict[str, Any],
+    kernel: Any,
+    store: Any,
+    utc_now: Callable[[], str],
+) -> None:
+    if not session_id or not routed.get("grounding_required"):
+        return
+    grounded_context = build_grounded_search_context(routed=routed, result=result)
+    if not grounded_context.get("results"):
+        return
+    state = kernel.get_state(workspace_id)
+    session_map = dict(state.get("grounded_search_by_session") or {})
+    grounded_context["ts"] = utc_now()
+    session_map[session_id] = grounded_context
+    state["grounded_search_by_session"] = session_map
+    store.save_state(workspace_id, state)
+
+
 def _compact_snippet(snippet: str, max_chars: int = 180) -> str:
     text = re.sub(r"\s+", " ", str(snippet or "").strip())
     if len(text) <= max_chars:

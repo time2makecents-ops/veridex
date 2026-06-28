@@ -2,8 +2,13 @@ import { NextRequest } from "next/server";
 
 import { proxyRequest } from "@/lib/backend";
 
-async function forward(request: NextRequest, method: string, context: { params: { path: string[] } }) {
-  const path = `/integrations/${context.params.path.map(encodeURIComponent).join("/")}${request.nextUrl.search}`;
+type RouteContext = {
+  params: Promise<{ path: string[] }>;
+};
+
+async function forward(request: NextRequest, method: string, context: RouteContext) {
+  const { path: pathParts } = await context.params;
+  const path = `/integrations/${pathParts.map(encodeURIComponent).join("/")}${request.nextUrl.search}`;
   const sessionId = request.headers.get("X-Session-Id") ?? "";
   const response = await proxyRequest(path, {
     method,
@@ -16,14 +21,14 @@ async function forward(request: NextRequest, method: string, context: { params: 
   });
 }
 
-export async function GET(request: NextRequest, context: { params: { path: string[] } }) {
+export async function GET(request: NextRequest, context: RouteContext) {
   return forward(request, "GET", context);
 }
 
-export async function POST(request: NextRequest, context: { params: { path: string[] } }) {
+export async function POST(request: NextRequest, context: RouteContext) {
   return forward(request, "POST", context);
 }
 
-export async function DELETE(request: NextRequest, context: { params: { path: string[] } }) {
+export async function DELETE(request: NextRequest, context: RouteContext) {
   return forward(request, "DELETE", context);
 }

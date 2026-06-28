@@ -3,11 +3,11 @@ import { NextRequest } from "next/server";
 import { proxyJsonRequest } from "@/lib/backend";
 
 type RouteContext = {
-  params: { workspaceId: string };
+  params: Promise<{ workspaceId: string }>;
 };
 
 export async function DELETE(request: NextRequest, context: RouteContext) {
-  const { workspaceId } = context.params;
+  const { workspaceId } = await context.params;
   const sessionId = request.headers.get("X-Session-Id") ?? "";
   const response = await proxyJsonRequest(`/admin/workspaces/${encodeURIComponent(workspaceId)}`, {
     method: "DELETE",

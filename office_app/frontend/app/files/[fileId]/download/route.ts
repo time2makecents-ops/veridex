@@ -4,14 +4,15 @@ import { proxyRequest } from "@/lib/backend";
 
 
 type RouteContext = {
-  params: {
+  params: Promise<{
     fileId: string;
-  };
+  }>;
 };
 
 
 export async function GET(request: NextRequest, context: RouteContext) {
-  const fileId = encodeURIComponent(context.params.fileId);
+  const { fileId: rawFileId } = await context.params;
+  const fileId = encodeURIComponent(rawFileId);
   const query = request.nextUrl.search;
   const response = await proxyRequest(`/files/${fileId}/download${query}`, {
     method: "GET",

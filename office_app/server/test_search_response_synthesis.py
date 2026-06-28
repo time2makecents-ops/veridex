@@ -7,16 +7,28 @@ from office_app.server.search_response_synthesis import (
     build_grounded_search_context,
     grounded_entity_followup_response,
     grounded_search_followup_response,
+    remember_grounded_search_context,
     synthesize_search_response,
 )
 
 
 class FakeKernel:
-    def get_state(self, workspace_id: str):
-        return {
+    def __init__(self, state=None) -> None:
+        self.state = state or {
             "active_room": "sales_department",
             "active_persona": "Sales Director",
         }
+
+    def get_state(self, workspace_id: str):
+        return self.state
+
+
+class CapturingStore:
+    def __init__(self) -> None:
+        self.saved = []
+
+    def save_state(self, workspace_id: str, state: dict) -> None:
+        self.saved.append({"workspace_id": workspace_id, "state": state})
 
 
 class CapturingRouter:
@@ -222,6 +234,73 @@ class SearchResponseSynthesisTests(unittest.TestCase):
         self.assertEqual(context["provider"], "serpapi")
         self.assertEqual(context["results"][0]["title"], "Blairally Vintage Arcade")
         self.assertIn("4 PM to 2 AM", context["results"][0]["snippet"])
+
+    def test_remember_grounded_search_context_persists_session_context(self) -> None:
+        kernel = FakeKernel({"grounded_search_by_session": {"old_session": {"results": [{"title": "Old"}]}}})
+        store = CapturingStore()
+        routed = {
+            "capability": "search.web",
+            "request": "search for blairally",
+            "grounding_required": True,
+            "entity_subject": "blairally",
+        }
+        result = {
+            "structuredContent": {
+                "provider": "serpapi",
+                "summary_text": "Web results for blairally",
+                "response_text": "Search results describe Blairally as a music venue.",
+                "results": [
+                    {
+                        "title": "Blairally Vintage Arcade",
+                        "source": "Example",
+                        "snippet": "Blairally is a music venue in Eugene, Oregon.",
+                        "url": "https://example.com/blairally",
+                    }
+                ],
+            }
+        }
+
+        remember_grounded_search_context(
+            workspace_id="ws_1",
+            session_id="sess_1",
+            routed=routed,
+            result=result,
+            kernel=kernel,
+            store=store,
+            utc_now=lambda: "2026-06-28T00:00:00Z",
+        )
+
+        self.assertEqual(len(store.saved), 1)
+        saved_context = store.saved[0]["state"]["grounded_search_by_session"]["sess_1"]
+        self.assertEqual(saved_context["ts"], "2026-06-28T00:00:00Z")
+        self.assertEqual(saved_context["entity_subject"], "blairally")
+        self.assertEqual(saved_context["results"][0]["title"], "Blairally Vintage Arcade")
+        self.assertIn("old_session", store.saved[0]["state"]["grounded_search_by_session"])
+
+    def test_remember_grounded_search_context_skips_without_grounded_results(self) -> None:
+        kernel = FakeKernel({})
+        store = CapturingStore()
+
+        remember_grounded_search_context(
+            workspace_id="ws_1",
+            session_id="sess_1",
+            routed={"capability": "search.web", "grounding_required": False},
+            result={"structuredContent": {"results": [{"title": "Ignored"}]}},
+            kernel=kernel,
+            store=store,
+            utc_now=lambda: "2026-06-28T00:00:00Z",
+        )
+        remember_grounded_search_context(
+            workspace_id="ws_1",
+            session_id="sess_1",
+            routed={"capability": "search.web", "grounding_required": True},
+            result={"structuredContent": {"results": []}},
+            kernel=kernel,
+            store=store,
+            utc_now=lambda: "2026-06-28T00:00:00Z",
+        )
+
+        self.assertEqual(store.saved, [])
 
     def test_grounded_search_followup_can_answer_hours_from_preserved_results(self) -> None:
         response = grounded_search_followup_response(
