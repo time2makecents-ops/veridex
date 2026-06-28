@@ -314,8 +314,14 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["route_kind"], "model")
         self.assertEqual(routed["capability"], "ai.respond")
 
-    def test_phone_camera_product_research_routes_to_web_search(self) -> None:
+    def test_phone_camera_question_stays_in_model_route(self) -> None:
         routed = self.sales_pipeline.route_user_request("default", "what cellphones have the best cameras?")
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["capability"], "ai.respond")
+        self.assertEqual(routed["reason"], "Conversation-first intent matched before broad tool routing.")
+
+    def test_explicit_product_search_still_routes_to_web_search(self) -> None:
+        routed = self.sales_pipeline.route_user_request("default", "search the web for cellphones with the best cameras")
         self.assertEqual(routed["route_kind"], "tool")
         self.assertEqual(routed["capability"], "search.web")
         self.assertEqual(routed["tool"], "office.search_web")
@@ -1631,6 +1637,12 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         routed = self.pipeline.route_user_request("default", "show me")
         self.assertEqual(routed["route_kind"], "model")
         self.assertEqual(routed["capability"], "ai.respond")
+
+    def test_conversation_first_keeps_normal_chat_in_model_route(self) -> None:
+        routed = self.pipeline.route_user_request("default", "help me think through a menu idea")
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["capability"], "ai.respond")
+        self.assertEqual(routed["reason"], "Conversation-first intent matched before broad tool routing.")
 
     def test_model_route_forbids_fake_background_work(self) -> None:
         routed = self.pipeline.route_user_request("default", "help me think through a menu idea")

@@ -1347,6 +1347,16 @@ class RequestPipeline:
         if room_directory_route is not None:
             return room_directory_route
 
+        route = self.recommend_room(request_text)
+        if self.is_conversation_first_intent(request_text) and not (
+            route.get("matched") and self.room_navigation_requires_confirmation(request_text)
+        ):
+            return self.model_route(
+                workspace_id,
+                request_text,
+                reason="Conversation-first intent matched before broad tool routing.",
+            )
+
         product_search_route = self.route_product_search_request(workspace_id, request_text)
         if product_search_route is not None:
             return {
@@ -1433,7 +1443,6 @@ class RequestPipeline:
                 "requires_confirmation": False,
             }
 
-        route = self.recommend_room(request_text)
         if route.get("matched") and self.is_explicit_room_navigation(request_text):
             return {
                 "route_kind": "navigation",
@@ -2204,6 +2213,9 @@ class RequestPipeline:
 
     def classify_intent(self, request_text: str) -> str:
         return self.intent_analyzer.classify_intent(request_text)
+
+    def is_conversation_first_intent(self, request_text: str) -> bool:
+        return self.intent_analyzer.is_conversation_first_intent(request_text)
 
     def is_meta_intent(self, text: str) -> bool:
         return self.intent_analyzer.is_meta_intent(text)

@@ -47,6 +47,31 @@ class RequestIntentAnalyzerTests(unittest.TestCase):
     def test_classifies_advice_intent(self) -> None:
         self.assertEqual(self.analyzer.classify_intent("what are the best restaurants to model mine after"), "advice")
 
+    def test_conversation_first_matches_normal_questions(self) -> None:
+        cases = (
+            "help me think through a menu idea",
+            "what makes a restaurant successful?",
+            "what cellphones have the best cameras?",
+            "why did you respond that way",
+            "read your last response",
+        )
+        for request in cases:
+            with self.subTest(request=request):
+                self.assertTrue(self.analyzer.is_conversation_first_intent(request))
+
+    def test_conversation_first_skips_explicit_tasks_and_grounded_entities(self) -> None:
+        cases = (
+            "search the web for restaurant marketing strategy",
+            "find thai restaurants near me",
+            "go to marketing department",
+            "new session for event flier",
+            "extract text from file_abc123",
+            "what can you tell me about blairally",
+        )
+        for request in cases:
+            with self.subTest(request=request):
+                self.assertFalse(self.analyzer.is_conversation_first_intent(request))
+
     def test_classifies_place_lookup_as_task(self) -> None:
         self.assertEqual(self.analyzer.classify_intent("find restaurants in Portland"), "task")
 

@@ -85,6 +85,24 @@ class RequestIntentAnalyzer:
             return "advice"
         return "task"
 
+    def is_conversation_first_intent(self, request_text: str) -> bool:
+        text = str(request_text or "").lower().strip()
+        if not text:
+            return False
+        if self.is_explicit_task_intent(request_text):
+            return False
+        if self.extract_factual_entity_request(request_text) is not None:
+            return False
+        if self.is_meta_intent(text) or self.is_advice_intent(text):
+            return True
+        if re.match(r"^(?:help me|can you help me|explain|can you explain|think through|brainstorm)\b", text):
+            return True
+        if re.match(r"^(?:what|why|how|which|who|when)\b", text):
+            return True
+        if re.match(r"^(?:tell me|talk me through|walk me through|read your last response)\b", text):
+            return True
+        return False
+
     def is_meta_intent(self, text: str) -> bool:
         if any(hint in text for hint in self.config.intent_meta_hints):
             return True
@@ -157,7 +175,7 @@ class RequestIntentAnalyzer:
         if place_signals["has_place_hint"]:
             return bool(
                 (place_signals["discovery_signal"] or place_signals["review_signal"])
-                and (place_signals["location_signal"] or place_signals["explicit_review_signal"])
+                and (place_signals["location_signal"] or place_signals["explicit_review_signal"] or re.search(r"\blocal\b", text))
             )
         return False
 
