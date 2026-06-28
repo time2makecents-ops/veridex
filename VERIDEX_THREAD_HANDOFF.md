@@ -1,9 +1,10 @@
 # VERIDEX THREAD HANDOFF
 Project: Veridex (formerly Office-App)
 Developer: JR
-Current branch: `ai_response_tuning`
-Current commit: `c76f084`
-Environment: FastAPI backend
+Current branch: `fix/stabilization-setup`
+Current commit: `322c6b2 Refactor chat page cleanup`
+Remote: `origin/fix/stabilization-setup`
+Environment: FastAPI backend + Next.js frontend
 Purpose: Preserve system intent, architecture, and implementation state so development can continue in a new thread without design drift.
 
 ---
@@ -12,17 +13,51 @@ Purpose: Preserve system intent, architecture, and implementation state so devel
 
 Use this when resuming on another computer.
 
+## Current repository checkpoint
+
+- Branch `fix/stabilization-setup` is clean and aligned with `origin/fix/stabilization-setup`.
+- Commit `322c6b2` contains the frontend chat cleanup split.
+- No uncommitted work was left at closeout.
+- The goal was marked complete after final audit.
+
+Fresh closeout validation:
+
+- `git diff --check` passed
+- `npm.cmd run build` passed from `C:\Office-App\office_app\frontend`
+- `C:\Office-App\office_app\smoke_test.ps1` passed
+- Backend unit tests were not run for this checkpoint because no backend contracts changed
+
 ## Start
 
 ```powershell
 cd C:\Office-App
-.\veridex.cmd
+.\veridex.cmd restart
 ```
 
 Expected launch behavior:
 - backend opens in a `cmd` window
 - frontend opens as a `node` process/window
 - this is intentional
+
+Expected local ports:
+- backend: `http://127.0.0.1:8078`
+- frontend: `https://127.0.0.1:3078`
+
+## Latest completed work
+
+Frontend chat cleanup:
+
+- Split `office_app/frontend/app/chat/page.tsx` into focused components for header, toolbar, transcript, composer, room directory, document reader, file panels, workspace panel, and session panel.
+- Added chat hooks for menus, file operations, and room state.
+- Added shared chat `types.ts` and `helpers.ts`.
+- Kept behavior-preserving controller helpers in `page.tsx` for feedback, message append, draft state, workspace/session state, and notices.
+- Preserved existing runtime behavior and validated with frontend build plus smoke test.
+
+Next optional cleanup:
+
+- Continue only if more refinement is worth the token/time cost.
+- Best next target is a small workspace/session controller extraction from `page.tsx`.
+- Avoid broad refactors unless a failing behavior or specific feature requires them.
 
 ## Last verified behavior
 

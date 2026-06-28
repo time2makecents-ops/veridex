@@ -1,6 +1,6 @@
 # Veridex TODO
 
-Last updated: 2026-05-02
+Last updated: 2026-06-28
 
 ## Current Focus
 
@@ -23,16 +23,10 @@ Last updated: 2026-05-02
    - Keep `/request` focused on request lifecycle and transcript recording.
    - Keep routing decisions in one testable layer.
 
-3. Frontend chat cleanup
-   - Split `chat/page.tsx` into focused pieces.
-   - Suggested pieces:
-     - chat transcript
-     - composer
-     - room directory
-     - workspace/session menus
-     - save/load panel
-     - file reader
-     - upload/download panel
+3. Frontend chat cleanup follow-up
+   - Initial `chat/page.tsx` split is complete as of `322c6b2`.
+   - Keep future cleanup narrow and behavior-preserving.
+   - Remaining work is optional refinement of workspace/session controller logic, not a blocker for the current checkpoint.
 
 4. Runtime/Git hygiene
    - Remove generated runtime state from tracked source control in a careful patch. (In progress: `office_app/runtime/` removed from Git index without deleting local data.)
@@ -40,9 +34,41 @@ Last updated: 2026-05-02
    - Keep `.env.local`, local certs, storage, logs, and runtime databases ignored.
 
 5. Documentation alignment
-   - Treat `SYSTEM_STATE.md` as the current implementation state.
-   - Treat architecture docs as design intent unless recently updated.
+   - `README.md` and `VERIDEX_THREAD_HANDOFF.md` have been updated for the `322c6b2` chat cleanup checkpoint.
+   - Treat older architecture docs as design intent unless recently updated.
    - Update handoff docs after major stabilization milestones.
+
+## Suggested Future Steps
+
+1. Open a review PR for `fix/stabilization-setup`
+   - Use the pushed `322c6b2` checkpoint as the review base.
+   - Keep the PR focused on stabilization and frontend chat cleanup.
+   - Include build and smoke-test results in the PR body.
+
+2. Run a deeper behavior pass before more refactors
+   - Exercise session switching, workspace switching, room switching, file upload/download, document reader, and integration confirmation.
+   - Capture any regressions as focused issues before editing more code.
+   - Prefer fixing observed behavior over speculative cleanup.
+
+3. Add targeted frontend tests around extracted chat pieces
+   - Cover `visibleMessagesForScope`, transcript rendering, confirmation buttons, and file panel empty states.
+   - Keep tests close to the extracted helper/component boundaries.
+   - Avoid broad browser automation until the chat behavior is stable.
+
+4. Continue optional `page.tsx` controller cleanup only if needed
+   - Best next target: workspace/session lifecycle logic.
+   - Move one workflow at a time into a hook only when the inputs/outputs are clear.
+   - Run `npm.cmd run build` and the smoke test after each slice.
+
+5. Revisit backend request orchestration
+   - Confirm search synthesis is no longer coupled to `app.py`.
+   - Keep routing, transcript recording, and model response shaping testable in separate layers.
+   - Run backend unit tests for any backend contract changes.
+
+6. Lock down runtime/Git hygiene
+   - Confirm generated runtime files stay ignored.
+   - Verify `.env.local`, local certs, logs, runtime databases, and user data are not staged.
+   - Do not delete local runtime data while cleaning Git tracking.
 
 ## Search
 
@@ -120,5 +146,5 @@ Do not resume these until core chat, search, session, file, and startup behavior
 - Do not add another agent framework as a source of truth.
 - Do not let browser/search tools own Veridex memory.
 - Do not create separate durable room memory.
-- Do not expand the UI before splitting the current chat page.
+- Do not expand the UI before the split chat surface remains stable through repeated smoke tests.
 - Do not replace the router with model-only behavior; explicit commands still need backend authority.
