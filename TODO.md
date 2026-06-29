@@ -60,17 +60,27 @@ Last updated: 2026-06-28
    - Keep tests close to the extracted helper/component boundaries.
    - Avoid broad browser automation until the chat behavior is stable.
 
-5. Continue optional `page.tsx` controller cleanup only if needed
+5. Finish Art Department image generation provider setup
+   - Add Gemini image-generation quota or switch `GEMINI_IMAGE_MODEL`/provider to a key with image access.
+   - Re-run a live `office.image_generate` call from `art_department`.
+   - Verify the generated image appears as a room-scoped workspace file with `kind=generated_image`.
+
+6. Finish the free-first Bing image workflow
+   - Use Microsoft Designer/Bing Image Creator manually for no-cost generations.
+   - Define the handoff flow: Art Department writes the prompt, user generates/downloads in Bing, then uploads the selected image into Veridex.
+   - Add a simple Veridex note or guide so generated Bing assets are stored as room-scoped Art Department files.
+
+7. Continue optional `page.tsx` controller cleanup only if needed
    - Best next target: workspace/session lifecycle logic.
    - Move one workflow at a time into a hook only when the inputs/outputs are clear.
    - Run `npm.cmd run build` and the smoke test after each slice.
 
-6. Revisit backend request orchestration
+8. Revisit backend request orchestration
    - Confirm search synthesis is no longer coupled to `app.py`.
    - Keep routing, transcript recording, and model response shaping testable in separate layers.
    - Run backend unit tests for any backend contract changes.
 
-7. Lock down runtime/Git hygiene
+9. Lock down runtime/Git hygiene
    - Confirm generated runtime files stay ignored.
    - Verify `.env.local`, local certs, logs, runtime databases, and user data are not staged.
    - Do not delete local runtime data while cleaning Git tracking.

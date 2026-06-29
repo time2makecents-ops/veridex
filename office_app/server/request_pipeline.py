@@ -86,6 +86,11 @@ def _default_governance_registry_service() -> GovernanceRegistryService:
 
 
 class RequestPipeline:
+    IMAGE_GENERATION_RE = re.compile(
+        r"\b(?:generate|create|make|draw|design|render|produce)\b.{0,80}\b(?:image|picture|art|illustration|graphic|logo|poster|icon|visual)\b|"
+        r"\b(?:image|picture|art|illustration|graphic|logo|poster|icon|visual)\b.{0,80}\b(?:generate|create|make|draw|design|render|produce)\b",
+        re.IGNORECASE,
+    )
     ARTIFACT_CREATE_TRIGGERS = (
         "save this",
         "save artifact",
@@ -1204,6 +1209,28 @@ class RequestPipeline:
             "reason": "The request for saved objects was ambiguous about scope.",
         }
 
+    def route_image_generation_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = str(request_text or "").strip()
+        if not text or self.IMAGE_GENERATION_RE.search(text) is None:
+            return None
+        active_room = ""
+        if self.kernel is not None:
+            try:
+                active_room = str(self.kernel.get_state(workspace_id).get("active_room") or "").strip()
+            except Exception:
+                active_room = ""
+        mentions_art_department = bool(
+            re.search(r"\b(?:art department|creative director|art room|creative room)\b", text, re.IGNORECASE)
+        )
+        if active_room != "art_department" and not mentions_art_department:
+            return None
+        return {
+            "capability": "image.generate",
+            "tool": "office.image_generate",
+            "arguments": {"prompt": text},
+            "reason": "Matched an Art Department image generation request.",
+        }
+
     def route_user_request(self, workspace_id: str, request_text: str, *, session_id: Optional[str] = None) -> Dict[str, Any]:
         recent_turns = self._load_recent_transcript_turns(workspace_id, session_id=session_id)
 
@@ -1330,6 +1357,15 @@ class RequestPipeline:
                 **object_scope_clarification,
             }
 
+        image_generation_route = self.route_image_generation_request(workspace_id, request_text)
+        if image_generation_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **image_generation_route,
+            }
+
         contextual_followup_route = self.route_contextual_followup(
             workspace_id,
             request_text,
@@ -1338,6 +1374,15 @@ class RequestPipeline:
         )
         if contextual_followup_route is not None:
             return contextual_followup_route
+
+        room_capability_route = self.route_room_capability_request(workspace_id, request_text)
+        if room_capability_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **room_capability_route,
+            }
 
         capability_route = self.route_capability_question(workspace_id, request_text)
         if capability_route is not None:
@@ -1730,6 +1775,33 @@ class RequestPipeline:
                 "active_persona": active_persona,
             },
             "reason": f"Answered a {capability} capability question without running a tool.",
+        }
+
+    def route_room_capability_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = normalize_room_text(request_text)
+        if not text:
+            return None
+        if not re.search(r"\b(?:capabilities|tools|allowed tools|what can this room do|what can this department do)\b", text):
+            return None
+        if not re.search(r"\b(?:room|department|office|persona|capabilities|tools)\b", text):
+            return None
+        room_id = ""
+        for room in rooms_payload():
+            candidate = str(room.get("id") or "").strip()
+            if not candidate:
+                continue
+            aliases = sorted(room_reference_aliases(room), key=len, reverse=True)
+            if any(re.search(rf"\b{re.escape(alias)}\b", text) for alias in aliases):
+                room_id = candidate
+                break
+        args: Dict[str, Any] = {}
+        if room_id:
+            args["room_id"] = room_id
+        return {
+            "capability": "room.capabilities",
+            "tool": "office.room_capabilities",
+            "arguments": args,
+            "reason": "Matched a governed room capability request.",
         }
 
     def route_room_directory_request(

@@ -1,0 +1,266 @@
+{
+  "tool_groups": {
+    "navigation": [
+      "office.commands_list",
+      "office.nancy_route",
+      "office.room_capabilities",
+      "office.room_set",
+      "office.state_get",
+      "office.transcript_get"
+    ],
+    "workspace": [
+      "office.bootstrap",
+      "office.session_activate",
+      "office.session_create",
+      "office.session_delete",
+      "office.session_info",
+      "office.session_objects_list",
+      "office.session_rename",
+      "office.sessions_list",
+      "office.sessions_search",
+      "office.workspace_activate",
+      "office.workspace_delete",
+      "office.workspace_new",
+      "office.workspace_update",
+      "office.workspaces_list"
+    ],
+    "files_artifacts": [
+      "office.artifact_append",
+      "office.artifact_create",
+      "office.artifact_get",
+      "office.artifact_list",
+      "office.artifact_update",
+      "office.file_download",
+      "office.file_get",
+      "office.file_list",
+      "office.file_upload",
+      "office.ocr_extract"
+    ],
+    "research": [
+      "office.search_places",
+      "office.search_reviews",
+      "office.search_web"
+    ],
+    "mailroom": [
+      "mailroom.dispatch",
+      "office.memo_get",
+      "office.memos_list"
+    ],
+    "archive_admin": [
+      "office.archive_get",
+      "office.archive_list",
+      "office.archive_store_text",
+      "office.artifact_archive",
+      "office.artifact_delete",
+      "office.nancy_artifact_open",
+      "office.nancy_artifacts_list",
+      "office.nancy_workspace_briefing"
+    ],
+    "room_memory": [
+      "office.room_memory_forget",
+      "office.room_memory_list",
+      "office.room_memory_remember"
+    ],
+    "google_read": [
+      "office.calendar_list",
+      "office.gmail_read",
+      "office.gmail_search"
+    ],
+    "google_write_prepare": [
+      "office.calendar_cancel",
+      "office.calendar_create",
+      "office.calendar_update",
+      "office.gmail_draft",
+      "office.gmail_send",
+      "office.integration_confirm"
+    ],
+    "art_generation": [
+      "office.image_generate"
+    ],
+    "private_files": [
+      "office.private_file_get",
+      "office.private_file_list",
+      "office.private_file_upload"
+    ],
+    "destructive_workspace": [
+      "office.session_delete",
+      "office.workspace_delete"
+    ],
+    "internal_context": [
+      "office.receptionist_context_get",
+      "office.receptionist_context_update"
+    ]
+  },
+  "profiles": {
+    "lobby": {
+      "primary_capabilities": ["intake", "routing", "onboarding"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "mailroom"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["my_office", "control_room"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["external_send", "destructive_workspace"],
+      "plugin_affinities": []
+    },
+    "conference_room": {
+      "primary_capabilities": ["meeting_facilitation", "agenda", "cross_department_planning"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "google_read"],
+      "allowed_tools": ["office.ai_generate", "office.gmail_draft"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["my_office", "sales_department", "marketing_room", "art_department", "law_office", "finance_department"],
+      "storage_scope": "session",
+      "approval_required_for": ["external_send", "calendar_write"],
+      "plugin_affinities": ["Documents", "Presentations", "Spreadsheets", "Gmail"]
+    },
+    "control_room": {
+      "primary_capabilities": ["governance", "policy_audit", "routing_diagnostics"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "archive_admin", "room_memory", "internal_context", "destructive_workspace"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["infrastructure_room", "security_room", "records_archive"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["destructive_workspace", "policy_change"],
+      "plugin_affinities": ["GitHub", "Browser"]
+    },
+    "infrastructure_room": {
+      "primary_capabilities": ["runtime_operations", "deployment", "diagnostics", "tool_activation"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "archive_admin", "room_memory"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["control_room", "it_department", "security_room"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["deployment", "destructive_workspace"],
+      "plugin_affinities": ["GitHub", "Cloudflare", "Browser"]
+    },
+    "sales_department": {
+      "primary_capabilities": ["lead_research", "demographics", "outreach_strategy", "deal_planning"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "google_read"],
+      "allowed_tools": ["office.ai_generate", "office.gmail_draft"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["marketing_room", "art_department", "finance_department", "law_office"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["external_send"],
+      "plugin_affinities": ["Gmail", "Spreadsheets", "Browser"]
+    },
+    "marketing_room": {
+      "primary_capabilities": ["campaign_strategy", "market_research", "content_planning", "demand_generation"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "google_read"],
+      "allowed_tools": ["office.ai_generate", "office.gmail_draft"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["sales_department", "art_department", "conference_room"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["external_send"],
+      "plugin_affinities": ["Canva", "Gmail", "Browser"]
+    },
+    "hr_department": {
+      "primary_capabilities": ["personnel_policy", "hiring", "internal_support"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "google_read"],
+      "allowed_tools": ["office.ai_generate", "office.gmail_draft"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["law_office", "finance_department", "my_office"],
+      "storage_scope": "private",
+      "approval_required_for": ["external_send", "employment_advice"],
+      "plugin_affinities": ["Documents", "Gmail"]
+    },
+    "it_department": {
+      "primary_capabilities": ["technical_support", "networking", "programming_guidance"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "room_memory"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["infrastructure_room", "security_room"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["destructive_workspace"],
+      "plugin_affinities": ["Browser", "GitHub"]
+    },
+    "art_department": {
+      "primary_capabilities": ["visual_design", "image_generation", "brand_assets", "multimedia"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "art_generation"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": [],
+      "preferred_collaborators": ["marketing_room", "sales_department", "rnd_room"],
+      "storage_scope": "room",
+      "approval_required_for": ["external_publish"],
+      "plugin_affinities": ["Canva", "Browser"]
+    },
+    "law_office": {
+      "primary_capabilities": ["legal_risk", "contract_review", "regulatory_awareness"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["sales_department", "finance_department", "hr_department"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["legal_claim", "external_send"],
+      "plugin_affinities": ["Documents", "PDF", "Browser"]
+    },
+    "finance_department": {
+      "primary_capabilities": ["budgeting", "accounting", "pricing", "financial_tracking"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "google_read"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["sales_department", "law_office", "my_office"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["financial_advice", "external_send"],
+      "plugin_affinities": ["Spreadsheets", "PDF"]
+    },
+    "my_office": {
+      "primary_capabilities": ["executive_support", "scheduling", "project_coordination", "department_coordination"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "archive_admin", "google_read", "google_write_prepare", "private_files"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["conference_room", "control_room", "records_archive"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["external_send", "calendar_write", "destructive_workspace"],
+      "plugin_affinities": ["Gmail", "Documents", "Presentations", "Spreadsheets"]
+    },
+    "vr_room": {
+      "primary_capabilities": ["simulation", "persona_sandbox", "rule_sandbox"],
+      "tool_groups": ["navigation", "files_artifacts", "mailroom"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate", "office.room_memory_remember", "office.receptionist_context_update"],
+      "preferred_collaborators": ["control_room"],
+      "storage_scope": "session",
+      "approval_required_for": ["persistent_storage"],
+      "plugin_affinities": []
+    },
+    "records_archive": {
+      "primary_capabilities": ["durable_records", "artifact_retrieval", "file_organization", "version_tracking"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "mailroom", "archive_admin"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["my_office", "control_room"],
+      "storage_scope": "archive",
+      "approval_required_for": ["artifact_delete"],
+      "plugin_affinities": ["Documents", "PDF"]
+    },
+    "rnd_room": {
+      "primary_capabilities": ["invention", "technical_research", "prototyping", "patent_preparation"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["art_department", "law_office", "it_department"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["patent_claim", "safety_sensitive_design"],
+      "plugin_affinities": ["Documents", "Browser"]
+    },
+    "security_room": {
+      "primary_capabilities": ["cybersecurity", "physical_security", "threat_modeling", "security_drills"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "room_memory"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["it_department", "infrastructure_room", "control_room"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["security_sensitive_action"],
+      "plugin_affinities": ["Browser", "GitHub"]
+    },
+    "break_room": {
+      "primary_capabilities": ["casual_conversation", "humor", "mental_breaks"],
+      "tool_groups": ["navigation"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate", "mailroom.dispatch", "office.artifact_delete", "office.workspace_delete", "office.session_delete"],
+      "preferred_collaborators": [],
+      "storage_scope": "session",
+      "approval_required_for": [],
+      "plugin_affinities": []
+    }
+  }
+}

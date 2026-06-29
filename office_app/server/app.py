@@ -35,17 +35,22 @@ from office_app.server.handlers.ai_handlers import build_ai_handlers
 from office_app.server.handlers.artifact_handlers import build_artifact_handlers
 from office_app.server.handlers.dependencies import HandlerDeps
 from office_app.server.handlers.file_handlers import build_file_handlers
+from office_app.server.handlers.image_handlers import build_image_handlers
 from office_app.server.handlers.integration_handlers import build_integration_handlers
 from office_app.server.handlers.memo_handlers import build_memo_handlers
+from office_app.server.handlers.room_capability_handlers import build_room_capability_handlers
 from office_app.server.handlers.session_handlers import build_session_handlers
 from office_app.server.handlers.workspace_handlers import build_workspace_handlers
 from office_app.server.tool_context import ToolContext
 from office_app.server.tool_definitions import VERIDEX_TOOL_DEFINITIONS, ToolDefinition
+from office_app.server.tool_policies import ToolPolicyEngine
 from office_app.server.user_service import UserService
 from office_app.server.tools_registry import register_tools
 from office_app.server.workspace_file_service import PrivateFileService, WorkspaceFileService
 from office_app.server.workspace_kernel import WorkspaceKernel, WorkspaceStore
 from office_app.server.integration_service import IntegrationService
+from office_app.server.image_generation_service import ImageGenerationService
+from office_app.server.room_capability_registry import RoomCapabilityRegistry
 
 SERVER_DIR = Path(__file__).resolve().parent
 PKG_DIR = SERVER_DIR.parent
@@ -90,6 +95,8 @@ integration_service = IntegrationService(runtime_dir=RUNTIME_DIR)
 receptionist_context_service = ReceptionistContextService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
 workspace_file_service = WorkspaceFileService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
 private_file_service = PrivateFileService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
+image_generation_service = ImageGenerationService()
+room_capability_registry = RoomCapabilityRegistry()
 search_service = SearchService()
 ocr_service = OcrService()
 model_router = ModelRouter.from_env()
@@ -135,7 +142,10 @@ def build_tool_context(tool_name: str, args: Dict[str, Any], definition: ToolDef
     )
 
 
-router = CommandRouter(context_provider=build_tool_context)
+router = CommandRouter(
+    context_provider=build_tool_context,
+    policy_engine=ToolPolicyEngine(room_capability_registry=room_capability_registry),
+)
 pipeline = RequestPipeline(
     kernel=kernel,
     navigator_control=NAVIGATOR_CONTROL,
@@ -1961,6 +1971,7 @@ def refresh_handler_bindings() -> None:
     global handle_session_delete
     global handle_office_room_set
     global handle_office_nancy_route
+    global handle_room_capabilities
     global handle_mailroom_dispatch
     global handle_memos_list
     global handle_memo_get
@@ -1994,6 +2005,7 @@ def refresh_handler_bindings() -> None:
     global handle_search_reviews
     global handle_search_places
     global handle_ocr_extract
+    global handle_image_generate
     global handle_gmail_search
     global handle_gmail_read
     global handle_gmail_draft
@@ -2014,6 +2026,7 @@ def refresh_handler_bindings() -> None:
         receptionist_context_service=receptionist_context_service,
         workspace_file_service=workspace_file_service,
         private_file_service=private_file_service,
+        image_generation_service=image_generation_service,
         search_service=search_service,
         ocr_service=ocr_service,
         model_router=model_router,
@@ -2023,6 +2036,7 @@ def refresh_handler_bindings() -> None:
         append_incident=append_incident,
         error_missing_required_field=error_missing_required_field,
         resolve_workspace_id=resolve_workspace_id,
+        room_capability_registry=room_capability_registry,
     )
 
     workspace_handlers = build_workspace_handlers(handler_deps)
@@ -2031,6 +2045,8 @@ def refresh_handler_bindings() -> None:
     artifact_handlers = build_artifact_handlers(handler_deps)
     file_handlers = build_file_handlers(handler_deps)
     ai_handlers = build_ai_handlers(handler_deps)
+    image_handlers = build_image_handlers(handler_deps)
+    room_capability_handlers = build_room_capability_handlers(handler_deps)
     integration_handlers = build_integration_handlers(integration_service=integration_service, user_service=user_service)
 
     handle_workspaces_list = workspace_handlers["office.workspaces_list"]
@@ -2052,6 +2068,7 @@ def refresh_handler_bindings() -> None:
     handle_session_delete = session_handlers["office.session_delete"]
     handle_office_room_set = workspace_handlers["office.room_set"]
     handle_office_nancy_route = workspace_handlers["office.nancy_route"]
+    handle_room_capabilities = room_capability_handlers["office.room_capabilities"]
 
     handle_mailroom_dispatch = memo_handlers["mailroom.dispatch"]
     handle_memos_list = memo_handlers["office.memos_list"]
@@ -2089,6 +2106,7 @@ def refresh_handler_bindings() -> None:
     handle_search_reviews = ai_handlers["office.search_reviews"]
     handle_search_places = ai_handlers["office.search_places"]
     handle_ocr_extract = ai_handlers["office.ocr_extract"]
+    handle_image_generate = image_handlers["office.image_generate"]
     handle_gmail_search = integration_handlers["office.gmail_search"]
     handle_gmail_read = integration_handlers["office.gmail_read"]
     handle_gmail_draft = integration_handlers["office.gmail_draft"]
@@ -2121,11 +2139,13 @@ def refresh_handler_bindings() -> None:
             "office.session_delete": handle_session_delete,
             "office.room_set": handle_office_room_set,
             "office.nancy_route": handle_office_nancy_route,
+            "office.room_capabilities": handle_room_capabilities,
             "office.ai_generate": handle_ai_generate,
             "office.search_web": handle_search_web,
             "office.search_reviews": handle_search_reviews,
             "office.search_places": handle_search_places,
             "office.ocr_extract": handle_ocr_extract,
+            "office.image_generate": handle_image_generate,
             "office.gmail_search": handle_gmail_search,
             "office.gmail_read": handle_gmail_read,
             "office.gmail_draft": handle_gmail_draft,
@@ -2192,12 +2212,14 @@ register_tools(
         "office.session_delete": handle_session_delete,
         "office.room_set": handle_office_room_set,
         "office.nancy_route": handle_office_nancy_route,
+        "office.room_capabilities": handle_room_capabilities,
         "office.ai_generate": handle_ai_generate,
         "office.search_web": handle_search_web,
-        "office.search_reviews": handle_search_reviews,
-        "office.search_places": handle_search_places,
-        "office.ocr_extract": handle_ocr_extract,
-        "office.gmail_search": handle_gmail_search,
+    "office.search_reviews": handle_search_reviews,
+    "office.search_places": handle_search_places,
+    "office.ocr_extract": handle_ocr_extract,
+    "office.image_generate": handle_image_generate,
+    "office.gmail_search": handle_gmail_search,
         "office.gmail_read": handle_gmail_read,
         "office.gmail_draft": handle_gmail_draft,
         "office.gmail_send": handle_gmail_send,

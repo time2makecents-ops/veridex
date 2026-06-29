@@ -24,3 +24,5 @@ class HandlerDeps:
     append_incident: Callable[..., str]
     error_missing_required_field: Callable[[str], Exception]
     resolve_workspace_id: Callable[[str, dict], str]
+    image_generation_service: Any = None
+    room_capability_registry: Any = None

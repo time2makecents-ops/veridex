@@ -88,9 +88,11 @@ $requiredTools = @(
     "office.bootstrap",
     "office.state_get",
     "office.room_set",
+    "office.room_capabilities",
     "office.search_web",
     "office.search_reviews",
     "office.search_places",
+    "office.image_generate",
     "office.file_upload",
     "office.file_list",
     "office.file_get"

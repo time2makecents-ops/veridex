@@ -123,6 +123,7 @@ Veridex follows a layered architecture:
 - **Next.js frontend** for the lobby/chat workspace UI.
 - **Workspace kernel and stores** as the source of truth for workspace, session, room, file, artifact, and transcript state.
 - **Command/router layers** for deterministic system commands, while normal chat remains conversational.
+- **Art Department image generation** through `office.image_generate`, backed by Gemini image models and saved as workspace files when `GEMINI_API_KEY` has image-generation quota.
 
 The current frontend chat surface has been split out of `office_app/frontend/app/chat/page.tsx` into focused components and hooks:
 

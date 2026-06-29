@@ -7,6 +7,9 @@ from office_app.server.tool_definitions import ToolDefinition
 
 
 class ToolPolicyEngine:
+    def __init__(self, *, room_capability_registry=None) -> None:
+        self.room_capability_registry = room_capability_registry
+
     def authorize(self, definition: ToolDefinition, context: ToolContext) -> None:
         if definition.requires_workspace and not context.workspace_id:
             raise HTTPException(status_code=400, detail=f"Tool requires workspace: {definition.tool_name}")
@@ -21,4 +24,17 @@ class ToolPolicyEngine:
             raise HTTPException(
                 status_code=403,
                 detail=f"Tool {definition.tool_name} is not allowed for persona {context.active_persona}.",
+            )
+
+        if (
+            self.room_capability_registry is not None
+            and context.active_room
+            and not self.room_capability_registry.is_tool_allowed(context.active_room, definition.tool_name)
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Tool {definition.tool_name} is not allowed from room {context.active_room} "
+                    "by room capability profile."
+                ),
             )

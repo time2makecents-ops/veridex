@@ -60,6 +60,13 @@ Integration smoke setup:
 - It refuses Gmail send, integration confirmation, and Calendar create/update/cancel paths.
 - Canva connector still needs reconnect with `brandkit:read` before brand-kit smoke testing can pass.
 
+Art Department image generation:
+
+- Added `office.image_generate` for Art Department image prompts.
+- It calls Gemini image generation and saves the generated image as a room-scoped workspace file.
+- Routing sends Art Department image/picture/graphic/logo/poster requests to this tool.
+- Live provider check reached Gemini but failed with quota: `You do not have enough quota to make this request.`
+
 Next optional cleanup:
 
 - Continue only if more refinement is worth the token/time cost.
