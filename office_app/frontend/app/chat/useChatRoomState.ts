@@ -1,9 +1,9 @@
-import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 import { callTool, loadTranscript, type TranscriptEntry } from "@/lib/api";
 
-import { backendDisconnectedMessage, lobbyOrientationText, mapTranscriptEntries, roomById, roomTransitionText } from "./helpers";
-import { DEFAULT_PERSONA, DEFAULT_ROOM_ID, type ChatScope, type Message } from "./types";
+import { backendDisconnectedMessage, lobbyOrientationText, mapTranscriptEntries, roomById, roomStatusText } from "./helpers";
+import { DEFAULT_PERSONA, DEFAULT_ROOM_ID, type ChatScope, type Message, type RoomCapabilityProfile } from "./types";
 
 type UseChatRoomStateArgs = {
   sessionId: string;
@@ -32,8 +32,32 @@ export function useChatRoomState({
   const [switchingRoom, setSwitchingRoom] = useState<string>("");
   const [recentRooms, setRecentRooms] = useState<string[]>([]);
   const [roomStatus, setRoomStatus] = useState("Waiting for room state.");
+  const roomStatusRequestRef = useRef(0);
   const currentRoom = useMemo(() => roomById(activeRoom), [activeRoom]);
   const currentTitle = currentRoom?.title || activeRoom;
+
+  async function hydrateRoomStatus(roomId: string, persona: string, targetSessionId?: string) {
+    const baseline = roomStatusText(roomId, persona);
+    setRoomStatus(baseline);
+    const requestId = roomStatusRequestRef.current + 1;
+    roomStatusRequestRef.current = requestId;
+    const nextSessionId = String(targetSessionId || sessionId || "");
+    if (!nextSessionId) {
+      return;
+    }
+    try {
+      const response = await callTool("office.room_capabilities", { room_id: roomId, session_id: nextSessionId });
+      if (roomStatusRequestRef.current !== requestId) {
+        return;
+      }
+      const structured = response.structuredContent as { profile?: RoomCapabilityProfile } | undefined;
+      setRoomStatus(roomStatusText(roomId, persona, structured?.profile));
+    } catch {
+      if (roomStatusRequestRef.current === requestId) {
+        setRoomStatus(baseline);
+      }
+    }
+  }
 
   function applyActiveRoom(room: string, persona: string) {
     setActiveRoom(room);
@@ -47,8 +71,7 @@ export function useChatRoomState({
     transcriptEntries: TranscriptEntry[],
     hydratedSessionId?: string,
   ) {
-    const nextStatus = roomTransitionText(nextRoom, nextPersona);
-    setRoomStatus(nextStatus);
+    void hydrateRoomStatus(nextRoom, nextPersona, hydratedSessionId || sessionId);
     const hydratedMessages = mapTranscriptEntries(transcriptEntries);
     if (hydratedMessages.length) {
       setMessages(hydratedMessages);
@@ -67,7 +90,7 @@ export function useChatRoomState({
   }
 
   function appendRoomTransition(roomId: string, persona: string) {
-    setRoomStatus(roomTransitionText(roomId, persona));
+    void hydrateRoomStatus(roomId, persona, sessionId);
   }
 
   async function handleRoomSelect(roomId: string) {

@@ -263,6 +263,50 @@ class RequestPipeline:
         r"^(?:please\s+)?(?:send|file|dispatch)\s+(?:a\s+)?memo\s+to\s+(?P<target>[^.?!:;,]+)[.?!:;,-]*\s*(?P<body>.*)$",
         re.IGNORECASE,
     )
+    DEPARTMENT_COLLABORATION_PATTERNS = (
+        re.compile(r"^(?:please\s+)?ask\s+(?P<target>.+?)\s+to\s+(?P<body>.+)$", re.IGNORECASE),
+        re.compile(r"^(?:please\s+)?(?:loop|bring|pull)\s+in\s+(?P<target>.+?)\s+(?:for|on|to)\s+(?P<body>.+)$", re.IGNORECASE),
+        re.compile(r"^(?:please\s+)?work\s+with\s+(?P<target>.+?)\s+(?:for|on|to)\s+(?P<body>.+)$", re.IGNORECASE),
+    )
+    CONFERENCE_ROOM_MEETING_RE = re.compile(
+        r"^(?:please\s+)?(?:schedule|set\s+up|create|draft)\s+(?:a\s+)?(?:meeting|meeting\s+invite|calendar\s+invite|calendar\s+event)"
+        r"(?:\s+(?:called|titled))?\s+(?P<title>.+?)\s+on\s+(?P<date>\d{4}-\d{2}-\d{2})\s+from\s+"
+        r"(?P<start>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s+to\s+(?P<end>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)"
+        r"(?:\s+with\s+(?P<attendees>.+))?$",
+        re.IGNORECASE,
+    )
+    CONFERENCE_ROOM_MEETING_UPDATE_RE = re.compile(
+        r"^(?:please\s+)?(?:reschedule|update|move)\s+(?:the\s+)?(?:meeting|calendar\s+event|invite)\s+"
+        r"(?P<event_id>[A-Za-z0-9_-]{4,120})\s+to\s+(?P<date>\d{4}-\d{2}-\d{2})\s+from\s+"
+        r"(?P<start>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s+to\s+(?P<end>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)"
+        r"(?:\s+(?:called|titled)\s+(?P<title>.+?))?(?:\s+with\s+(?P<attendees>.+))?$",
+        re.IGNORECASE,
+    )
+    CONFERENCE_ROOM_MEETING_CANCEL_RE = re.compile(
+        r"^(?:please\s+)?(?:cancel|delete|remove)\s+(?:the\s+)?(?:meeting|calendar\s+event|invite)\s+"
+        r"(?P<event_id>[A-Za-z0-9_-]{4,120})\s*$",
+        re.IGNORECASE,
+    )
+    CONFERENCE_ROOM_AGENDA_RE = re.compile(
+        r"^(?:please\s+)?(?:create|draft|make|save)\s+(?:an?\s+)?agenda\s+"
+        r"(?P<title>.+?)(?:\s+for\s+(?P<focus>.+))?\s*$",
+        re.IGNORECASE,
+    )
+    CONFERENCE_ROOM_MEETING_HINT_RE = re.compile(
+        r"\b(?:schedule|set up|create|draft|reschedule|update|move|cancel|delete|remove)\b.*\b(?:meeting|invite|calendar event)\b|\b(?:meeting|invite|calendar event)\b.*\b(?:schedule|set up|create|draft|reschedule|update|move|cancel|delete|remove)\b",
+        re.IGNORECASE,
+    )
+    CONFERENCE_ROOM_AGENDA_HINT_RE = re.compile(
+        r"\b(?:create|draft|make|save)\b.*\bagenda\b|\bagenda\b.*\b(?:create|draft|make|save)\b",
+        re.IGNORECASE,
+    )
+    COLLABORATION_ROUTE_ROOMS = {
+        "sales_department",
+        "marketing_room",
+        "art_department",
+        "conference_room",
+        "my_office",
+    }
     NANCY_DIRECT_RE = re.compile(r"^(?:hey\s+)?nancy\s*[,.:\-]?\s*(?P<body>.+)$", re.IGNORECASE)
     ROOM_NAVIGATION_PREFIXES = (
         "go to ",
@@ -304,6 +348,22 @@ class RequestPipeline:
         "search online",
         "web search",
         "check online",
+    )
+    RESEARCH_ROUTE_ROOMS = {"sales_department", "marketing_room"}
+    RESEARCH_WEB_VERB_RE = re.compile(r"^(?:please\s+)?(?:research|find|analyze|analyse|look\s+up|check)\s+(?P<query>.+)$", re.IGNORECASE)
+    RESEARCH_WEB_TOPIC_HINTS = (
+        "demographic",
+        "demographics",
+        "trend",
+        "trends",
+        "audience",
+        "audiences",
+        "competitor",
+        "competitors",
+        "market share",
+        "social media",
+        "consumer behavior",
+        "consumer behaviour",
     )
     SEARCH_PRODUCT_HINTS = (
         "cellphone",
@@ -1269,6 +1329,15 @@ class RequestPipeline:
                 **memo_dispatch_route,
             }
 
+        collaboration_route = self.route_department_collaboration_request(workspace_id, request_text)
+        if collaboration_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **collaboration_route,
+            }
+
         break_room_joke_route = self.route_break_room_joke_request(
             workspace_id,
             request_text,
@@ -1364,6 +1433,14 @@ class RequestPipeline:
                 "workspace_id": workspace_id,
                 "request": request_text,
                 **image_generation_route,
+            }
+
+        conference_room_meeting_route = self.route_conference_room_meeting_request(workspace_id, request_text)
+        if conference_room_meeting_route is not None:
+            return {
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **conference_room_meeting_route,
             }
 
         contextual_followup_route = self.route_contextual_followup(
@@ -1940,6 +2017,180 @@ class RequestPipeline:
             "reason": "Matched a direct Nancy Gmail request.",
         }
 
+    def route_department_collaboration_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip())
+        if not text or self.is_explicit_room_navigation(text):
+            return None
+        ctx = self.current_context(workspace_id)
+        active_room = str(ctx.get("active_room") or "lobby").strip()
+        if active_room not in self.COLLABORATION_ROUTE_ROOMS:
+            return None
+        for pattern in self.DEPARTMENT_COLLABORATION_PATTERNS:
+            match = pattern.match(text)
+            if not match:
+                continue
+            target_text = str(match.group("target") or "").strip(" .,:;?!")
+            body = str(match.group("body") or "").strip(" .")
+            if not target_text or not body:
+                return None
+            target_room = self.resolve_memo_target_room(target_text)
+            if target_room is None:
+                return None
+            room_id = str(target_room.get("id") or "").strip()
+            if not room_id or room_id == active_room or room_id not in self.COLLABORATION_ROUTE_ROOMS:
+                return None
+            persona = str(target_room.get("default_persona") or "").strip()
+            return {
+                "capability": "memo.dispatch",
+                "tool": "mailroom.dispatch",
+                "arguments": {
+                    "workspace_id": workspace_id,
+                    "to_room": room_id,
+                    "body": body,
+                    "explicit_persona": persona or None,
+                },
+                "reason": f"Matched a department collaboration request to {target_room.get('title') or room_id}.",
+            }
+        return None
+
+    def route_conference_room_meeting_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip())
+        if not text:
+            return None
+        ctx = self.current_context(workspace_id)
+        active_room = str(ctx.get("active_room") or "lobby").strip()
+        if active_room != "conference_room":
+            return None
+        cancel_match = self.CONFERENCE_ROOM_MEETING_CANCEL_RE.match(text)
+        if cancel_match:
+            return {
+                "route_kind": "tool",
+                "capability": "integration.calendar.cancel",
+                "tool": "office.calendar_cancel",
+                "arguments": {"event_id": str(cancel_match.group("event_id") or "").strip()},
+                "reason": "Matched an explicit Conference Room meeting cancel request.",
+            }
+        update_match = self.CONFERENCE_ROOM_MEETING_UPDATE_RE.match(text)
+        if update_match:
+            attendees = self._parse_attendee_emails(update_match.group("attendees"))
+            event = {
+                "start": self._conference_room_datetime_payload(update_match.group("date"), update_match.group("start")),
+                "end": self._conference_room_datetime_payload(update_match.group("date"), update_match.group("end")),
+            }
+            title = str(update_match.group("title") or "").strip(" .,:;")
+            if title:
+                event["summary"] = title
+            if attendees:
+                event["attendees"] = [{"email": email} for email in attendees]
+            return {
+                "route_kind": "tool",
+                "capability": "integration.calendar.update",
+                "tool": "office.calendar_update",
+                "arguments": {
+                    "event_id": str(update_match.group("event_id") or "").strip(),
+                    "event": event,
+                },
+                "reason": "Matched an explicit Conference Room meeting reschedule request.",
+            }
+        match = self.CONFERENCE_ROOM_MEETING_RE.match(text)
+        if match:
+            attendees = self._parse_attendee_emails(match.group("attendees"))
+            event = {
+                "summary": str(match.group("title") or "").strip(" .,:;"),
+                "start": self._conference_room_datetime_payload(match.group("date"), match.group("start")),
+                "end": self._conference_room_datetime_payload(match.group("date"), match.group("end")),
+            }
+            if attendees:
+                event["attendees"] = [{"email": email} for email in attendees]
+            return {
+                "route_kind": "tool",
+                "capability": "integration.calendar.create",
+                "tool": "office.calendar_create",
+                "arguments": {"event": event},
+                "reason": "Matched an explicit Conference Room meeting scheduling request.",
+            }
+        if self.CONFERENCE_ROOM_MEETING_HINT_RE.search(text):
+            return {
+                "route_kind": "clarify",
+                "capability": "conference_room.meeting.details_required",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": (
+                        "Conference Room can prepare calendar actions when you give explicit meeting details. "
+                        "Examples: schedule meeting quarterly planning on 2026-07-03 from 2pm to 3pm with sam@example.com; "
+                        "reschedule meeting evt_12345 to 2026-07-03 from 3pm to 4pm; cancel meeting evt_12345."
+                    )
+                },
+                "reason": "Conference Room meeting request was missing scheduling details.",
+            }
+        agenda_match = self.CONFERENCE_ROOM_AGENDA_RE.match(text)
+        if agenda_match:
+            title = str(agenda_match.group("title") or "").strip(" .,:;")
+            focus = str(agenda_match.group("focus") or "").strip(" .,:;")
+            if title.lower().startswith("for "):
+                title = ""
+            if title:
+                content = f"Agenda focus: {focus}" if focus else "Agenda focus:"
+                return {
+                    "route_kind": "artifact",
+                    "capability": "artifact.create",
+                    "tool": "office.artifact_create",
+                    "arguments": {
+                        "artifact_type": "agenda",
+                        "title": title,
+                        "content": content,
+                        "format": "text/plain",
+                        "status": "active",
+                        "created_by": "user",
+                        "metadata": {
+                            "source": "conference_room_agenda",
+                            "request_text": request_text,
+                            "focus": focus,
+                        },
+                    },
+                    "reason": "Matched an explicit Conference Room agenda creation request.",
+                }
+        if self.CONFERENCE_ROOM_AGENDA_HINT_RE.search(text):
+            return {
+                "route_kind": "clarify",
+                "capability": "conference_room.agenda.title_required",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": (
+                        "Conference Room can save an agenda artifact when you give it a title. "
+                        "Example: create agenda quarterly planning for vendor kickoff."
+                    )
+                },
+                "reason": "Conference Room agenda request was missing a usable title.",
+            }
+        return None
+
+    @staticmethod
+    def _conference_room_datetime_payload(date_text: str, time_text: str) -> Dict[str, str]:
+        normalized = re.sub(r"\s+", "", str(time_text or "").strip().lower())
+        match = re.match(r"^(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?(?P<ampm>am|pm)$", normalized)
+        if not match:
+            raise ValueError(f"Unsupported conference room time value: {time_text}")
+        hour = int(match.group("hour"))
+        minute = int(match.group("minute") or "0")
+        ampm = match.group("ampm")
+        if hour < 1 or hour > 12 or minute < 0 or minute > 59:
+            raise ValueError(f"Unsupported conference room time value: {time_text}")
+        if hour == 12:
+            hour = 0
+        if ampm == "pm":
+            hour += 12
+        return {
+            "dateTime": f"{str(date_text).strip()}T{hour:02d}:{minute:02d}:00",
+            "timeZone": "America/Los_Angeles",
+        }
+
+    @staticmethod
+    def _parse_attendee_emails(value: Optional[str]) -> List[str]:
+        if not value:
+            return []
+        return [email.strip() for email in re.findall(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", value, re.IGNORECASE)]
+
     def resolve_memo_target_room(self, target_text: str) -> Optional[Dict[str, Any]]:
         normalized = normalize_room_text(target_text)
         if normalized in {"navigator", "control", "control room"}:
@@ -2357,6 +2608,7 @@ class RequestPipeline:
             return None
         if self.is_search_capability_question(text):
             return None
+        active_room = str(self.current_context(workspace_id).get("active_room") or "").strip()
         entity_request = self.extract_factual_entity_request(request_text)
         if entity_request is not None and entity_request.get("search_requested"):
             entity_subject = str(entity_request["entity_subject"])
@@ -2371,6 +2623,20 @@ class RequestPipeline:
                 "grounding_required": True,
                 "entity_subject": entity_subject,
             }
+
+        research_match = self.RESEARCH_WEB_VERB_RE.match(request_text.strip())
+        if active_room in self.RESEARCH_ROUTE_ROOMS and research_match:
+            research_query = str(research_match.group("query") or "").strip(" .,:;")
+            if research_query and any(hint in research_query.lower() for hint in self.RESEARCH_WEB_TOPIC_HINTS):
+                return {
+                    "capability": "search.web",
+                    "tool": "office.search_web",
+                    "arguments": {
+                        "query": research_query,
+                        "limit": 5,
+                    },
+                    "reason": "Matched an explicit Sales/Marketing research request.",
+                }
 
         if any(hint in text for hint in self.SEARCH_BUSINESS_ADVICE_HINTS):
             if not any(hint in text for hint in self.SEARCH_WEB_HINTS) and not any(

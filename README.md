@@ -124,6 +124,31 @@ Veridex follows a layered architecture:
 - **Workspace kernel and stores** as the source of truth for workspace, session, room, file, artifact, and transcript state.
 - **Command/router layers** for deterministic system commands, while normal chat remains conversational.
 - **Art Department image generation** through `office.image_generate`, backed by Gemini image models and saved as workspace files when `GEMINI_API_KEY` has image-generation quota.
+- **Free-first Art Department fallback** through Microsoft Designer / Bing Image Creator when Gemini image quota is unavailable.
+
+Art Department image workflow:
+
+1. Ask Veridex in `art_department` for the prompt, brief, or asset direction.
+2. If Gemini image generation is available, use `office.image_generate`.
+3. If Gemini image quota is unavailable, use the Art Department prompt in Microsoft Designer / Bing Image Creator, download the selected image, then upload it back into Veridex.
+4. Store the uploaded asset as a room-scoped Art Department file so the workspace keeps the image with the rest of the project state.
+5. When quota is expected to be fixed, run `office_app\image_generation_smoke.ps1` to verify the live provider path and room-scoped file save behavior.
+
+Department collaboration workflow:
+
+1. Sales, Marketing, Art Department, Conference Room, and My Office can route explicit collaboration requests through the memo system.
+2. Requests like `ask marketing to turn this research into a campaign plan` or `loop in art department for launch visuals` dispatch directly to the destination room instead of falling back to generic chat.
+3. In `sales_department` and `marketing_room`, explicit research requests like `research demographics for family restaurants in Seattle` or `find social media trends for coffee shops` now prepare `office.search_web` directly.
+4. This keeps cross-department work inside governed room boundaries without forcing the user to write literal mailroom commands.
+
+Conference Room meeting workflow:
+
+1. In `conference_room`, explicit scheduling requests can prepare `office.calendar_create` confirmations directly.
+2. Explicit agenda requests such as `create agenda quarterly planning for vendor kickoff` can save an `agenda` artifact directly in the workspace.
+3. Use a concrete format such as `schedule meeting quarterly planning on 2026-07-03 from 2pm to 3pm with sam@example.com`.
+4. Explicit reschedule requests such as `reschedule meeting evt_12345 to 2026-07-03 from 3pm to 4pm` can prepare `office.calendar_update` confirmations.
+5. Explicit cancel requests such as `cancel meeting evt_12345` can prepare `office.calendar_cancel` confirmations.
+6. Calendar actions still require the normal confirmation flow before anything is written to Google Calendar.
 
 The current frontend chat surface has been split out of `office_app/frontend/app/chat/page.tsx` into focused components and hooks:
 

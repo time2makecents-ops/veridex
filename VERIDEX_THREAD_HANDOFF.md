@@ -66,6 +66,28 @@ Art Department image generation:
 - It calls Gemini image generation and saves the generated image as a room-scoped workspace file.
 - Routing sends Art Department image/picture/graphic/logo/poster requests to this tool.
 - Live provider check reached Gemini but failed with quota: `You do not have enough quota to make this request.`
+- `office_app\image_generation_smoke.ps1` now provides a repeatable live check for the Art Department provider path once quota or provider access changes.
+- `README.md` now documents the free-first fallback: Art Department writes the prompt, the user generates/downloads the image in Microsoft Designer / Bing Image Creator, then uploads the chosen file back into Veridex as a room-scoped Art Department asset.
+
+Department workflow routing:
+
+- `office.room_capabilities` now returns room-specific operating notes, preferred plugins, collaborators, and approval boundaries instead of only a tool count.
+- Sales, Marketing, Art Department, Conference Room, and My Office can route explicit collaboration requests through `mailroom.dispatch`.
+- Examples now covered by routing tests include `ask marketing to turn this research into a campaign plan` and `loop in art department for launch visuals`.
+- Sales and Marketing now also route explicit research requests like `research demographics for family restaurants in Seattle` and `find social media trends for coffee shops` to `office.search_web` without requiring the literal phrase `search the web`.
+
+Conference Room meeting flow:
+
+- Conference Room can now save `agenda` artifacts from explicit requests with a usable title.
+- Example supported pattern: `create agenda quarterly planning for vendor kickoff`.
+- Conference Room can now prepare `office.calendar_create` confirmations from explicit scheduling requests with date and time.
+- Example supported pattern: `schedule meeting quarterly planning on 2026-07-03 from 2pm to 3pm with sam@example.com`.
+- Conference Room can now prepare `office.calendar_update` confirmations from explicit reschedule requests with an event id, date, and time.
+- Example supported pattern: `reschedule meeting evt_12345 to 2026-07-03 from 3pm to 4pm`.
+- Conference Room can now prepare `office.calendar_cancel` confirmations from explicit cancel requests with an event id.
+- Example supported pattern: `cancel meeting evt_12345`.
+- If the request is too vague, the router now asks for title, date, start time, and end time instead of guessing.
+- Calendar writes still require the normal confirmation flow before Google Calendar is changed.
 
 Next optional cleanup:
 

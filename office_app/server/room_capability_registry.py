@@ -25,6 +25,8 @@ class RoomCapabilityProfile:
     storage_scope: str
     approval_required_for: List[str]
     plugin_affinities: List[str]
+    operating_notes: List[str]
+    example_requests: List[str]
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -36,6 +38,8 @@ class RoomCapabilityProfile:
             "storage_scope": self.storage_scope,
             "approval_required_for": self.approval_required_for,
             "plugin_affinities": self.plugin_affinities,
+            "operating_notes": self.operating_notes,
+            "example_requests": self.example_requests,
         }
 
 
@@ -151,6 +155,8 @@ class RoomCapabilityRegistry:
             storage_scope=str(profile.get("storage_scope") or "workspace"),
             approval_required_for=[str(item) for item in profile.get("approval_required_for", [])],
             plugin_affinities=[str(item) for item in profile.get("plugin_affinities", [])],
+            operating_notes=[str(item) for item in profile.get("operating_notes", [])],
+            example_requests=[str(item) for item in profile.get("example_requests", [])],
         )
 
     def profiles_payload(self) -> List[Dict[str, Any]]:

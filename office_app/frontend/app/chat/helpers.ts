@@ -9,6 +9,7 @@ import {
   type DeleteSessionStructuredResponse,
   type Message,
   type ProviderBadge,
+  type RoomCapabilityProfile,
 } from "./types";
 
 export function roomById(roomId: string): RoomInfo | undefined {
@@ -18,6 +19,15 @@ export function roomById(roomId: string): RoomInfo | undefined {
 export function roomTransitionText(roomId: string, persona: string): string {
   const title = roomById(roomId)?.title || roomId;
   return `Now in ${title}. Persona: ${persona}.`;
+}
+
+export function roomStatusText(roomId: string, persona: string, profile?: RoomCapabilityProfile): string {
+  const base = roomTransitionText(roomId, persona);
+  const example = Array.isArray(profile?.example_requests) ? String(profile?.example_requests?.[0] || "").trim() : "";
+  if (!example) {
+    return base;
+  }
+  return `${base}\nTry: ${example}`;
 }
 
 export function lobbyOrientationText(persona: string): string {

@@ -20,6 +20,14 @@ export type ProviderBadge = {
   fallbackUsed: boolean;
 };
 
+export type RoomCapabilityProfile = {
+  room_id?: string;
+  operating_notes?: string[];
+  example_requests?: string[];
+  plugin_affinities?: string[];
+  approval_required_for?: string[];
+};
+
 export type ChatStructuredResponse = {
   workspace_id?: string;
   session_id?: string;

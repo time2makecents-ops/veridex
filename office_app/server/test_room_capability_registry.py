@@ -21,6 +21,15 @@ class RoomCapabilityRegistryTests(unittest.TestCase):
         profile_ids = sorted(profile["room_id"] for profile in self.registry.profiles_payload())
         self.assertEqual(active_room_ids, profile_ids)
 
+    def test_every_active_room_has_operating_notes_and_examples(self) -> None:
+        for room in rooms_payload():
+            if not room.get("is_active", True):
+                continue
+            with self.subTest(room_id=room["id"]):
+                profile = self.registry.profile_for_room(str(room["id"])).as_dict()
+                self.assertTrue(profile["operating_notes"])
+                self.assertTrue(profile["example_requests"])
+
     def test_art_department_owns_image_generation(self) -> None:
         self.assertTrue(self.registry.is_tool_allowed("art_department", "office.image_generate"))
         self.assertFalse(self.registry.is_tool_allowed("marketing_room", "office.image_generate"))
@@ -31,6 +40,19 @@ class RoomCapabilityRegistryTests(unittest.TestCase):
         self.assertIn("office.search_web", profile["allowed_tools"])
         self.assertIn("office.search_places", profile["allowed_tools"])
         self.assertIn("marketing_room", profile["preferred_collaborators"])
+        self.assertTrue(profile["operating_notes"])
+        self.assertTrue(profile["example_requests"])
+
+    def test_art_department_profile_includes_bing_fallback_note(self) -> None:
+        profile = self.registry.profile_for_room("art_department").as_dict()
+        self.assertTrue(any("Bing Image Creator" in note for note in profile["operating_notes"]))
+        self.assertIn("Canva", profile["plugin_affinities"])
+        self.assertTrue(any("Bing Image Creator prompt" in example for example in profile["example_requests"]))
+
+    def test_conference_room_profile_includes_meeting_examples(self) -> None:
+        profile = self.registry.profile_for_room("conference_room").as_dict()
+        self.assertTrue(any("schedule meeting" in example for example in profile["example_requests"]))
+        self.assertTrue(any("reschedule meeting" in example for example in profile["example_requests"]))
 
     def test_policy_engine_enforces_room_capability_profile(self) -> None:
         engine = ToolPolicyEngine(room_capability_registry=self.registry)

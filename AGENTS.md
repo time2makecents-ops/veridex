@@ -35,6 +35,23 @@ Use focused tests while iterating, then run the relevant broader suite before
 hand-off. The root `veridex.ps1` and `start_veridex_*.ps1` scripts are the
 project startup helpers when the full local stack is needed.
 
+## Model And Token Workflow
+
+Use the smallest model that can safely handle the current slice.
+
+- `gpt-5.4-mini` is the default for docs, Git status, narrow cleanup, and
+  mechanical edits from a clear plan.
+- `gpt-5.5` is the better choice for planning, architecture, broad refactors,
+  backend routing, ambiguous debugging, search/model-provider behavior, or any
+  risky cross-module change.
+- If a stronger model is recommended, pause and switch before continuing the
+  slice. During unattended automation, keep the current model and do not stop
+  for a manual switch.
+- Before long runs, check `/status` and `/usage`, and compact the thread when
+  the context starts to grow.
+- Prefer small reviewable slices and summarize tool output instead of dumping
+  it.
+
 ## Coding Style & Naming Conventions
 
 Use four spaces, type annotations, and `snake_case` names in Python. Keep

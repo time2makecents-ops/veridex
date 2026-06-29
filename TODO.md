@@ -62,23 +62,26 @@ Last updated: 2026-06-28
 
 5. Finish Art Department image generation provider setup
    - Add Gemini image-generation quota or switch `GEMINI_IMAGE_MODEL`/provider to a key with image access.
-   - Re-run a live `office.image_generate` call from `art_department`.
+   - Re-run `office_app\image_generation_smoke.ps1` when quota or provider access changes.
    - Verify the generated image appears as a room-scoped workspace file with `kind=generated_image`.
 
 6. Finish the free-first Bing image workflow
+   - Manual workflow is now documented in `README.md`.
    - Use Microsoft Designer/Bing Image Creator manually for no-cost generations.
-   - Define the handoff flow: Art Department writes the prompt, user generates/downloads in Bing, then uploads the selected image into Veridex.
-   - Add a simple Veridex note or guide so generated Bing assets are stored as room-scoped Art Department files.
+   - Keep the upload target as a room-scoped Art Department file after the user downloads the selected image.
+   - Optional future improvement: add an in-app hint or helper note near Art Department image requests.
 
 7. Continue optional `page.tsx` controller cleanup only if needed
    - Best next target: workspace/session lifecycle logic.
    - Move one workflow at a time into a hook only when the inputs/outputs are clear.
    - Run `npm.cmd run build` and the smoke test after each slice.
 
-8. Revisit backend request orchestration
-   - Confirm search synthesis is no longer coupled to `app.py`.
-   - Keep routing, transcript recording, and model response shaping testable in separate layers.
-   - Run backend unit tests for any backend contract changes.
+8. Extend department workflow coverage
+   - Conference Room now supports agenda artifact creation plus create/update/cancel calendar preparation from explicit requests.
+   - The in-app helper for collaboration shortcuts and room examples is in place on the chat status surface.
+   - Sales and Marketing now route explicit research requests for demographics, trends, audiences, and competitors to governed web search without requiring the phrase `search the web`.
+   - Optional next meeting workflow: tighter meeting-state persistence if the current chat-first flow proves insufficient.
+   - Keep routing additions narrow and covered by backend tests.
 
 9. Lock down runtime/Git hygiene
    - Confirm generated runtime files stay ignored.
