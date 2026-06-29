@@ -50,22 +50,27 @@ Last updated: 2026-06-28
    - Capture any regressions as focused issues before editing more code.
    - Prefer fixing observed behavior over speculative cleanup.
 
-3. Add targeted frontend tests around extracted chat pieces
+3. Finish live integration smoke checks
+   - Reconnect Canva so brand-kit access includes `brandkit:read`.
+   - Connect Google from Profile, then run `office_app\integration_smoke.ps1` with the active Veridex `session_id`.
+   - Keep the pass count-only unless deeper private-data testing is explicitly approved.
+
+4. Add targeted frontend tests around extracted chat pieces
    - Cover `visibleMessagesForScope`, transcript rendering, confirmation buttons, and file panel empty states.
    - Keep tests close to the extracted helper/component boundaries.
    - Avoid broad browser automation until the chat behavior is stable.
 
-4. Continue optional `page.tsx` controller cleanup only if needed
+5. Continue optional `page.tsx` controller cleanup only if needed
    - Best next target: workspace/session lifecycle logic.
    - Move one workflow at a time into a hook only when the inputs/outputs are clear.
    - Run `npm.cmd run build` and the smoke test after each slice.
 
-5. Revisit backend request orchestration
+6. Revisit backend request orchestration
    - Confirm search synthesis is no longer coupled to `app.py`.
    - Keep routing, transcript recording, and model response shaping testable in separate layers.
    - Run backend unit tests for any backend contract changes.
 
-6. Lock down runtime/Git hygiene
+7. Lock down runtime/Git hygiene
    - Confirm generated runtime files stay ignored.
    - Verify `.env.local`, local certs, logs, runtime databases, and user data are not staged.
    - Do not delete local runtime data while cleaning Git tracking.

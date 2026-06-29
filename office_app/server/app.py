@@ -1298,7 +1298,7 @@ def complete_google_integration(code: Optional[str] = None, state: Optional[str]
     if not code or not state:
         raise HTTPException(status_code=400, detail="Google authorization response is missing code or state.")
     integration_service.complete_google_connect(code=code, state=state)
-    target = str(os.environ.get("VERIDEX_INTEGRATIONS_SUCCESS_URL") or "https://localhost:3000/profile?google=connected").strip()
+    target = str(os.environ.get("VERIDEX_INTEGRATIONS_SUCCESS_URL") or "https://localhost:3078/profile?google=connected").strip()
     return RedirectResponse(target, status_code=303)
 
 

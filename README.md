@@ -163,6 +163,14 @@ Smoke test:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Office-App\office_app\smoke_test.ps1
 ```
 
+Live Google integration smoke test, after signing in and connecting Google from Profile:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Office-App\office_app\integration_smoke.ps1 -SessionId "<active-session-id>"
+```
+
+This checks the connected Google provider, Gmail search, and Calendar list paths with count-only output. It refuses Gmail send, integration confirmation, and Calendar write tools.
+
 Backend unit tests, when backend contracts change:
 
 ```powershell

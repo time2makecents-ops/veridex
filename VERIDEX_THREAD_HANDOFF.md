@@ -53,6 +53,13 @@ Frontend chat cleanup:
 - Kept behavior-preserving controller helpers in `page.tsx` for feedback, message append, draft state, workspace/session state, and notices.
 - Preserved existing runtime behavior and validated with frontend build plus smoke test.
 
+Integration smoke setup:
+
+- Added `office_app/integration_smoke.ps1` for live, read-only Google integration checks.
+- The script verifies connected Google status, Gmail search count, and Calendar list count for an active Veridex `session_id`.
+- It refuses Gmail send, integration confirmation, and Calendar create/update/cancel paths.
+- Canva connector still needs reconnect with `brandkit:read` before brand-kit smoke testing can pass.
+
 Next optional cleanup:
 
 - Continue only if more refinement is worth the token/time cost.
