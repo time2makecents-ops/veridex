@@ -39,6 +39,7 @@ import {
   backendDisconnectedMessage,
   createMessage,
   deleteSessionNotice,
+  deleteSessionRoomPersona,
   hiddenSessionsWith,
   integrationConfirmationMessage,
   providerBadgeForResponse,
@@ -357,6 +358,12 @@ export default function ChatPage() {
     }
   }
 
+  async function hydrateThreadMessages(nextSessionId: string, room: string, persona: string) {
+    applyActiveRoom(room, persona);
+    const transcriptEntries = await loadTranscript(120, nextSessionId);
+    applyHydratedMessages(room, persona, transcriptEntries, nextSessionId);
+  }
+
   async function refreshWorkspaces(activeWorkspaceId?: string): Promise<WorkspaceRecord[]> {
     if (!sessionId) {
       return [];
@@ -426,6 +433,11 @@ export default function ChatPage() {
     applyHydratedMessages(nextRoomPersona.room, nextRoomPersona.persona, transcriptEntries, chosenSessionId);
   }
 
+  async function refreshWorkspaceSessionLists(nextWorkspaceId: string, nextSessionId: string) {
+    await refreshWorkspaces(nextWorkspaceId);
+    await refreshSessions(nextSessionId);
+  }
+
   async function handleWorkspaceSelect(targetWorkspaceId: string) {
     if (!targetWorkspaceId || targetWorkspaceId === workspaceId) {
       setWorkspaceMenuOpen(false);
@@ -442,11 +454,8 @@ export default function ChatPage() {
         persistSession: true,
         forceRoomScope: true,
       });
-      applyActiveRoom(nextRoomPersona.room, nextRoomPersona.persona);
-      const transcriptEntries = await loadTranscript(120, nextSessionId);
-      applyHydratedMessages(nextRoomPersona.room, nextRoomPersona.persona, transcriptEntries, nextSessionId);
-      await refreshWorkspaces(nextWorkspaceId);
-      await refreshSessions(nextSessionId);
+      await hydrateThreadMessages(nextSessionId, nextRoomPersona.room, nextRoomPersona.persona);
+      await refreshWorkspaceSessionLists(nextWorkspaceId, nextSessionId);
       await refreshFiles(nextSessionId, nextRoomPersona.room);
       setWorkspaceMenuOpen(false);
     } catch (err) {
@@ -467,14 +476,11 @@ export default function ChatPage() {
         persistSession: true,
         forceRoomScope: true,
       });
-      applyActiveRoom(DEFAULT_ROOM_ID, DEFAULT_PERSONA);
       const draftValues = workspaceDraftValues(created, title);
       setWorkspaceTitleDraft(draftValues.title);
       setNewWorkspaceTitleDraft("");
-      const transcriptEntries = await loadTranscript(120, nextSessionId);
-      applyHydratedMessages(DEFAULT_ROOM_ID, DEFAULT_PERSONA, transcriptEntries, nextSessionId);
-      await refreshWorkspaces(nextWorkspaceId);
-      await refreshSessions(nextSessionId);
+      await hydrateThreadMessages(nextSessionId, DEFAULT_ROOM_ID, DEFAULT_PERSONA);
+      await refreshWorkspaceSessionLists(nextWorkspaceId, nextSessionId);
       await refreshFiles(nextSessionId, DEFAULT_ROOM_ID);
       setWorkspaceMenuOpen(false);
     } catch (err) {
@@ -571,9 +577,7 @@ export default function ChatPage() {
           persistSession: true,
           forceRoomScope: true,
         });
-        applyActiveRoom(nextRoomPersona.room, nextRoomPersona.persona);
-        const transcriptEntries = await loadTranscript(120, nextSessionId);
-        applyHydratedMessages(nextRoomPersona.room, nextRoomPersona.persona, transcriptEntries, nextSessionId);
+        await hydrateThreadMessages(nextSessionId, nextRoomPersona.room, nextRoomPersona.persona);
         await refreshSessions(nextSessionId);
         await refreshFiles(nextSessionId, nextRoomPersona.room);
       }
@@ -643,14 +647,7 @@ export default function ChatPage() {
       const structured = response.structuredContent as DeleteSessionStructuredResponse | undefined;
       const nextSessionId = String(structured?.session_id || response.session_id || sessionId);
       const nextWorkspaceId = String(structured?.workspace_id || response.workspace_id || workspaceId);
-      const activeRoomPersona = roomPersonaValues(
-        {
-          active_room: structured?.workspace_state?.active_room || structured?.active_session?.active_room,
-          active_persona: structured?.workspace_state?.active_persona || structured?.active_session?.active_persona,
-        },
-        activeRoom,
-        activePersona,
-      );
+      const activeRoomPersona = deleteSessionRoomPersona(structured, activeRoom, activePersona);
       const deletedWasCurrent = targetSessionId === sessionId;
       const replacementTitle = String(structured?.active_session?.title || nextSessionId || "a fresh session");
 

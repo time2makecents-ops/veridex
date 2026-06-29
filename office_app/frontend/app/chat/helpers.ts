@@ -6,6 +6,7 @@ import {
   DEFAULT_ROOM_ID,
   type ChatScope,
   type ChatStructuredResponse,
+  type DeleteSessionStructuredResponse,
   type Message,
   type ProviderBadge,
 } from "./types";
@@ -130,6 +131,21 @@ export function deleteSessionNotice(targetTitle: string, deletedWasCurrent: bool
   return deletedWasCurrent
     ? `Deleted session ${targetTitle}. Switched to ${replacementTitle}.`
     : `Deleted session ${targetTitle}.`;
+}
+
+export function deleteSessionRoomPersona(
+  response: DeleteSessionStructuredResponse | undefined,
+  fallbackRoom: string,
+  fallbackPersona: string,
+): { room: string; persona: string } {
+  return roomPersonaValues(
+    {
+      active_room: response?.workspace_state?.active_room || response?.active_session?.active_room,
+      active_persona: response?.workspace_state?.active_persona || response?.active_session?.active_persona,
+    },
+    fallbackRoom,
+    fallbackPersona,
+  );
 }
 
 export function speakerForStructuredResponse(response: ChatStructuredResponse | undefined, fallbackPersona: string): string {
