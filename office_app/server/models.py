@@ -24,6 +24,7 @@ class Memo(BaseModel):
 class MeetingState(BaseModel):
     meeting_id: str
     room_id: str = "conference_room"
+    title: str = ""
     agenda: List[str] = Field(default_factory=list)
     parking_lot: List[str] = Field(default_factory=list)
     decisions: List[str] = Field(default_factory=list)

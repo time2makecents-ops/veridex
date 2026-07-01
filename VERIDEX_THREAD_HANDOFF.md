@@ -2,7 +2,7 @@
 Project: Veridex (formerly Office-App)
 Developer: JR
 Current branch: `fix/stabilization-setup`
-Current commit: `322c6b2 Refactor chat page cleanup`
+Current base commit: `f1919ed Harden room workflows and memo routing`
 Remote: `origin/fix/stabilization-setup`
 Environment: FastAPI backend + Next.js frontend
 Purpose: Preserve system intent, architecture, and implementation state so development can continue in a new thread without design drift.
@@ -15,11 +15,13 @@ Use this when resuming on another computer.
 
 ## Current repository checkpoint
 
-- Branch `fix/stabilization-setup` is based on pushed commit `322c6b2`.
-- Current workspace contains local/uncommitted cleanup and memo-hardening changes unless they are committed later.
+- Branch `fix/stabilization-setup` is pushed and aligned with `origin/fix/stabilization-setup` at `f1919ed`.
+- The current working tree contains an uncommitted reliability and Conference Room meeting-state slice on top of `f1919ed`.
+- The `f1919ed` checkpoint contains chat cleanup, request-tool extraction, runtime Git hygiene, room capability UI, governed room workflows, and memo hardening.
+- Current uncommitted slice wires `/call` session-header propagation and Conference Room internal meeting-state persistence through `MeetingStateStore`.
 - `office_app/backend/incident_log.csv` is intentionally removed from the Git index and ignored, but the local runtime file should remain on disk.
 
-Fresh validation for the local checkpoint:
+Fresh validation for the pushed checkpoint:
 
 - `git diff --check` passed
 - `python -m unittest discover -s office_app/server -p "test_*.py"` passed
@@ -91,6 +93,14 @@ Conference Room meeting flow:
 - Example supported pattern: `cancel meeting evt_12345`.
 - If the request is too vague, the router now asks for title, date, start time, and end time instead of guessing.
 - Calendar writes still require the normal confirmation flow before Google Calendar is changed.
+- Conference Room can now start and persist internal meeting state without creating Google Calendar events.
+- Supported internal meeting-state patterns include `start meeting vendor kickoff`, `add agenda item review launch budget`, `record decision use option b`, `add action item Sam will send notes`, `add parking lot item pricing follow-up`, and `show meeting state`.
+- Meeting state is file-backed per workspace through `MeetingStateStore` and tracks the active meeting per session.
+
+Reliability checkpoint:
+
+- `/call` now forwards `X-Session-Id` into tool arguments when `session_id` is not already present, so room switches through tool calls persist into the next `/request`.
+- A user-style pass with isolated test data covered room switching, memo list/read, Sales/Marketing research routing, file upload/list/get/download, session/workspace lifecycle, calendar confirmation preparation, and Conference Room meeting-state persistence.
 
 Next optional cleanup:
 

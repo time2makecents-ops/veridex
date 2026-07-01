@@ -74,6 +74,14 @@
       "office.gmail_send",
       "office.integration_confirm"
     ],
+    "meeting_state": [
+      "office.meeting_state_add_action_item",
+      "office.meeting_state_add_agenda",
+      "office.meeting_state_add_parking_lot",
+      "office.meeting_state_record_decision",
+      "office.meeting_state_show",
+      "office.meeting_state_start"
+    ],
     "art_generation": [
       "office.image_generate"
     ],
@@ -114,7 +122,7 @@
     },
     "conference_room": {
       "primary_capabilities": ["meeting_facilitation", "agenda", "cross_department_planning"],
-      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "google_read", "google_write_prepare"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "google_read", "google_write_prepare", "meeting_state"],
       "allowed_tools": ["office.ai_generate"],
       "blocked_tools": ["office.image_generate"],
       "preferred_collaborators": ["my_office", "sales_department", "marketing_room", "art_department", "law_office", "finance_department"],
@@ -123,11 +131,17 @@
       "plugin_affinities": ["Documents", "Presentations", "Spreadsheets", "Gmail"],
       "operating_notes": [
         "Use this room to shape agendas, compare department input, and produce shared meeting artifacts.",
+        "Use internal meeting state for active agenda items, decisions, action items, and parking-lot notes without writing to Google Calendar.",
         "Calendar writes can be prepared here, but they still require approval through the integration confirmation flow.",
         "Agenda artifacts can be saved here directly before or after scheduling work.",
         "Prefer Documents, Presentations, Spreadsheets, and Gmail when a meeting needs concrete outputs."
       ],
       "example_requests": [
+        "start meeting vendor kickoff",
+        "add agenda item review launch budget",
+        "record decision use option b",
+        "add action item Sam will send notes",
+        "show meeting state",
         "create agenda quarterly planning for vendor kickoff",
         "schedule meeting quarterly planning on 2026-07-03 from 2pm to 3pm with sam@example.com",
         "reschedule meeting evt_12345 to 2026-07-03 from 3pm to 4pm",

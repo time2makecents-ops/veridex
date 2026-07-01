@@ -1,6 +1,6 @@
 # Veridex TODO
 
-Last updated: 2026-06-28
+Last updated: 2026-07-01
 
 ## Current Focus
 
@@ -24,7 +24,7 @@ Last updated: 2026-06-28
    - Keep routing decisions in one testable layer.
 
 3. Frontend chat cleanup follow-up
-   - Initial `chat/page.tsx` split is complete as of `322c6b2`.
+   - Initial `chat/page.tsx` split and workspace/session hook extraction are complete as of `f1919ed`.
    - Keep future cleanup narrow and behavior-preserving.
    - Workspace/session lifecycle logic has now been split into focused hooks; keep any further cleanup narrow and behavior-preserving.
 
@@ -34,15 +34,15 @@ Last updated: 2026-06-28
    - Keep `.env.local`, local certs, storage, logs, and runtime databases ignored.
 
 5. Documentation alignment
-   - `README.md` and `VERIDEX_THREAD_HANDOFF.md` have been updated for the `322c6b2` chat cleanup checkpoint.
+   - `README.md` and `VERIDEX_THREAD_HANDOFF.md` have been updated for the pushed `f1919ed` stabilization checkpoint and the current uncommitted reliability/meeting-state slice.
    - Treat older architecture docs as design intent unless recently updated.
    - Update handoff docs after major stabilization milestones.
 
 ## Suggested Future Steps
 
 1. Open a review PR for `fix/stabilization-setup`
-   - Use the pushed `322c6b2` checkpoint as the review base.
-   - Keep the PR focused on stabilization and frontend chat cleanup.
+   - Use the pushed `f1919ed` checkpoint as the review base.
+   - Keep the PR focused on stabilization, frontend chat cleanup, governed room workflows, and memo routing.
    - Include build and smoke-test results in the PR body.
 
 2. Run a deeper behavior pass before more refactors
@@ -79,6 +79,7 @@ Last updated: 2026-06-28
 
 8. Extend department workflow coverage
    - Conference Room now supports agenda artifact creation plus create/update/cancel calendar preparation from explicit requests.
+   - Conference Room now persists internal meeting state through `MeetingStateStore` for start meeting, agenda items, decisions, action items, parking-lot items, and show meeting state without implying Google Calendar writes.
    - The in-app helper for collaboration shortcuts and room examples is in place on the chat status surface.
    - The room directory and room status surface now show short capability summaries so room selection is easier to scan.
    - Sales and Marketing now route explicit research requests for demographics, trends, audiences, and competitors to governed web search without requiring the phrase `search the web`.
@@ -86,7 +87,7 @@ Last updated: 2026-06-28
    - Memo list output now includes compact reply status, reply persona/room, and refusal metadata.
    - Collaboration routing now covers common phrasing for Marketing, Art Department, Finance, and Law Office while keeping Break Room non-operational.
    - Memo replies are sanitized so model text cannot claim external side effects such as sent email or scheduled calendar events.
-   - Optional next meeting workflow: tighter meeting-state persistence if the current chat-first flow proves insufficient.
+   - `/call` now forwards the `X-Session-Id` header into tool arguments so room switches persist into subsequent `/request` calls for the active session.
    - Keep routing additions narrow and covered by backend tests.
 
 9. Lock down runtime/Git hygiene

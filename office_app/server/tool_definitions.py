@@ -73,6 +73,12 @@ VERIDEX_TOOL_DEFINITIONS = {
     "office.calendar_update": tool_definition("office.calendar_update", "integration.calendar.update", "Prepare a Calendar update confirmation."),
     "office.calendar_cancel": tool_definition("office.calendar_cancel", "integration.calendar.cancel", "Prepare a Calendar cancel confirmation."),
     "office.integration_confirm": tool_definition("office.integration_confirm", "integration.confirm", "Confirm a pending external action."),
+    "office.meeting_state_start": tool_definition("office.meeting_state_start", "meeting_state.start", "Start internal Conference Room meeting state.", requires_workspace=True, allowed_rooms=("conference_room",)),
+    "office.meeting_state_add_agenda": tool_definition("office.meeting_state_add_agenda", "meeting_state.agenda.add", "Add an agenda item to the active internal meeting state.", requires_workspace=True, allowed_rooms=("conference_room",)),
+    "office.meeting_state_record_decision": tool_definition("office.meeting_state_record_decision", "meeting_state.decision.record", "Record a decision in the active internal meeting state.", requires_workspace=True, allowed_rooms=("conference_room",)),
+    "office.meeting_state_add_action_item": tool_definition("office.meeting_state_add_action_item", "meeting_state.action_item.add", "Add an action item to the active internal meeting state.", requires_workspace=True, allowed_rooms=("conference_room",)),
+    "office.meeting_state_add_parking_lot": tool_definition("office.meeting_state_add_parking_lot", "meeting_state.parking_lot.add", "Add a parking-lot item to the active internal meeting state.", requires_workspace=True, allowed_rooms=("conference_room",)),
+    "office.meeting_state_show": tool_definition("office.meeting_state_show", "meeting_state.show", "Show the active internal Conference Room meeting state.", requires_workspace=True, allowed_rooms=("conference_room",)),
     "mailroom.dispatch": tool_definition(
         "mailroom.dispatch",
         "memo.dispatch",

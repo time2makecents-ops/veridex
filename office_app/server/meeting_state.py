@@ -23,12 +23,13 @@ class MeetingStateStore:
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
-    def create(self, room_id: str = "conference_room") -> MeetingState:
+    def create(self, room_id: str = "conference_room", title: str = "") -> MeetingState:
         mid = f"MEET-{uuid.uuid4()}"
         now = utc_now()
         st = MeetingState(
             meeting_id=mid,
             room_id=room_id,
+            title=str(title or "").strip(),
             agenda=[],
             parking_lot=[],
             decisions=[],

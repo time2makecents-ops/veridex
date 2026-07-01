@@ -299,6 +299,31 @@ class RequestPipeline:
         r"(?P<event_id>[A-Za-z0-9_-]{4,120})\s*$",
         re.IGNORECASE,
     )
+    CONFERENCE_ROOM_START_MEETING_STATE_RE = re.compile(
+        r"^(?:please\s+)?(?:start|begin|open)\s+(?:a\s+)?meeting(?:\s+(?P<title>.+?))?\s*$",
+        re.IGNORECASE,
+    )
+    CONFERENCE_ROOM_ADD_AGENDA_STATE_RE = re.compile(
+        r"^(?:please\s+)?(?:add|record)\s+(?:an?\s+)?agenda\s+item\s+(?P<item>.+?)\s*$",
+        re.IGNORECASE,
+    )
+    CONFERENCE_ROOM_RECORD_DECISION_STATE_RE = re.compile(
+        r"^(?:please\s+)?(?:record|add)\s+(?:a\s+)?decision\s+(?P<item>.+?)\s*$",
+        re.IGNORECASE,
+    )
+    CONFERENCE_ROOM_ADD_ACTION_STATE_RE = re.compile(
+        r"^(?:please\s+)?(?:add|record)\s+(?:an?\s+)?action\s+item\s+(?P<item>.+?)\s*$",
+        re.IGNORECASE,
+    )
+    CONFERENCE_ROOM_ADD_PARKING_STATE_RE = re.compile(
+        r"^(?:please\s+)?(?:add\s+)?(?:parking\s+lot|parking-lot)\s+(?:item\s+)?(?P<item>.+?)\s*$|"
+        r"^(?:please\s+)?(?:park)\s+(?P<park_item>.+?)\s*$",
+        re.IGNORECASE,
+    )
+    CONFERENCE_ROOM_SHOW_MEETING_STATE_RE = re.compile(
+        r"^(?:please\s+)?(?:show|view|open|summari[sz]e)\s+(?:the\s+)?(?:current\s+)?meeting\s+(?:state|notes|record)\s*$",
+        re.IGNORECASE,
+    )
     CONFERENCE_ROOM_AGENDA_RE = re.compile(
         r"^(?:please\s+)?(?:create|draft|make|save)\s+(?:an?\s+)?agenda\s+"
         r"(?P<title>.+?)(?:\s+for\s+(?P<focus>.+))?\s*$",
@@ -1458,7 +1483,11 @@ class RequestPipeline:
                 **image_generation_route,
             }
 
-        conference_room_meeting_route = self.route_conference_room_meeting_request(workspace_id, request_text)
+        conference_room_meeting_route = self.route_conference_room_meeting_request(
+            workspace_id,
+            request_text,
+            session_id=session_id,
+        )
         if conference_room_meeting_route is not None:
             return {
                 "workspace_id": workspace_id,
@@ -2117,7 +2146,13 @@ class RequestPipeline:
             }
         return None
 
-    def route_conference_room_meeting_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+    def route_conference_room_meeting_request(
+        self,
+        workspace_id: str,
+        request_text: str,
+        *,
+        session_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         text = re.sub(r"\s+", " ", str(request_text or "").strip())
         if not text:
             return None
@@ -2125,6 +2160,71 @@ class RequestPipeline:
         active_room = str(ctx.get("active_room") or "lobby").strip()
         if active_room != "conference_room":
             return None
+        start_state_match = self.CONFERENCE_ROOM_START_MEETING_STATE_RE.match(text)
+        if start_state_match:
+            return {
+                "route_kind": "tool",
+                "capability": "meeting_state.start",
+                "tool": "office.meeting_state_start",
+                "arguments": {
+                    "workspace_id": workspace_id,
+                    "session_id": str(session_id or ""),
+                    "title": str(start_state_match.group("title") or "").strip(" .,:;"),
+                },
+                "reason": "Matched an internal Conference Room meeting-state start request.",
+            }
+        item_routes = [
+            (
+                self.CONFERENCE_ROOM_ADD_AGENDA_STATE_RE,
+                "meeting_state.agenda.add",
+                "office.meeting_state_add_agenda",
+                "Matched an internal Conference Room agenda item request.",
+            ),
+            (
+                self.CONFERENCE_ROOM_RECORD_DECISION_STATE_RE,
+                "meeting_state.decision.record",
+                "office.meeting_state_record_decision",
+                "Matched an internal Conference Room decision request.",
+            ),
+            (
+                self.CONFERENCE_ROOM_ADD_ACTION_STATE_RE,
+                "meeting_state.action_item.add",
+                "office.meeting_state_add_action_item",
+                "Matched an internal Conference Room action item request.",
+            ),
+            (
+                self.CONFERENCE_ROOM_ADD_PARKING_STATE_RE,
+                "meeting_state.parking_lot.add",
+                "office.meeting_state_add_parking_lot",
+                "Matched an internal Conference Room parking-lot request.",
+            ),
+        ]
+        for regex, capability, tool, reason in item_routes:
+            item_match = regex.match(text)
+            if item_match:
+                item = str(item_match.groupdict().get("item") or item_match.groupdict().get("park_item") or "").strip(" .,:;")
+                return {
+                    "route_kind": "tool",
+                    "capability": capability,
+                    "tool": tool,
+                    "arguments": {
+                        "workspace_id": workspace_id,
+                        "session_id": str(session_id or ""),
+                        "item": item,
+                    },
+                    "reason": reason,
+                }
+        if self.CONFERENCE_ROOM_SHOW_MEETING_STATE_RE.match(text):
+            return {
+                "route_kind": "tool",
+                "capability": "meeting_state.show",
+                "tool": "office.meeting_state_show",
+                "arguments": {
+                    "workspace_id": workspace_id,
+                    "session_id": str(session_id or ""),
+                },
+                "reason": "Matched an internal Conference Room meeting-state read request.",
+            }
         cancel_match = self.CONFERENCE_ROOM_MEETING_CANCEL_RE.match(text)
         if cancel_match:
             return {

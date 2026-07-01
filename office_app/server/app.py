@@ -37,6 +37,7 @@ from office_app.server.handlers.dependencies import HandlerDeps
 from office_app.server.handlers.file_handlers import build_file_handlers
 from office_app.server.handlers.image_handlers import build_image_handlers
 from office_app.server.handlers.integration_handlers import build_integration_handlers
+from office_app.server.handlers.meeting_handlers import build_meeting_handlers
 from office_app.server.handlers.memo_handlers import build_memo_handlers
 from office_app.server.handlers.room_capability_handlers import build_room_capability_handlers
 from office_app.server.handlers.session_handlers import build_session_handlers
@@ -311,9 +312,14 @@ def tools() -> Dict[str, Any]:
 
 
 @app.post("/call")
-def call_tool(call: ToolCall) -> Dict[str, Any]:
+def call_tool(
+    call: ToolCall,
+    x_session_id: Optional[str] = Header(default=None, alias="X-Session-Id"),
+) -> Dict[str, Any]:
     tool = call.tool.strip()
     args = dict(call.arguments or {})
+    if x_session_id and not str(args.get("session_id") or "").strip():
+        args["session_id"] = str(x_session_id).strip()
     workspace_id = resolve_workspace_id(tool, args)
     if workspace_id:
         args["workspace_id"] = workspace_id
@@ -1943,6 +1949,12 @@ def refresh_handler_bindings() -> None:
     global handle_calendar_update
     global handle_calendar_cancel
     global handle_integration_confirm
+    global handle_meeting_state_start
+    global handle_meeting_state_add_agenda
+    global handle_meeting_state_record_decision
+    global handle_meeting_state_add_action_item
+    global handle_meeting_state_add_parking_lot
+    global handle_meeting_state_show
 
     handler_deps = HandlerDeps(
         kernel=kernel,
@@ -1975,6 +1987,7 @@ def refresh_handler_bindings() -> None:
     ai_handlers = build_ai_handlers(handler_deps)
     image_handlers = build_image_handlers(handler_deps)
     room_capability_handlers = build_room_capability_handlers(handler_deps)
+    meeting_handlers = build_meeting_handlers(handler_deps)
     integration_handlers = build_integration_handlers(integration_service=integration_service, user_service=user_service)
 
     handle_workspaces_list = workspace_handlers["office.workspaces_list"]
@@ -2044,6 +2057,12 @@ def refresh_handler_bindings() -> None:
     handle_calendar_update = integration_handlers["office.calendar_update"]
     handle_calendar_cancel = integration_handlers["office.calendar_cancel"]
     handle_integration_confirm = integration_handlers["office.integration_confirm"]
+    handle_meeting_state_start = meeting_handlers["office.meeting_state_start"]
+    handle_meeting_state_add_agenda = meeting_handlers["office.meeting_state_add_agenda"]
+    handle_meeting_state_record_decision = meeting_handlers["office.meeting_state_record_decision"]
+    handle_meeting_state_add_action_item = meeting_handlers["office.meeting_state_add_action_item"]
+    handle_meeting_state_add_parking_lot = meeting_handlers["office.meeting_state_add_parking_lot"]
+    handle_meeting_state_show = meeting_handlers["office.meeting_state_show"]
 
     register_tools(
         router,
@@ -2083,6 +2102,12 @@ def refresh_handler_bindings() -> None:
             "office.calendar_update": handle_calendar_update,
             "office.calendar_cancel": handle_calendar_cancel,
             "office.integration_confirm": handle_integration_confirm,
+            "office.meeting_state_start": handle_meeting_state_start,
+            "office.meeting_state_add_agenda": handle_meeting_state_add_agenda,
+            "office.meeting_state_record_decision": handle_meeting_state_record_decision,
+            "office.meeting_state_add_action_item": handle_meeting_state_add_action_item,
+            "office.meeting_state_add_parking_lot": handle_meeting_state_add_parking_lot,
+            "office.meeting_state_show": handle_meeting_state_show,
             "mailroom.dispatch": handle_mailroom_dispatch,
             "office.artifact_create": handle_artifact_create,
             "office.artifact_get": handle_artifact_get,
@@ -2156,6 +2181,12 @@ register_tools(
         "office.calendar_update": handle_calendar_update,
         "office.calendar_cancel": handle_calendar_cancel,
         "office.integration_confirm": handle_integration_confirm,
+        "office.meeting_state_start": handle_meeting_state_start,
+        "office.meeting_state_add_agenda": handle_meeting_state_add_agenda,
+        "office.meeting_state_record_decision": handle_meeting_state_record_decision,
+        "office.meeting_state_add_action_item": handle_meeting_state_add_action_item,
+        "office.meeting_state_add_parking_lot": handle_meeting_state_add_parking_lot,
+        "office.meeting_state_show": handle_meeting_state_show,
         "mailroom.dispatch": handle_mailroom_dispatch,
         "office.artifact_create": handle_artifact_create,
         "office.artifact_get": handle_artifact_get,

@@ -1622,6 +1622,77 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
             [{"email": "sam@example.com"}, {"email": "lee@example.com"}],
         )
 
+    def test_conference_room_start_meeting_routes_to_internal_meeting_state(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="conference_room", active_persona="Facilitator"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "start meeting vendor kickoff", session_id="session_a")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "meeting_state.start")
+        self.assertEqual(routed["tool"], "office.meeting_state_start")
+        self.assertEqual(routed["arguments"]["title"], "vendor kickoff")
+        self.assertEqual(routed["arguments"]["workspace_id"], "default")
+        self.assertEqual(routed["arguments"]["session_id"], "session_a")
+
+    def test_conference_room_meeting_state_item_requests_route_to_internal_tools(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="conference_room", active_persona="Facilitator"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        cases = [
+            ("add agenda item review launch budget", "meeting_state.agenda.add", "office.meeting_state_add_agenda", "review launch budget"),
+            ("record decision use option b", "meeting_state.decision.record", "office.meeting_state_record_decision", "use option b"),
+            ("add action item Sam will send notes", "meeting_state.action_item.add", "office.meeting_state_add_action_item", "Sam will send notes"),
+            ("add parking lot item pricing follow-up", "meeting_state.parking_lot.add", "office.meeting_state_add_parking_lot", "pricing follow-up"),
+        ]
+        for request_text, capability, tool, item in cases:
+            with self.subTest(request_text=request_text):
+                routed = pipeline.route_user_request("default", request_text, session_id="session_a")
+                self.assertEqual(routed["route_kind"], "tool")
+                self.assertEqual(routed["capability"], capability)
+                self.assertEqual(routed["tool"], tool)
+                self.assertEqual(routed["arguments"]["item"], item)
+                self.assertEqual(routed["arguments"]["workspace_id"], "default")
+                self.assertEqual(routed["arguments"]["session_id"], "session_a")
+
+    def test_conference_room_show_meeting_state_routes_to_internal_tool(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="conference_room", active_persona="Facilitator"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "show meeting state", session_id="session_a")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "meeting_state.show")
+        self.assertEqual(routed["tool"], "office.meeting_state_show")
+        self.assertEqual(routed["arguments"]["workspace_id"], "default")
+        self.assertEqual(routed["arguments"]["session_id"], "session_a")
+
+    def test_conference_room_meeting_state_routes_do_not_override_calendar_scheduling(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="conference_room", active_persona="Facilitator"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request(
+            "default",
+            "schedule meeting quarterly planning on 2026-07-03 from 2pm to 3pm with sam@example.com",
+            session_id="session_a",
+        )
+        self.assertEqual(routed["capability"], "integration.calendar.create")
+        self.assertEqual(routed["tool"], "office.calendar_create")
+
     def test_conference_room_schedule_meeting_without_details_clarifies(self) -> None:
         pipeline = RequestPipeline(
             kernel=DummyKernel(active_room="conference_room", active_persona="Facilitator"),
