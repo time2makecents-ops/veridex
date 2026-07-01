@@ -1,0 +1,452 @@
+{
+  "tool_groups": {
+    "navigation": [
+      "office.commands_list",
+      "office.nancy_route",
+      "office.room_capabilities",
+      "office.room_set",
+      "office.state_get",
+      "office.transcript_get"
+    ],
+    "workspace": [
+      "office.bootstrap",
+      "office.session_activate",
+      "office.session_create",
+      "office.session_delete",
+      "office.session_info",
+      "office.session_objects_list",
+      "office.session_rename",
+      "office.sessions_list",
+      "office.sessions_search",
+      "office.workspace_activate",
+      "office.workspace_delete",
+      "office.workspace_new",
+      "office.workspace_update",
+      "office.workspaces_list"
+    ],
+    "files_artifacts": [
+      "office.artifact_append",
+      "office.artifact_create",
+      "office.artifact_get",
+      "office.artifact_list",
+      "office.artifact_update",
+      "office.file_download",
+      "office.file_get",
+      "office.file_list",
+      "office.file_upload",
+      "office.ocr_extract"
+    ],
+    "research": [
+      "office.search_places",
+      "office.search_reviews",
+      "office.search_web"
+    ],
+    "mailroom": [
+      "mailroom.dispatch",
+      "office.memo_get",
+      "office.memos_list"
+    ],
+    "archive_admin": [
+      "office.archive_get",
+      "office.archive_list",
+      "office.archive_store_text",
+      "office.artifact_archive",
+      "office.artifact_delete",
+      "office.nancy_artifact_open",
+      "office.nancy_artifacts_list",
+      "office.nancy_workspace_briefing"
+    ],
+    "room_memory": [
+      "office.room_memory_forget",
+      "office.room_memory_list",
+      "office.room_memory_remember"
+    ],
+    "google_read": [
+      "office.calendar_list",
+      "office.gmail_read",
+      "office.gmail_search"
+    ],
+    "google_write_prepare": [
+      "office.calendar_cancel",
+      "office.calendar_create",
+      "office.calendar_update",
+      "office.gmail_draft",
+      "office.gmail_send",
+      "office.integration_confirm"
+    ],
+    "meeting_state": [
+      "office.meeting_state_add_action_item",
+      "office.meeting_state_add_agenda",
+      "office.meeting_state_add_parking_lot",
+      "office.meeting_state_record_decision",
+      "office.meeting_state_show",
+      "office.meeting_state_start"
+    ],
+    "art_generation": [
+      "office.image_generate"
+    ],
+    "private_files": [
+      "office.private_file_get",
+      "office.private_file_list",
+      "office.private_file_upload"
+    ],
+    "destructive_workspace": [
+      "office.session_delete",
+      "office.workspace_delete"
+    ],
+    "internal_context": [
+      "office.receptionist_context_get",
+      "office.receptionist_context_update"
+    ]
+  },
+  "profiles": {
+    "lobby": {
+      "primary_capabilities": ["intake", "routing", "onboarding"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "mailroom"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["my_office", "control_room"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["external_send", "destructive_workspace"],
+      "plugin_affinities": [],
+      "operating_notes": [
+        "Use the Lobby for intake, onboarding, and moving work to the right room.",
+        "This is the safest place to create workspaces, inspect general capabilities, or start routing decisions.",
+        "Escalate specialty work to the destination room instead of stretching Lobby into a domain expert."
+      ],
+      "example_requests": [
+        "go to marketing room",
+        "what can this room do",
+        "create a workspace for restaurant launch"
+      ]
+    },
+    "conference_room": {
+      "primary_capabilities": ["meeting_facilitation", "agenda", "cross_department_planning"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "google_read", "google_write_prepare", "meeting_state"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["my_office", "sales_department", "marketing_room", "art_department", "law_office", "finance_department"],
+      "storage_scope": "session",
+      "approval_required_for": ["external_send", "calendar_write"],
+      "plugin_affinities": ["Documents", "Presentations", "Spreadsheets", "Gmail"],
+      "operating_notes": [
+        "Use this room to shape agendas, compare department input, and produce shared meeting artifacts.",
+        "Use internal meeting state for active agenda items, decisions, action items, and parking-lot notes without writing to Google Calendar.",
+        "Calendar writes can be prepared here, but they still require approval through the integration confirmation flow.",
+        "Agenda artifacts can be saved here directly before or after scheduling work.",
+        "Prefer Documents, Presentations, Spreadsheets, and Gmail when a meeting needs concrete outputs."
+      ],
+      "example_requests": [
+        "start meeting vendor kickoff",
+        "add agenda item review launch budget",
+        "record decision use option b",
+        "add action item Sam will send notes",
+        "show meeting state",
+        "create agenda quarterly planning for vendor kickoff",
+        "schedule meeting quarterly planning on 2026-07-03 from 2pm to 3pm with sam@example.com",
+        "reschedule meeting evt_12345 to 2026-07-03 from 3pm to 4pm",
+        "ask sales to review this agenda"
+      ]
+    },
+    "control_room": {
+      "primary_capabilities": ["governance", "policy_audit", "routing_diagnostics"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "archive_admin", "room_memory", "internal_context", "destructive_workspace"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["infrastructure_room", "security_room", "records_archive"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["destructive_workspace", "policy_change"],
+      "plugin_affinities": ["GitHub", "Browser"],
+      "operating_notes": [
+        "Use this room for governance checks, policy review, and routing diagnostics.",
+        "This is the right place to inspect cross-room rules or challenge unsafe behavior.",
+        "Prefer Records Archive for durable evidence and Infrastructure or Security for technical follow-up."
+      ],
+      "example_requests": [
+        "what can this room do",
+        "ask infrastructure room to review this deployment issue",
+        "show the control room capabilities"
+      ]
+    },
+    "infrastructure_room": {
+      "primary_capabilities": ["runtime_operations", "deployment", "diagnostics", "tool_activation"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "archive_admin", "room_memory"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["control_room", "it_department", "security_room"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["deployment", "destructive_workspace"],
+      "plugin_affinities": ["GitHub", "Cloudflare", "Browser"],
+      "operating_notes": [
+        "Use this room for runtime operations, deployment follow-up, and environment diagnostics.",
+        "Bring in Security Room for threat-sensitive issues and IT Department for day-to-day support paths.",
+        "Keep destructive or deploy-like actions behind explicit approval."
+      ],
+      "example_requests": [
+        "search the web for FastAPI deployment troubleshooting",
+        "ask security room to review this infrastructure risk",
+        "show the infrastructure room capabilities"
+      ]
+    },
+    "sales_department": {
+      "primary_capabilities": ["lead_research", "demographics", "outreach_strategy", "deal_planning"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "google_read"],
+      "allowed_tools": ["office.ai_generate", "office.gmail_draft"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["marketing_room", "art_department", "finance_department", "law_office"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["external_send"],
+      "plugin_affinities": ["Gmail", "Spreadsheets", "Browser"],
+      "operating_notes": [
+        "Use search tools for demographics, competitors, venues, and lead research before drafting outreach.",
+        "Pull Marketing Room in when the work turns into campaign positioning or content planning.",
+        "Draft outbound email here, but keep final sends behind the normal confirmation path."
+      ],
+      "example_requests": [
+        "search the web for family restaurant demographics in Seattle",
+        "ask marketing to turn this research into a campaign plan",
+        "draft an outreach email to sam@example.com about a catering partnership"
+      ]
+    },
+    "marketing_room": {
+      "primary_capabilities": ["campaign_strategy", "market_research", "content_planning", "demand_generation"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "google_read"],
+      "allowed_tools": ["office.ai_generate", "office.gmail_draft"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["sales_department", "art_department", "conference_room"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["external_send"],
+      "plugin_affinities": ["Canva", "Gmail", "Browser"],
+      "operating_notes": [
+        "Use this room for messaging, campaign planning, and turning Sales findings into market-facing plans.",
+        "Bring in Art Department when the work needs images, brand assets, or visual direction.",
+        "Canva is the preferred plugin path when a campaign needs editable design outputs."
+      ],
+      "example_requests": [
+        "loop in art department for launch visuals",
+        "search the web for coffee shop social media trends",
+        "draft a campaign follow-up email for our newsletter list"
+      ]
+    },
+    "hr_department": {
+      "primary_capabilities": ["personnel_policy", "hiring", "internal_support"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "google_read"],
+      "allowed_tools": ["office.ai_generate", "office.gmail_draft"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["law_office", "finance_department", "my_office"],
+      "storage_scope": "private",
+      "approval_required_for": ["external_send", "employment_advice"],
+      "plugin_affinities": ["Documents", "Gmail"],
+      "operating_notes": [
+        "Use this room for hiring support, internal policy questions, and personnel process drafting.",
+        "Loop in Law Office for legal exposure and Finance for compensation or budget implications.",
+        "Treat sensitive personnel material as private by default."
+      ],
+      "example_requests": [
+        "draft a hiring follow-up email to candidate@example.com",
+        "ask law office to review this policy draft",
+        "show the HR department capabilities"
+      ]
+    },
+    "it_department": {
+      "primary_capabilities": ["technical_support", "networking", "programming_guidance"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "room_memory"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["infrastructure_room", "security_room"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["destructive_workspace"],
+      "plugin_affinities": ["Browser", "GitHub"],
+      "operating_notes": [
+        "Use this room for troubleshooting, technical support, and implementation guidance.",
+        "Escalate infrastructure-wide issues to Infrastructure Room and security-sensitive issues to Security Room.",
+        "Keep destructive technical actions behind the normal approval flow."
+      ],
+      "example_requests": [
+        "search the web for Next.js build errors on Windows",
+        "ask infrastructure room to review this runtime failure",
+        "show the IT department capabilities"
+      ]
+    },
+    "art_department": {
+      "primary_capabilities": ["visual_design", "image_generation", "brand_assets", "multimedia"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "art_generation"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": [],
+      "preferred_collaborators": ["marketing_room", "sales_department", "rnd_room"],
+      "storage_scope": "room",
+      "approval_required_for": ["external_publish"],
+      "plugin_affinities": ["Canva", "Browser"],
+      "operating_notes": [
+        "Start here for prompts, creative briefs, and brand asset direction.",
+        "Use office.image_generate when Gemini image quota is available.",
+        "If Gemini image quota is unavailable, use the Art Department prompt in Microsoft Designer or Bing Image Creator, then upload the chosen image back into Veridex as a room-scoped Art Department file."
+      ],
+      "example_requests": [
+        "create a poster concept for our grand opening",
+        "write a Bing Image Creator prompt for a modern cafe menu board",
+        "ask marketing for the campaign brief before designing the asset"
+      ]
+    },
+    "law_office": {
+      "primary_capabilities": ["legal_risk", "contract_review", "regulatory_awareness"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["sales_department", "finance_department", "hr_department"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["legal_claim", "external_send"],
+      "plugin_affinities": ["Documents", "PDF", "Browser"],
+      "operating_notes": [
+        "Use this room for legal-risk review, contract language, and regulatory context gathering.",
+        "Keep conclusions framed as risk guidance unless a qualified legal review happens outside the app.",
+        "Coordinate with Sales, Finance, or HR when the legal question is attached to an operational workflow."
+      ],
+      "example_requests": [
+        "review this vendor clause for obvious risk",
+        "ask finance department for the pricing context on this agreement",
+        "show the law office capabilities"
+      ]
+    },
+    "finance_department": {
+      "primary_capabilities": ["budgeting", "accounting", "pricing", "financial_tracking"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "google_read"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["sales_department", "law_office", "my_office"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["financial_advice", "external_send"],
+      "plugin_affinities": ["Spreadsheets", "PDF"],
+      "operating_notes": [
+        "Use this room for pricing review, budget planning, and finance-oriented tracking work.",
+        "Bring in Sales for revenue context, Law Office for contract exposure, and My Office for executive coordination.",
+        "Keep finance outputs framed as internal planning unless the user explicitly wants external material."
+      ],
+      "example_requests": [
+        "compare pricing options for this catering package",
+        "ask sales department for the pipeline assumptions behind this forecast",
+        "show the finance department capabilities"
+      ]
+    },
+    "my_office": {
+      "primary_capabilities": ["executive_support", "scheduling", "project_coordination", "department_coordination"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "archive_admin", "google_read", "google_write_prepare", "private_files"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["conference_room", "control_room", "records_archive"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["external_send", "calendar_write", "destructive_workspace"],
+      "plugin_affinities": ["Gmail", "Documents", "Presentations", "Spreadsheets"],
+      "operating_notes": [
+        "Use Nancy for scheduling, cross-room coordination, and final admin handoff.",
+        "This room is the best place to prepare calendar updates, outbound email, and private supporting files.",
+        "Prefer Conference Room for live planning and Records Archive for durable storage."
+      ],
+      "example_requests": [
+        "Nancy, draft an email to jane@example.com subject: Welcome body: Thanks for meeting with us.",
+        "show my calendar",
+        "ask conference room to build an agenda for the vendor meeting"
+      ]
+    },
+    "vr_room": {
+      "primary_capabilities": ["simulation", "persona_sandbox", "rule_sandbox"],
+      "tool_groups": ["navigation", "files_artifacts", "mailroom"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate", "office.room_memory_remember", "office.receptionist_context_update"],
+      "preferred_collaborators": ["control_room"],
+      "storage_scope": "session",
+      "approval_required_for": ["persistent_storage"],
+      "plugin_affinities": [],
+      "operating_notes": [
+        "Use this room for experiments, simulations, and temporary sandboxed behavior trials.",
+        "This room does not persist durable room memory or receptionist context updates.",
+        "Bring findings back to Control Room if a simulation should become governed system behavior."
+      ],
+      "example_requests": [
+        "simulate how this persona should answer a difficult customer question",
+        "ask control room to review this sandbox rule idea",
+        "show the VR room capabilities"
+      ]
+    },
+    "records_archive": {
+      "primary_capabilities": ["durable_records", "artifact_retrieval", "file_organization", "version_tracking"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "mailroom", "archive_admin"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["my_office", "control_room"],
+      "storage_scope": "archive",
+      "approval_required_for": ["artifact_delete"],
+      "plugin_affinities": ["Documents", "PDF"],
+      "operating_notes": [
+        "Use this room for durable storage, archive retrieval, and evidence-preserving artifact management.",
+        "This is the preferred room for cross-workspace records that should outlast a single session.",
+        "Deletion stays approval-sensitive because archive state is meant to be durable."
+      ],
+      "example_requests": [
+        "list archived artifacts",
+        "open the archived vendor agreement",
+        "show the records archive capabilities"
+      ]
+    },
+    "rnd_room": {
+      "primary_capabilities": ["invention", "technical_research", "prototyping", "patent_preparation"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["art_department", "law_office", "it_department"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["patent_claim", "safety_sensitive_design"],
+      "plugin_affinities": ["Documents", "Browser"],
+      "operating_notes": [
+        "Use this room for invention, prototype thinking, and structured technical research.",
+        "Bring in Art Department for concept visuals, IT for implementation depth, and Law Office for patent-adjacent review.",
+        "Keep speculative claims clearly labeled as exploratory unless proven elsewhere."
+      ],
+      "example_requests": [
+        "research lightweight kiosk hardware for a cafe ordering system",
+        "ask art department for a concept sketch of this prototype",
+        "show the R&D room capabilities"
+      ]
+    },
+    "security_room": {
+      "primary_capabilities": ["cybersecurity", "physical_security", "threat_modeling", "security_drills"],
+      "tool_groups": ["navigation", "workspace", "files_artifacts", "research", "mailroom", "room_memory"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate"],
+      "preferred_collaborators": ["it_department", "infrastructure_room", "control_room"],
+      "storage_scope": "workspace",
+      "approval_required_for": ["security_sensitive_action"],
+      "plugin_affinities": ["Browser", "GitHub"],
+      "operating_notes": [
+        "Use this room for threat modeling, security review, and incident-oriented analysis.",
+        "Coordinate with IT Department for technical remediation and Control Room for policy escalation.",
+        "Keep sensitive security actions behind explicit approval and avoid casual disclosure."
+      ],
+      "example_requests": [
+        "threat model this public upload workflow",
+        "ask IT department to review this authentication concern",
+        "show the security room capabilities"
+      ]
+    },
+    "break_room": {
+      "primary_capabilities": ["casual_conversation", "humor", "mental_breaks"],
+      "tool_groups": ["navigation"],
+      "allowed_tools": ["office.ai_generate"],
+      "blocked_tools": ["office.image_generate", "mailroom.dispatch", "office.artifact_delete", "office.workspace_delete", "office.session_delete"],
+      "preferred_collaborators": [],
+      "storage_scope": "session",
+      "approval_required_for": [],
+      "plugin_affinities": [],
+      "operating_notes": [
+        "Use this room for low-stakes conversation, jokes, and short mental breaks.",
+        "It is intentionally non-operational and blocks destructive or cross-room workflow tools.",
+        "Switch back to an operational room when the work needs files, coordination, or governed actions."
+      ],
+      "example_requests": [
+        "tell me a joke",
+        "what can this room do",
+        "go back to conference room"
+      ]
+    }
+  }
+}

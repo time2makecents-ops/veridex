@@ -1,10 +1,139 @@
 # VERIDEX THREAD HANDOFF
 Project: Veridex (formerly Office-App)
 Developer: JR
-Environment: FastAPI backend
+Current branch: `fix/stabilization-setup`
+Current base commit: `0924c58 Add Conference Room meeting state persistence`
+Remote: `origin/fix/stabilization-setup`
+Environment: FastAPI backend + Next.js frontend
 Purpose: Preserve system intent, architecture, and implementation state so development can continue in a new thread without design drift.
 
 ---
+
+# 0. CURRENT HANDOFF SNAPSHOT
+
+Use this when resuming on another computer.
+
+## Current repository checkpoint
+
+- Branch `fix/stabilization-setup` includes the committed Conference Room meeting-state persistence checkpoint at `0924c58`.
+- PR #1 contains the committed Meeting Workspace editor and meeting brief-composer slice in `9af81fc` on top of `0924c58`.
+- The stabilization checkpoints contain chat cleanup, request-tool extraction, runtime Git hygiene, room capability UI, governed room workflows, memo hardening, `/call` session-header propagation, and Conference Room internal meeting-state persistence through `MeetingStateStore`.
+- `office_app/backend/incident_log.csv` is intentionally removed from the Git index and ignored, but the local runtime file should remain on disk.
+- PR #1 is intentionally large as a stabilization baseline; GitHub's diff API exceeds the 20,000-line limit, so review by commit/slice.
+
+Fresh validation for the pushed checkpoint:
+
+- `git diff --check` passed
+- `python -m unittest discover -s office_app/server -p "test_*.py"` passed
+- `npm.cmd test` passed from `C:\Office-App\office_app\frontend`
+- `npm.cmd run build` passed from `C:\Office-App\office_app\frontend`
+- `C:\Office-App\office_app\smoke_test.ps1` passed
+
+## Start
+
+```powershell
+cd C:\Office-App
+.\veridex.cmd restart
+```
+
+Expected launch behavior:
+- backend opens in a `cmd` window
+- frontend opens as a `node` process/window
+- this is intentional
+
+Expected local ports:
+- backend: `http://127.0.0.1:8078`
+- frontend: `https://127.0.0.1:3078`
+
+## Latest completed work
+
+Frontend chat cleanup:
+
+- Split `office_app/frontend/app/chat/page.tsx` into focused components for header, toolbar, transcript, composer, room directory, document reader, file panels, workspace panel, and session panel.
+- Added chat hooks for menus, file operations, and room state.
+- Added shared chat `types.ts` and `helpers.ts`.
+- Kept behavior-preserving controller helpers in `page.tsx` for feedback, message append, draft state, workspace/session state, and notices.
+- Preserved existing runtime behavior and validated with frontend build plus smoke test.
+
+Integration smoke setup:
+
+- Added `office_app/integration_smoke.ps1` for live, read-only Google integration checks.
+- The script verifies connected Google status, Gmail search count, and Calendar list count for an active Veridex `session_id`.
+- It refuses Gmail send, integration confirmation, and Calendar create/update/cancel paths.
+- Canva connector still needs reconnect with `brandkit:read` before brand-kit smoke testing can pass.
+
+Art Department image generation:
+
+- Added `office.image_generate` for Art Department image prompts.
+- It calls Gemini image generation and saves the generated image as a room-scoped workspace file.
+- Routing sends Art Department image/picture/graphic/logo/poster requests to this tool.
+- Live provider check reached Gemini but failed with quota: `You do not have enough quota to make this request.`
+- `office_app\image_generation_smoke.ps1` now provides a repeatable live check for the Art Department provider path once quota or provider access changes.
+- `README.md` now documents the free-first fallback: Art Department writes the prompt, the user generates/downloads the image in Microsoft Designer / Bing Image Creator, then uploads the chosen file back into Veridex as a room-scoped Art Department asset.
+
+Department workflow routing:
+
+- `office.room_capabilities` now returns room-specific operating notes, preferred plugins, collaborators, and approval boundaries instead of only a tool count.
+- Sales, Marketing, Art Department, Conference Room, Finance, Law Office, and My Office can route explicit collaboration requests through `mailroom.dispatch`.
+- Examples now covered by routing tests include `ask marketing to turn this research into a campaign plan`, `loop in art department for launch visuals`, `send this to finance for pricing`, and `coordinate with law office on this`.
+- Natural-language memo access now routes `show recent memos`, `memo inbox`, and `read memo <memo_id>` to `office.memos_list` / `office.memo_get`.
+- Memo list rows now include additive reply status metadata, and memo replies are sanitized so they cannot claim external side effects through the internal memo path.
+- Sales and Marketing now also route explicit research requests like `research demographics for family restaurants in Seattle` and `find social media trends for coffee shops` to `office.search_web` without requiring the literal phrase `search the web`.
+- The room directory and room status surface now mirror the room capability work with short per-room capability summaries in the UI.
+
+Conference Room meeting flow:
+
+- Conference Room can now save `agenda` artifacts from explicit requests with a usable title.
+- Example supported pattern: `create agenda quarterly planning for vendor kickoff`.
+- Conference Room can now prepare `office.calendar_create` confirmations from explicit scheduling requests with date and time.
+- Example supported pattern: `schedule meeting quarterly planning on 2026-07-03 from 2pm to 3pm with sam@example.com`.
+- Conference Room can now prepare `office.calendar_update` confirmations from explicit reschedule requests with an event id, date, and time.
+- Example supported pattern: `reschedule meeting evt_12345 to 2026-07-03 from 3pm to 4pm`.
+- Conference Room can now prepare `office.calendar_cancel` confirmations from explicit cancel requests with an event id.
+- Example supported pattern: `cancel meeting evt_12345`.
+- If the request is too vague, the router now asks for title, date, start time, and end time instead of guessing.
+- Calendar writes still require the normal confirmation flow before Google Calendar is changed.
+- Conference Room can now start and persist internal meeting state without creating Google Calendar events.
+- Supported internal meeting-state patterns include `start meeting vendor kickoff`, `add agenda item review launch budget`, `record decision use option b`, `add action item Sam will send notes`, `add parking lot item pricing follow-up`, and `show meeting state`.
+- Meeting state is file-backed per workspace through `MeetingStateStore` and tracks the active meeting per session.
+- The Conference Room chat toolbar now exposes a Meeting panel for full persisted meeting editing:
+  - start/load the active meeting state
+  - edit the meeting title
+  - add, edit, and delete agenda, decision, action-item, and parking-lot text items
+  - save a deterministic `meeting_brief` artifact
+  - optionally save a separate AI-polished `meeting_brief_polished` artifact linked to the deterministic source when available
+
+Reliability checkpoint:
+
+- `/call` now forwards `X-Session-Id` into tool arguments when `session_id` is not already present, so room switches through tool calls persist into the next `/request`.
+- A user-style pass with isolated test data covered room switching, memo list/read, Sales/Marketing research routing, file upload/list/get/download, session/workspace lifecycle, calendar confirmation preparation, and Conference Room meeting-state persistence.
+
+Next optional cleanup:
+
+- Continue only if more refinement is worth the token/time cost.
+- Workspace/session lifecycle logic has been split into focused hooks.
+- `/request` tool-route execution is now split into `request_tool_execution.py`, so search/tool orchestration no longer lives inline in `app.py`.
+- Minimal frontend helper coverage now runs through `npm.cmd test` with `vitest`.
+- `office_app/backend/incident_log.csv` is now intended to stay local runtime state and is removed from the Git index without deleting the local file.
+- Avoid broad refactors unless a failing behavior or specific feature requires them.
+
+## Last verified behavior
+
+- session delete works and removes the session row plus transcript folder
+- the delete confirmation popup is intentional
+- `delete 1` on a workspace object list now deletes the actual workspace artifact
+- `what objects are saved in this session` shows session facts only
+- `what objects are saved in this workspace` shows workspace artifacts
+- `what objects are saved in this room` routes to the active room's behavior memories
+- room behavior memories and persona behavior memories are separate
+- session objects are derived from transcript facts, not stored as standalone session rows
+
+## Preserve these scope boundaries
+
+- workspace objects
+- session objects
+- room behavior memories
+- persona behavior memories
 
 # 1. SYSTEM PURPOSE
 
@@ -78,6 +207,13 @@ Rules:
 • Nancy assists with coordination, retrieval, and organization
 
 Nancy does NOT replace the command router or system authority.
+
+Implementation note:
+- room behavior memories are saved as workspace artifacts and linked to a room
+- persona behavior memories are also saved as artifacts, but they guide style rather than replace the room
+- room behavior memory lists should stay room-scoped
+- workspace object lists should stay workspace-scoped
+- session object lists should stay session-scoped
 
 ---
 

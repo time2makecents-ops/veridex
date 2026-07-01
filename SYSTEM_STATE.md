@@ -1,44 +1,171 @@
-# Veridex Office App — System State
+# Veridex System State
+
+Last updated: 2026-05-02
+Active branch: `ai_response_tuning`
 
 ## Current Status
-The app is currently running and smoke test passes.
+
+Veridex is running on the current local development stack.
+
+- Backend: `http://127.0.0.1:8078`
+- Frontend: `https://127.0.0.1:3078`
+- Frontend HTTPS certs are local-only mkcert files and are ignored by Git.
+- Basic smoke test passes.
+- Deep smoke test passes, including a real backend search call through SerpAPI.
+- Backend unit tests pass.
+
+## Current Start Commands
+
+Preferred full app launcher:
+
+```powershell
+cd C:\Office-App
+.\veridex.cmd restart
+```
+
+Current workstation launcher:
+
+```cmd
+C:\Office-App\veridex_redca.cmd
+```
+
+This workstation launcher uses the local Python and Node installs directly, starts backend/frontend, and opens Chrome to:
+
+```text
+https://127.0.0.1:3078/chat
+```
+
+Same-network phone access for this workstation:
+
+```text
+https://192.168.1.144:3078/chat
+```
+
+Manual backend:
+
+```cmd
+cd /d C:\Office-App
+run_server.cmd
+```
+
+Manual frontend:
+
+```cmd
+cd /d C:\Office-App\office_app\frontend
+node server.cjs
+```
+
+## Current Validation Commands
+
+Basic runtime smoke test:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Office-App\office_app\smoke_test.ps1
+```
+
+Deep runtime smoke test:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Office-App\office_app\smoke_test.ps1 -Deep
+```
+
+Backend tests:
+
+```powershell
+cd C:\Office-App
+python -m unittest discover office_app/server
+```
+
+Frontend build:
+
+```powershell
+cd C:\Office-App\office_app\frontend
+npm.cmd run build
+```
 
 ## Working Features
-- FastAPI server starts successfully
-- `/tools` responds
-- `office.workspace_new` works
-- `office.workspaces_list` works
-- `office.bootstrap` works
-- `office.state_get` works
-- `office.room_set` works
-- `mailroom.dispatch` works
-- `office.memos_list` works
-- `office.memo_get` works
-- `active_persona_profile` appears in state responses
-- workspace transcript logging works
-- workspace memo storage works
-- incident logging works
+
+- FastAPI backend starts on port `8078`.
+- HTTPS Next frontend starts on port `3078`.
+- `/health` responds.
+- `/tools` responds.
+- Workspace creation, listing, selection, and activation work.
+- Session creation, listing, activation, and transcript hydration work.
+- Active room/persona state is restored per active session.
+- Room navigation works through explicit user intent.
+- Room transition messages are recorded in chat.
+- Normal chat defaults to model response instead of aggressive tool routing.
+- Search tools are available.
+- Search provider order is `SerpAPI -> Google Custom Search -> DuckDuckGo`.
+- Search results are synthesized into conversational model responses.
+- File upload, scoped file listing, reader view, and download are available.
+- OCR/text extraction works for uploaded documents.
+- Save/load UI scopes are available for room, session, public, and private files.
+- Smoke test verifies runtime ports, frontend HTTPS, backend health, tools, and search provider readiness.
+
+## Search Provider State
+
+Configured locally through `.env.local`:
+
+- `SERPAPI_API_KEY`: set locally, not committed.
+- `GOOGLE_SEARCH_ENGINE_ID`: set locally, not committed.
+- `GEMINI_API_KEY`: set locally, not committed.
+
+Provider behavior:
+
+1. Use SerpAPI first for general web and review searches.
+2. Fall back to Google Custom Search if configured and SerpAPI fails.
+3. Fall back to DuckDuckGo HTML search if API providers are unavailable.
+
+Google Programmable Search whole-web mode is deprecated for new engines, so Google Custom Search should be treated as secondary, not the main search solution.
 
 ## Active Registries
+
 - `office_app/data/rooms.json`
 - `office_app/data/personas.json`
 - `office_app/data/room_policies.json`
 
 ## Active Runtime Paths
-- `office_app/runtime/workspaces/`
-- `office_app/backend/incident_log.csv`
 
-## Transitional / Legacy Items
-- `app.py` still contains too much orchestration logic
-- `personas.json` is active, but loader logic is still inside `app.py`
-- legacy `runtime/memos/` compatibility still exists
-- `default_workspace` fallback still exists
-- `storage/` may be legacy
-- `backend/state.json` may be legacy
+- `office_app/runtime/workspaces/`
+- `office_app/runtime/veridex.db`
+- `office_app/backend/incident_log.csv`
+- `office_app/storage/`
+
+Runtime paths are local generated state and should remain ignored by Git. Existing tracked runtime files have been removed from the Git index without deleting local data.
+
+## Current Architecture Reality
+
+The intended model is:
+
+- workspace = project folder
+- session = thread inside a workspace
+- room = stateless persona/context operating inside the active session
+- files/artifacts = workspace-owned resources with scope rules
+
+The current implementation mostly follows this model, but some orchestration remains centralized.
+
+Known large files:
+
+- `office_app/server/app.py`
+- `office_app/server/request_pipeline.py`
+- `office_app/frontend/app/chat/page.tsx`
+
+These files are stable enough for current work but are the main maintainability risk.
+
+## Remaining Drift / Risks
+
+- `app.py` still contains too much orchestration.
+- `request_pipeline.py` still mixes deterministic routing with conversational heuristics.
+- `chat/page.tsx` still combines chat, room controls, workspace/session controls, save/load, upload/download, and reader UI.
+- Runtime files are still partly tracked in Git and should be cleaned up carefully in a separate patch.
+- Some architecture docs still describe older v1.3 plans and should not be treated as exact implementation state.
+- The model still needs a cleaner conversational intent layer so normal chat feels more like ChatGPT while explicit commands remain backend-controlled.
 
 ## Next Priorities
-1. Define authoritative storage locations
-2. Move persona loading into `persona_registry.py`
-3. Move room loading into a dedicated registry/router layer
-4. Increase room policy enforcement
-5. Build Nancy routing behavior
+
+1. Add a conversational intent layer before broad tool routing.
+2. Split request/search synthesis out of `app.py`.
+3. Split `chat/page.tsx` into focused components/hooks.
+4. Clean tracked runtime/generated state from Git without deleting user data.
+5. Update remaining architecture handoff docs to match the workspace/session/room model.

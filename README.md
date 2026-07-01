@@ -5,6 +5,10 @@
 
 ---
 
+Planning: see [TODO.md](TODO.md) for active work items and the Apps SDK / app-in-ChatGPT path.
+
+---
+
 # Overview
 
 Veridex is a **structured AI operating environment** built around a workspace-based architecture.
@@ -114,3 +118,116 @@ Nancy functions as:
 # Architecture
 
 Veridex follows a layered architecture:
+
+- **FastAPI backend** for tools, request handling, workspace/session state, files, artifacts, and integrations.
+- **Next.js frontend** for the lobby/chat workspace UI.
+- **Workspace kernel and stores** as the source of truth for workspace, session, room, file, artifact, and transcript state.
+- **Command/router layers** for deterministic system commands, while normal chat remains conversational.
+- **Art Department image generation** through `office.image_generate`, backed by Gemini image models and saved as workspace files when `GEMINI_API_KEY` has image-generation quota.
+- **Free-first Art Department fallback** through Microsoft Designer / Bing Image Creator when Gemini image quota is unavailable.
+
+Art Department image workflow:
+
+1. Ask Veridex in `art_department` for the prompt, brief, or asset direction.
+2. If Gemini image generation is available, use `office.image_generate`.
+3. If Gemini image quota is unavailable, use the Art Department prompt in Microsoft Designer / Bing Image Creator, download the selected image, then upload it back into Veridex.
+4. Store the uploaded asset as a room-scoped Art Department file so the workspace keeps the image with the rest of the project state.
+5. When quota is expected to be fixed, run `office_app\image_generation_smoke.ps1` to verify the live provider path and room-scoped file save behavior.
+
+Department collaboration workflow:
+
+1. Sales, Marketing, Art Department, Conference Room, Finance, Law Office, and My Office can route explicit collaboration requests through the memo system.
+2. Requests like `ask marketing to turn this research into a campaign plan`, `loop in art department for launch visuals`, `send this to finance for pricing`, or `coordinate with law office on this` dispatch directly to the destination room instead of falling back to generic chat.
+3. `show recent memos`, `memo inbox`, and `read memo <memo_id>` route to the memo list/read tools so the mailroom is usable from chat.
+4. In `sales_department` and `marketing_room`, explicit research requests like `research demographics for family restaurants in Seattle` or `find social media trends for coffee shops` now prepare `office.search_web` directly.
+5. This keeps cross-department work inside governed room boundaries without forcing the user to write literal mailroom commands.
+6. The room directory and room status surface both show a short capability summary for each room so the user can see what a room is for before switching into it.
+
+Conference Room meeting workflow:
+
+1. In `conference_room`, explicit scheduling requests can prepare `office.calendar_create` confirmations directly.
+2. Explicit agenda requests such as `create agenda quarterly planning for vendor kickoff` can save an `agenda` artifact directly in the workspace.
+3. Use a concrete format such as `schedule meeting quarterly planning on 2026-07-03 from 2pm to 3pm with sam@example.com`.
+4. Explicit reschedule requests such as `reschedule meeting evt_12345 to 2026-07-03 from 3pm to 4pm` can prepare `office.calendar_update` confirmations.
+5. Explicit cancel requests such as `cancel meeting evt_12345` can prepare `office.calendar_cancel` confirmations.
+6. Internal meeting state requests such as `start meeting vendor kickoff`, `add agenda item review launch budget`, `record decision use option b`, `add action item Sam will send notes`, `add parking lot item pricing follow-up`, and `show meeting state` persist deterministic meeting notes without creating Google Calendar events.
+7. The chat toolbar shows a Meeting panel in Conference Room for persisted title/item edits, item deletion, deterministic meeting brief artifact creation, and optional AI-polished brief artifact creation.
+8. Calendar actions still require the normal confirmation flow before anything is written to Google Calendar.
+
+The current frontend chat surface has been split out of `office_app/frontend/app/chat/page.tsx` into focused components and hooks:
+
+- chat header, toolbar, transcript, composer, document reader, room directory
+- workspace/session panels
+- save/load/upload/download file panels
+- chat menu, file, and room-state hooks
+- shared chat types and helpers
+
+---
+
+# Development
+
+## Preferred Startup
+
+```powershell
+cd C:\Office-App
+.\veridex.cmd restart
+```
+
+Expected local ports:
+
+- backend: `http://127.0.0.1:8078`
+- frontend: `https://127.0.0.1:3078`
+
+## Validation
+
+Frontend build:
+
+```powershell
+cd C:\Office-App\office_app\frontend
+npm.cmd run build
+```
+
+Smoke test:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Office-App\office_app\smoke_test.ps1
+```
+
+Live Google integration smoke test, after signing in and connecting Google from Profile:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Office-App\office_app\integration_smoke.ps1 -SessionId "<active-session-id>"
+```
+
+This checks the connected Google provider, Gmail search, and Calendar list paths with count-only output. It refuses Gmail send, integration confirmation, and Calendar write tools.
+
+Backend unit tests, when backend contracts change:
+
+```powershell
+cd C:\Office-App
+python -m unittest discover -s office_app/server -p "test_*.py"
+```
+
+---
+
+# Current Checkpoint
+
+Last documented stabilization checkpoint:
+
+- Branch: `fix/stabilization-setup`
+- Base commit: `0924c58 Add Conference Room meeting state persistence`
+- Status: PR #1 contains the pushed stabilization work plus the Meeting Workspace editor and brief-composer slice committed in `9af81fc`.
+- Current slice:
+  - `/call` forwards `X-Session-Id` into tool arguments so tool calls and `/request` share the same session room/workspace context.
+  - Conference Room meeting state is wired through `MeetingStateStore` for start, agenda, decision, action item, parking-lot, and show commands.
+  - Conference Room exposes a Meeting panel with persisted title/item editing, delete controls, deterministic meeting brief save, and optional AI-polished brief save as a separate artifact.
+  - User-style reliability pass covered room switching, memo list/read, Sales/Marketing research routing, file upload/list/get/download, session/workspace lifecycle, calendar confirmation preparation, and meeting-state persistence with isolated test data.
+- Review note:
+  - PR #1 is intentionally large as a stabilization baseline. GitHub's diff API exceeds the 20,000-line limit for this PR, so review by commit/slice.
+  - For the newest Meeting Workspace work, review `0924c58..9af81fc`.
+- Fresh checks at closeout:
+  - `git diff --check`
+  - `python -m unittest discover -s office_app/server -p "test_*.py"`
+  - `npm.cmd test`
+  - `npm.cmd run build`
+  - `office_app/smoke_test.ps1`

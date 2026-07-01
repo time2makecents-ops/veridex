@@ -1,13 +1,13 @@
 Mailroom Dispatch Contract
-Version: 1.0.0
+Version: 1.1.0
 Status: Active
-Purpose: Deterministic cross-room invocation wrapper.
+Purpose: Deterministic cross-room invocation wrapper with required destination response.
 
 ------------------------------------------------------------
 
 I. ROLE OF THE MAIL ROOM
 
-The Mail Room is a structured dispatch mechanism.
+The Mail Room is a structured dispatch-and-response mechanism.
 It is NOT:
 
 - A messaging system
@@ -17,7 +17,7 @@ It is NOT:
 - A canon mutation path
 - A room-switch mechanism
 
-It is a formal cross-room invocation wrapper.
+It is a formal cross-room invocation wrapper that returns the destination room's response without changing active room.
 
 ------------------------------------------------------------
 
@@ -110,7 +110,8 @@ Response must not imply:
 - Updating artifacts
 - System mutation
 
-Mail Room is transport only.
+Mail Room handles transport plus the immediate destination response.
+It is not a persistence shortcut or canon mutation path.
 
 ------------------------------------------------------------
 

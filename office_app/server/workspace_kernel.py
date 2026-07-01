@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+from fastapi import HTTPException
 from office_app.server.errors import error_workspace_not_initialized
 from office_app.server.persona_registry import persona_profile_for_name
 from office_app.server.room_policy_registry import load_room_policies
@@ -40,7 +42,9 @@ class WorkspaceStore:
     def state_path(self, workspace_id: str) -> Path:
         return self.workspace_dir(workspace_id) / "state.json"
 
-    def transcript_path(self, workspace_id: str) -> Path:
+    def transcript_path(self, workspace_id: str, session_id: Optional[str] = None) -> Path:
+        if session_id:
+            return self.workspace_dir(workspace_id) / "sessions" / session_id / "transcript.ndjson"
         return self.workspace_dir(workspace_id) / "transcript.ndjson"
 
     def memos_dir(self, workspace_id: str) -> Path:
@@ -55,12 +59,57 @@ class WorkspaceStore:
         state["updated_at"] = self.utc_now()
         _write_json(self.state_path(workspace_id), state)
 
-    def append_transcript(self, workspace_id: str, role: str, room_id: str, text: str) -> None:
+    def append_transcript(
+        self,
+        workspace_id: str,
+        role: str,
+        room_id: str,
+        text: str,
+        *,
+        speaker: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> None:
         entry = {"ts": self.utc_now(), "role": role, "room": room_id, "text": text}
-        tp = self.transcript_path(workspace_id)
+        if speaker:
+            entry["speaker"] = speaker
+        if session_id:
+            entry["session_id"] = session_id
+        tp = self.transcript_path(workspace_id, session_id=session_id)
         tp.parent.mkdir(parents=True, exist_ok=True)
         with tp.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\\n")
+            f.write(json.dumps(entry) + "\n")
+
+    def load_transcript(self, workspace_id: str, limit: int = 100, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        tp = self.transcript_path(workspace_id, session_id=session_id)
+        if not tp.exists():
+            return []
+        rows: List[Dict[str, Any]] = []
+        with tp.open("r", encoding="utf-8") as f:
+            raw = f.read()
+        for line in raw.splitlines():
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                obj = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                rows.append(obj)
+        if not rows and "\\n" in raw:
+            for line in raw.replace("\\n", "\n").splitlines():
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    obj = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict):
+                    rows.append(obj)
+        if limit > 0:
+            rows = rows[-limit:]
+        return rows
 
     def load_index(self) -> Dict[str, Any]:
         idx = _read_json(self.index_path, {"workspaces": []})
@@ -68,28 +117,80 @@ class WorkspaceStore:
             idx = {"workspaces": []}
         return idx
 
+    @staticmethod
+    def _normalize_workspace_row(row: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(row)
+        status = str(normalized.get("status") or "").strip().lower() or "active"
+        if status not in {"active", "archived"}:
+            status = "active"
+        normalized["status"] = status
+        if status == "archived":
+            archived_at = str(normalized.get("archived_at") or "").strip()
+            if not archived_at:
+                archived_at = str(normalized.get("updated_at") or normalized.get("last_seen_utc") or "").strip()
+            if archived_at:
+                normalized["archived_at"] = archived_at
+        return normalized
+
+    def fetch_workspace(self, workspace_id: str) -> Optional[Dict[str, Any]]:
+        normalized_id = str(workspace_id or "").strip()
+        if not normalized_id:
+            return None
+        idx = self.load_index()
+        for row in idx.get("workspaces", []):
+            if str(row.get("workspace_id") or "").strip() == normalized_id:
+                return self._normalize_workspace_row(row)
+        return None
+
     def save_index(self, index: Dict[str, Any]) -> None:
         _write_json(self.index_path, index)
 
-    def register_workspace(self, workspace_id: str, label: str) -> None:
+    def register_workspace(self, workspace_id: str, label: str, description: str = "") -> None:
         idx = self.load_index()
         rows = idx["workspaces"]
         for row in rows:
             if row.get("workspace_id") == workspace_id:
                 row["label"] = label
+                row["description"] = str(description or row.get("description") or "").strip()
                 row["last_seen_utc"] = self.utc_now()
+                if not str(row.get("status") or "").strip():
+                    row["status"] = "active"
                 self.save_index(idx)
                 return
         rows.append(
             {
                 "workspace_id": workspace_id,
                 "label": label,
+                "description": str(description or "").strip(),
+                "status": "active",
                 "created_utc": self.utc_now(),
                 "last_seen_utc": self.utc_now(),
                 "last_room": "lobby",
             }
         )
         self.save_index(idx)
+
+    def update_workspace_metadata(
+        self,
+        workspace_id: str,
+        *,
+        label: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        idx = self.load_index()
+        rows = idx.get("workspaces", [])
+        normalized_id = str(workspace_id or "").strip()
+        for row in rows:
+            if str(row.get("workspace_id") or "").strip() != normalized_id:
+                continue
+            if label is not None:
+                row["label"] = str(label or "").strip() or str(row.get("label") or normalized_id)
+            if description is not None:
+                row["description"] = str(description or "").strip()
+            row["last_seen_utc"] = self.utc_now()
+            self.save_index(idx)
+            return self._normalize_workspace_row(row)
+        raise error_workspace_not_initialized(normalized_id)
 
     def touch_workspace(self, workspace_id: str, room_id: Optional[str] = None) -> None:
         idx = self.load_index()
@@ -103,6 +204,55 @@ class WorkspaceStore:
                 break
         if changed:
             self.save_index(idx)
+
+    def unregister_workspace(self, workspace_id: str) -> None:
+        idx = self.load_index()
+        rows = idx.get("workspaces", [])
+        next_rows = [row for row in rows if str(row.get("workspace_id") or "").strip() != str(workspace_id or "").strip()]
+        if len(next_rows) != len(rows):
+            idx["workspaces"] = next_rows
+            self.save_index(idx)
+
+    def archive_workspace(
+        self,
+        workspace_id: str,
+        *,
+        archived_by_user_id: Optional[str] = None,
+        deleted_by_user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        idx = self.load_index()
+        normalized_id = str(workspace_id or "").strip()
+        for row in idx.get("workspaces", []):
+            if str(row.get("workspace_id") or "").strip() != normalized_id:
+                continue
+            row["status"] = "archived"
+            row["archived_at"] = self.utc_now()
+            if archived_by_user_id is not None:
+                row["archived_by_user_id"] = str(archived_by_user_id or "").strip()
+            if deleted_by_user_id is not None:
+                row["deleted_by_user_id"] = str(deleted_by_user_id or "").strip()
+            row["last_seen_utc"] = str(row.get("last_seen_utc") or self.utc_now()).strip() or self.utc_now()
+            self.save_index(idx)
+            return self._normalize_workspace_row(row)
+        raise error_workspace_not_initialized(normalized_id)
+
+    def hard_delete_workspace(self, workspace_id: str) -> Optional[Dict[str, Any]]:
+        idx = self.load_index()
+        normalized_id = str(workspace_id or "").strip()
+        rows = idx.get("workspaces", [])
+        remaining = []
+        removed: Optional[Dict[str, Any]] = None
+        for row in rows:
+            if str(row.get("workspace_id") or "").strip() == normalized_id:
+                removed = dict(row)
+                continue
+            remaining.append(row)
+        if removed is None:
+            return None
+        idx["workspaces"] = remaining
+        self.save_index(idx)
+        shutil.rmtree(self.workspaces_dir / normalized_id, ignore_errors=True)
+        return self._normalize_workspace_row(removed)
 
 
 class WorkspaceKernel:
@@ -124,8 +274,8 @@ class WorkspaceKernel:
             "vr_session": {},
         }
 
-    def create_workspace(self, workspace_id: str, label: str) -> Dict[str, Any]:
-        self.store.register_workspace(workspace_id, label)
+    def create_workspace(self, workspace_id: str, label: str, description: str = "") -> Dict[str, Any]:
+        self.store.register_workspace(workspace_id, label, description=description)
         state = self.build_workspace_state(workspace_id)
         self.store.save_state(workspace_id, state)
         self.store.append_transcript(workspace_id, "system", "lobby", f"Workspace created: {label}")
@@ -151,8 +301,57 @@ class WorkspaceKernel:
 
         return self.store.load_state(workspace_id), created
 
-    def list_workspaces(self) -> Dict[str, Any]:
-        return self.store.load_index()
+    def list_workspaces(self, include_archived: bool = False) -> Dict[str, Any]:
+        idx = self.store.load_index()
+        rows = [
+            self.store._normalize_workspace_row(row)
+            for row in idx.get("workspaces", [])
+            if isinstance(row, dict)
+        ]
+        if not include_archived:
+            rows = [row for row in rows if str(row.get("status") or "active").strip().lower() != "archived"]
+        return {"workspaces": rows}
+
+    def get_workspace(self, workspace_id: str, *, include_archived: bool = True) -> Optional[Dict[str, Any]]:
+        row = self.store.fetch_workspace(workspace_id)
+        if row is None:
+            return None
+        if not include_archived and str(row.get("status") or "active").strip().lower() == "archived":
+            return None
+        return row
+
+    def archive_workspace(
+        self,
+        workspace_id: str,
+        *,
+        archived_by_user_id: Optional[str] = None,
+        deleted_by_user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return self.store.archive_workspace(
+            workspace_id,
+            archived_by_user_id=archived_by_user_id,
+            deleted_by_user_id=deleted_by_user_id,
+        )
+
+    def restore_workspace(self, workspace_id: str) -> Dict[str, Any]:
+        idx = self.store.load_index()
+        normalized_id = str(workspace_id or "").strip()
+        for row in idx.get("workspaces", []):
+            if str(row.get("workspace_id") or "").strip() != normalized_id:
+                continue
+            if str(row.get("status") or "active").strip().lower() != "archived":
+                raise HTTPException(status_code=409, detail="Workspace is not archived.")
+            row["status"] = "active"
+            row.pop("archived_at", None)
+            row.pop("archived_by_user_id", None)
+            row.pop("deleted_by_user_id", None)
+            row["last_seen_utc"] = self.utc_now()
+            self.store.save_index(idx)
+            return self.store._normalize_workspace_row(row)
+        raise error_workspace_not_initialized(normalized_id)
+
+    def hard_delete_workspace(self, workspace_id: str) -> Optional[Dict[str, Any]]:
+        return self.store.hard_delete_workspace(workspace_id)
 
     def get_state(self, workspace_id: str) -> Dict[str, Any]:
         state = self.store.load_state(workspace_id)
@@ -171,7 +370,7 @@ class WorkspaceKernel:
             "active_persona_profile": persona_profile_for_name(active_persona),
         }
 
-    def enter_room(self, workspace_id: str, room_id: str) -> Dict[str, Any]:
+    def enter_room(self, workspace_id: str, room_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         state = self.get_state(workspace_id)
         previous_room = state.get("active_room", "lobby")
 
@@ -184,7 +383,14 @@ class WorkspaceKernel:
         state["active_persona"] = str(room.get("default_persona") or "Navigator")
         self.store.save_state(workspace_id, state)
         self.store.touch_workspace(workspace_id, target_external)
-        self.store.append_transcript(workspace_id, "system", target_external, f"Entered {room['title']}")
+        self.store.append_transcript(
+            workspace_id,
+            "system",
+            target_external,
+            f"Now in {room['title']}. Persona: {state['active_persona']}.",
+            speaker="System",
+            session_id=session_id,
+        )
 
         return {
             "previous_room": previous_room,
