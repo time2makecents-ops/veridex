@@ -184,6 +184,32 @@ class MemoHandlerTests(unittest.TestCase):
         self.assertIn("Response from Navigator (control_room):", memo_text)
         self.assertIn("System health is nominal.", memo_text)
 
+    def test_memos_list_includes_reply_status_and_actionable_text(self) -> None:
+        router = CapturingModelRouter("System health is nominal.")
+        handlers = build_memo_handlers(self._deps(router))
+        dispatch_response = handlers["mailroom.dispatch"](
+            {
+                "workspace_id": self.workspace_id,
+                "to_room": "control_room",
+                "body": "Please assess current system health.",
+            }
+        )
+
+        list_response = handlers["office.memos_list"]({"workspace_id": self.workspace_id})
+
+        memo_id = dispatch_response["structuredContent"]["memo_id"]
+        rows = list_response["structuredContent"]["memos"]
+        self.assertEqual(rows[0]["memo_id"], memo_id)
+        self.assertEqual(rows[0]["reply_status"], "replied")
+        self.assertEqual(rows[0]["reply_persona"], "Navigator")
+        self.assertEqual(rows[0]["reply_room"], "control_room")
+        self.assertEqual(rows[0]["replied_utc"], "2026-05-27T12:00:00Z")
+        self.assertFalse(rows[0]["is_refusal"])
+        text = list_response["content"][0]["text"]
+        self.assertIn(memo_id, text)
+        self.assertIn("Please assess current system health.", text)
+        self.assertIn("replied by Navigator (control_room)", text)
+
     def test_mailroom_dispatch_falls_back_to_structured_failure_reply(self) -> None:
         handlers = build_memo_handlers(self._deps(FailingModelRouter()))
 
@@ -216,6 +242,26 @@ class MemoHandlerTests(unittest.TestCase):
         self.assertTrue(response["structuredContent"]["email_action_blocked"])
         self.assertIn("No email was sent.", response["structuredContent"]["response_text"])
         self.assertEqual(router.system_prompts, [])
+
+    def test_memo_reply_external_side_effect_claim_is_sanitized(self) -> None:
+        router = CapturingModelRouter("I scheduled the calendar event and sent the invite.")
+        handlers = build_memo_handlers(self._deps(router))
+
+        response = handlers["mailroom.dispatch"](
+            {
+                "workspace_id": self.workspace_id,
+                "to_room": "conference_room",
+                "body": "Schedule the vendor meeting tomorrow.",
+            }
+        )
+
+        reply_text = response["structuredContent"]["reply_text"]
+        self.assertIn("No external action was performed through this memo.", reply_text)
+        self.assertNotIn("I scheduled", reply_text)
+        self.assertNotIn("sent the invite", reply_text)
+        memo_id = response["structuredContent"]["memo_id"]
+        stored_obj, _ = self.memo_service.get_memo(self.workspace_id, memo_id)
+        self.assertEqual(stored_obj["reply_text"], reply_text)
 
 
 if __name__ == "__main__":

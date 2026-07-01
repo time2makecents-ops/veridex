@@ -263,10 +263,22 @@ class RequestPipeline:
         r"^(?:please\s+)?(?:send|file|dispatch)\s+(?:a\s+)?memo\s+to\s+(?P<target>[^.?!:;,]+)[.?!:;,-]*\s*(?P<body>.*)$",
         re.IGNORECASE,
     )
+    MEMO_LIST_RE = re.compile(
+        r"^(?:please\s+)?(?:show|list|open|view)\s+(?:recent\s+)?(?:memos|mailroom|memo\s+inbox)|^(?:please\s+)?memo\s+inbox$",
+        re.IGNORECASE,
+    )
+    MEMO_GET_RE = re.compile(
+        r"^(?:please\s+)?(?:read|open|show|view)\s+memo\s+(?P<memo_id>[A-Za-z0-9_-]{3,128})\s*$",
+        re.IGNORECASE,
+    )
     DEPARTMENT_COLLABORATION_PATTERNS = (
         re.compile(r"^(?:please\s+)?ask\s+(?P<target>.+?)\s+to\s+(?P<body>.+)$", re.IGNORECASE),
         re.compile(r"^(?:please\s+)?(?:loop|bring|pull)\s+in\s+(?P<target>.+?)\s+(?:for|on|to)\s+(?P<body>.+)$", re.IGNORECASE),
         re.compile(r"^(?:please\s+)?work\s+with\s+(?P<target>.+?)\s+(?:for|on|to)\s+(?P<body>.+)$", re.IGNORECASE),
+        re.compile(r"^(?:please\s+)?have\s+(?P<target>.+?)\s+(?P<body>review\s+.+)$", re.IGNORECASE),
+        re.compile(r"^(?:please\s+)?get\s+(?P<target>.+?)\s+to\s+(?P<body>.+)$", re.IGNORECASE),
+        re.compile(r"^(?:please\s+)?send\s+this\s+to\s+(?P<target>.+?)\s+(?:for|on)\s+(?P<body>.+)$", re.IGNORECASE),
+        re.compile(r"^(?:please\s+)?coordinate\s+with\s+(?P<target>.+?)\s+(?:for|on)\s+(?P<body>.+)$", re.IGNORECASE),
     )
     CONFERENCE_ROOM_MEETING_RE = re.compile(
         r"^(?:please\s+)?(?:schedule|set\s+up|create|draft)\s+(?:a\s+)?(?:meeting|meeting\s+invite|calendar\s+invite|calendar\s+event)"
@@ -305,6 +317,8 @@ class RequestPipeline:
         "marketing_room",
         "art_department",
         "conference_room",
+        "finance_department",
+        "law_office",
         "my_office",
     }
     NANCY_DIRECT_RE = re.compile(r"^(?:hey\s+)?nancy\s*[,.:\-]?\s*(?P<body>.+)$", re.IGNORECASE)
@@ -1314,6 +1328,15 @@ class RequestPipeline:
                 **nancy_direct_route,
             }
 
+        memo_access_route = self.route_memo_access_request(workspace_id, request_text)
+        if memo_access_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **memo_access_route,
+            }
+
         memo_dispatch_route = self.route_memo_dispatch_request(workspace_id, request_text)
         if memo_dispatch_route is not None:
             if "route_kind" in memo_dispatch_route:
@@ -1923,6 +1946,33 @@ class RequestPipeline:
                 return True
         return False
 
+    def route_memo_access_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip())
+        if not text:
+            return None
+        get_match = self.MEMO_GET_RE.match(text)
+        if get_match:
+            return {
+                "capability": "memo.get",
+                "tool": "office.memo_get",
+                "arguments": {
+                    "workspace_id": workspace_id,
+                    "memo_id": str(get_match.group("memo_id") or "").strip(),
+                },
+                "reason": "Matched a memo read request.",
+            }
+        if self.MEMO_LIST_RE.match(text):
+            return {
+                "capability": "memo.list",
+                "tool": "office.memos_list",
+                "arguments": {
+                    "workspace_id": workspace_id,
+                    "limit": 25,
+                },
+                "reason": "Matched a memo list request.",
+            }
+        return None
+
     def route_memo_dispatch_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         text = re.sub(r"\s+", " ", str(request_text or "").strip())
         if not text:
@@ -1930,6 +1980,18 @@ class RequestPipeline:
         match = self.MEMO_DISPATCH_RE.match(text)
         if not match:
             return None
+        ctx = self.current_context(workspace_id)
+        active_room = str(ctx.get("active_room") or "lobby").strip()
+        if active_room == "break_room":
+            return {
+                "route_kind": "clarify",
+                "capability": "memo.dispatch.blocked",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": "Break Room is non-operational. Switch to an operational room before sending memos.",
+                },
+                "reason": "Break Room blocks operational memo dispatch.",
+            }
         target_text = re.sub(r"^(?:the|a|an)\s+", "", str(match.group("target") or "").strip(), flags=re.IGNORECASE)
         body = str(match.group("body") or "").strip(" .")
         if not target_text:
@@ -2024,6 +2086,8 @@ class RequestPipeline:
         ctx = self.current_context(workspace_id)
         active_room = str(ctx.get("active_room") or "lobby").strip()
         if active_room not in self.COLLABORATION_ROUTE_ROOMS:
+            return None
+        if active_room == "break_room":
             return None
         for pattern in self.DEPARTMENT_COLLABORATION_PATTERNS:
             match = pattern.match(text)
@@ -3401,9 +3465,27 @@ class RequestPipeline:
         }
 
     def memos_list_response(self, workspace_id: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if rows:
+            lines = ["Recent memos:"]
+            for idx, row in enumerate(rows, start=1):
+                memo_id = str(row.get("memo_id") or "").strip()
+                subject = str(row.get("subject") or "(no subject)").strip()
+                from_room = str(row.get("from_room") or "").strip()
+                to_room = str(row.get("to_room") or "").strip()
+                status = str(row.get("reply_status") or "pending").strip()
+                reply_persona = str(row.get("reply_persona") or "").strip()
+                reply_room = str(row.get("reply_room") or "").strip()
+                if status == "replied" and reply_persona:
+                    status_text = f"replied by {reply_persona} ({reply_room or to_room})"
+                else:
+                    status_text = status
+                lines.append(f"{idx}. {memo_id} - {subject} | {from_room} -> {to_room} | {status_text}")
+            text = "\n".join(lines)
+        else:
+            text = "No memos found."
         return {
             "structuredContent": {"workspace_id": workspace_id, "count": len(rows), "memos": rows},
-            "content": [{"type": "text", "text": f"Found {len(rows)} memo(s)."}],
+            "content": [{"type": "text", "text": text}],
         }
 
     def memo_get_text(self, obj: Dict[str, Any], body: str) -> str:

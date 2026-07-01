@@ -176,6 +176,27 @@ def _memo_reply_flags(reply_text: str) -> tuple[bool, bool]:
     return is_refusal, closure_appended
 
 
+def _sanitize_external_side_effect_claims(reply_text: str) -> str:
+    text = str(reply_text or "").strip()
+    if not text:
+        return text
+    side_effect_claim = re.search(
+        r"\b(?:i\s+)?(?:sent|scheduled|created|updated|cancelled|canceled|published|posted|uploaded)\b"
+        r".*\b(?:email|message|invite|calendar|event|meeting|asset|image|file|post)\b"
+        r"|\b(?:email|message|invite|calendar|event|meeting|asset|image|file|post)\b"
+        r".*\b(?:sent|scheduled|created|updated|cancelled|canceled|published|posted|uploaded)\b",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not side_effect_claim:
+        return text
+    return (
+        "No external action was performed through this memo. "
+        "The destination room can provide review, recommendations, or preparation only. "
+        "Use the direct integration workflow for email, calendar, publishing, or file actions."
+    )
+
+
 def build_memo_handlers(deps: HandlerDeps) -> Dict[str, Any]:
     def handle_mailroom_dispatch(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
@@ -277,6 +298,7 @@ def build_memo_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                 f"{DEFAULT_CONTRACT.closure_line}"
             )
 
+        reply_text = _sanitize_external_side_effect_claims(reply_text)
         reply_is_refusal, reply_closure_appended = _memo_reply_flags(reply_text)
         deps.memo_service.record_memo_reply(
             workspace_id=workspace_id,

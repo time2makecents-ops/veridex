@@ -1430,7 +1430,7 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
 
     def test_send_memo_to_navigator_routes_to_mailroom_dispatch(self) -> None:
         pipeline = RequestPipeline(
-            kernel=DummyKernel(active_room="break_room", active_persona="Break Room Host"),
+            kernel=DummyKernel(active_room="lobby", active_persona="Receptionist"),
             navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
             utc_now_fn=lambda: "2026-04-17T12:00:00Z",
             tool_names=[],
@@ -1449,7 +1449,6 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
             ("lobby", "Receptionist"),
             ("sales_department", "Sales Director"),
             ("marketing_room", "Marketing Director"),
-            ("break_room", "Break Room Host"),
         )
         for active_room, active_persona in rooms:
             with self.subTest(active_room=active_room):
@@ -1467,6 +1466,37 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
                 self.assertEqual(routed["arguments"]["to_room"], "sales_department")
                 self.assertEqual(routed["arguments"]["explicit_persona"], "Sales Director")
                 self.assertEqual(routed["arguments"]["body"], "please review this lead")
+
+    def test_break_room_memo_dispatch_is_blocked_by_room_capability(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="break_room", active_persona="Break Room Host"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "send a memo to sales. please review this lead")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "memo.dispatch.blocked")
+        self.assertIn("Break Room is non-operational", routed["arguments"]["response_text"])
+
+    def test_memo_list_requests_route_to_memos_list(self) -> None:
+        for phrase in ("show recent memos", "list memos", "show mailroom", "memo inbox"):
+            with self.subTest(phrase=phrase):
+                routed = self.pipeline.route_user_request("default", phrase)
+                self.assertEqual(routed["route_kind"], "tool")
+                self.assertEqual(routed["capability"], "memo.list")
+                self.assertEqual(routed["tool"], "office.memos_list")
+                self.assertEqual(routed["arguments"]["limit"], 25)
+
+    def test_memo_get_requests_route_to_memo_get(self) -> None:
+        for phrase in ("read memo memo_123", "open memo abc123", "show memo 2f6e9a"):
+            with self.subTest(phrase=phrase):
+                routed = self.pipeline.route_user_request("default", phrase)
+                self.assertEqual(routed["route_kind"], "tool")
+                self.assertEqual(routed["capability"], "memo.get")
+                self.assertEqual(routed["tool"], "office.memo_get")
+                self.assertTrue(routed["arguments"]["memo_id"])
 
     def test_sales_collaboration_request_routes_to_marketing_memo(self) -> None:
         routed = self.sales_pipeline.route_user_request("default", "ask marketing to turn this research into a campaign plan")
@@ -1492,6 +1522,53 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["arguments"]["to_room"], "art_department")
         self.assertEqual(routed["arguments"]["explicit_persona"], "Creative Director")
         self.assertEqual(routed["arguments"]["body"], "launch visuals")
+
+    def test_expanded_department_collaboration_phrases_route_to_memos(self) -> None:
+        cases = (
+            (
+                self.sales_pipeline,
+                "have marketing review this",
+                "marketing_room",
+                "Marketing Director",
+                "review this",
+            ),
+            (
+                RequestPipeline(
+                    kernel=DummyKernel(active_room="marketing_room", active_persona="Marketing Director"),
+                    navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+                    utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+                    tool_names=[],
+                    app_version="1.3.0",
+                ),
+                "get art department to make visuals",
+                "art_department",
+                "Creative Director",
+                "make visuals",
+            ),
+            (
+                self.sales_pipeline,
+                "send this to finance for pricing",
+                "finance_department",
+                "Finance Director",
+                "pricing",
+            ),
+            (
+                self.sales_pipeline,
+                "coordinate with law office on this",
+                "law_office",
+                "Legal Counsel",
+                "this",
+            ),
+        )
+        for pipeline, phrase, room_id, persona, body in cases:
+            with self.subTest(phrase=phrase):
+                routed = pipeline.route_user_request("default", phrase)
+                self.assertEqual(routed["route_kind"], "tool")
+                self.assertEqual(routed["capability"], "memo.dispatch")
+                self.assertEqual(routed["tool"], "mailroom.dispatch")
+                self.assertEqual(routed["arguments"]["to_room"], room_id)
+                self.assertEqual(routed["arguments"]["explicit_persona"], persona)
+                self.assertEqual(routed["arguments"]["body"], body)
 
     def test_sales_research_demographics_request_routes_to_search_web(self) -> None:
         routed = self.sales_pipeline.route_user_request(

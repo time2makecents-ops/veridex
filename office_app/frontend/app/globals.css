@@ -269,6 +269,12 @@ button {
   color: var(--muted);
 }
 
+.room-option-capability {
+  font-size: 0.76rem;
+  line-height: 1.35;
+  color: rgba(95, 102, 114, 0.92);
+}
+
 .session-delete-button {
   min-width: 40px;
   width: 40px;

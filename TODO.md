@@ -19,17 +19,17 @@ Last updated: 2026-06-28
    - Recent chat context should only be used for clear follow-ups, not broad room/capability questions.
 
 2. Request orchestration cleanup
-   - Move search result synthesis out of `app.py`.
+   - Search/tool execution flow is now extracted from `app.py` into a focused helper module.
    - Keep `/request` focused on request lifecycle and transcript recording.
    - Keep routing decisions in one testable layer.
 
 3. Frontend chat cleanup follow-up
    - Initial `chat/page.tsx` split is complete as of `322c6b2`.
    - Keep future cleanup narrow and behavior-preserving.
-   - Remaining work is optional refinement of workspace/session controller logic, not a blocker for the current checkpoint.
+   - Workspace/session lifecycle logic has now been split into focused hooks; keep any further cleanup narrow and behavior-preserving.
 
 4. Runtime/Git hygiene
-   - Remove generated runtime state from tracked source control in a careful patch. (In progress: `office_app/runtime/` removed from Git index without deleting local data.)
+   - Remove generated runtime state from tracked source control in a careful patch. (`office_app/runtime/` is already out of the Git index, and `office_app/backend/incident_log.csv` is now ignored and removed from the index without deleting the local file.)
    - Do not delete local user data.
    - Keep `.env.local`, local certs, storage, logs, and runtime databases ignored.
 
@@ -56,6 +56,7 @@ Last updated: 2026-06-28
    - Keep the pass count-only unless deeper private-data testing is explicitly approved.
 
 4. Add targeted frontend tests around extracted chat pieces
+   - Minimal `vitest` coverage now exists for extracted pure chat helpers.
    - Cover `visibleMessagesForScope`, transcript rendering, confirmation buttons, and file panel empty states.
    - Keep tests close to the extracted helper/component boundaries.
    - Avoid broad browser automation until the chat behavior is stable.
@@ -79,7 +80,12 @@ Last updated: 2026-06-28
 8. Extend department workflow coverage
    - Conference Room now supports agenda artifact creation plus create/update/cancel calendar preparation from explicit requests.
    - The in-app helper for collaboration shortcuts and room examples is in place on the chat status surface.
+   - The room directory and room status surface now show short capability summaries so room selection is easier to scan.
    - Sales and Marketing now route explicit research requests for demographics, trends, audiences, and competitors to governed web search without requiring the phrase `search the web`.
+   - Memo hardening now routes `show recent memos`, `memo inbox`, and `read memo <memo_id>` to the memo tools.
+   - Memo list output now includes compact reply status, reply persona/room, and refusal metadata.
+   - Collaboration routing now covers common phrasing for Marketing, Art Department, Finance, and Law Office while keeping Break Room non-operational.
+   - Memo replies are sanitized so model text cannot claim external side effects such as sent email or scheduled calendar events.
    - Optional next meeting workflow: tighter meeting-state persistence if the current chat-first flow proves insufficient.
    - Keep routing additions narrow and covered by backend tests.
 

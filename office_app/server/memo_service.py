@@ -104,6 +104,11 @@ class MemoService:
                     "to_room": obj.get("to_room"),
                     "to_persona": obj.get("to_persona"),
                     "subject": obj.get("subject"),
+                    "reply_status": "replied" if str(obj.get("reply_text") or "").strip() else "pending",
+                    "reply_persona": obj.get("reply_persona"),
+                    "reply_room": obj.get("reply_room"),
+                    "replied_utc": obj.get("replied_utc"),
+                    "is_refusal": bool(obj.get("reply_is_refusal")),
                 }
             )
         return rows

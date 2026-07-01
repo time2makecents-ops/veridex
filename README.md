@@ -136,10 +136,12 @@ Art Department image workflow:
 
 Department collaboration workflow:
 
-1. Sales, Marketing, Art Department, Conference Room, and My Office can route explicit collaboration requests through the memo system.
-2. Requests like `ask marketing to turn this research into a campaign plan` or `loop in art department for launch visuals` dispatch directly to the destination room instead of falling back to generic chat.
-3. In `sales_department` and `marketing_room`, explicit research requests like `research demographics for family restaurants in Seattle` or `find social media trends for coffee shops` now prepare `office.search_web` directly.
-4. This keeps cross-department work inside governed room boundaries without forcing the user to write literal mailroom commands.
+1. Sales, Marketing, Art Department, Conference Room, Finance, Law Office, and My Office can route explicit collaboration requests through the memo system.
+2. Requests like `ask marketing to turn this research into a campaign plan`, `loop in art department for launch visuals`, `send this to finance for pricing`, or `coordinate with law office on this` dispatch directly to the destination room instead of falling back to generic chat.
+3. `show recent memos`, `memo inbox`, and `read memo <memo_id>` route to the memo list/read tools so the mailroom is usable from chat.
+4. In `sales_department` and `marketing_room`, explicit research requests like `research demographics for family restaurants in Seattle` or `find social media trends for coffee shops` now prepare `office.search_web` directly.
+5. This keeps cross-department work inside governed room boundaries without forcing the user to write literal mailroom commands.
+6. The room directory and room status surface both show a short capability summary for each room so the user can see what a room is for before switching into it.
 
 Conference Room meeting workflow:
 
@@ -211,11 +213,10 @@ python -m unittest discover -s office_app/server -p "test_*.py"
 Last documented stabilization checkpoint:
 
 - Branch: `fix/stabilization-setup`
-- Commit: `322c6b2 Refactor chat page cleanup`
-- Status: pushed to `origin/fix/stabilization-setup`
+- Base commit: `322c6b2 Refactor chat page cleanup`
+- Status: memo hardening, chat cleanup, and runtime hygiene changes are local/uncommitted unless explicitly committed later
 - Fresh checks at closeout:
   - `git diff --check`
+  - `python -m unittest discover -s office_app/server -p "test_*.py"`
   - `npm.cmd run build`
   - `office_app/smoke_test.ps1`
-
-Backend unit tests were not run for the chat cleanup checkpoint because no backend contracts changed.

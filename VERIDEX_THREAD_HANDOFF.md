@@ -15,17 +15,17 @@ Use this when resuming on another computer.
 
 ## Current repository checkpoint
 
-- Branch `fix/stabilization-setup` is clean and aligned with `origin/fix/stabilization-setup`.
-- Commit `322c6b2` contains the frontend chat cleanup split.
-- No uncommitted work was left at closeout.
-- The goal was marked complete after final audit.
+- Branch `fix/stabilization-setup` is based on pushed commit `322c6b2`.
+- Current workspace contains local/uncommitted cleanup and memo-hardening changes unless they are committed later.
+- `office_app/backend/incident_log.csv` is intentionally removed from the Git index and ignored, but the local runtime file should remain on disk.
 
-Fresh closeout validation:
+Fresh validation for the local checkpoint:
 
 - `git diff --check` passed
+- `python -m unittest discover -s office_app/server -p "test_*.py"` passed
+- `npm.cmd test` passed from `C:\Office-App\office_app\frontend`
 - `npm.cmd run build` passed from `C:\Office-App\office_app\frontend`
 - `C:\Office-App\office_app\smoke_test.ps1` passed
-- Backend unit tests were not run for this checkpoint because no backend contracts changed
 
 ## Start
 
@@ -72,9 +72,12 @@ Art Department image generation:
 Department workflow routing:
 
 - `office.room_capabilities` now returns room-specific operating notes, preferred plugins, collaborators, and approval boundaries instead of only a tool count.
-- Sales, Marketing, Art Department, Conference Room, and My Office can route explicit collaboration requests through `mailroom.dispatch`.
-- Examples now covered by routing tests include `ask marketing to turn this research into a campaign plan` and `loop in art department for launch visuals`.
+- Sales, Marketing, Art Department, Conference Room, Finance, Law Office, and My Office can route explicit collaboration requests through `mailroom.dispatch`.
+- Examples now covered by routing tests include `ask marketing to turn this research into a campaign plan`, `loop in art department for launch visuals`, `send this to finance for pricing`, and `coordinate with law office on this`.
+- Natural-language memo access now routes `show recent memos`, `memo inbox`, and `read memo <memo_id>` to `office.memos_list` / `office.memo_get`.
+- Memo list rows now include additive reply status metadata, and memo replies are sanitized so they cannot claim external side effects through the internal memo path.
 - Sales and Marketing now also route explicit research requests like `research demographics for family restaurants in Seattle` and `find social media trends for coffee shops` to `office.search_web` without requiring the literal phrase `search the web`.
+- The room directory and room status surface now mirror the room capability work with short per-room capability summaries in the UI.
 
 Conference Room meeting flow:
 
@@ -92,7 +95,10 @@ Conference Room meeting flow:
 Next optional cleanup:
 
 - Continue only if more refinement is worth the token/time cost.
-- Best next target is a small workspace/session controller extraction from `page.tsx`.
+- Workspace/session lifecycle logic has been split into focused hooks.
+- `/request` tool-route execution is now split into `request_tool_execution.py`, so search/tool orchestration no longer lives inline in `app.py`.
+- Minimal frontend helper coverage now runs through `npm.cmd test` with `vitest`.
+- `office_app/backend/incident_log.csv` is now intended to stay local runtime state and is removed from the Git index without deleting the local file.
 - Avoid broad refactors unless a failing behavior or specific feature requires them.
 
 ## Last verified behavior

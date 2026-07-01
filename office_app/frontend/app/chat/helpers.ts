@@ -23,11 +23,24 @@ export function roomTransitionText(roomId: string, persona: string): string {
 
 export function roomStatusText(roomId: string, persona: string, profile?: RoomCapabilityProfile): string {
   const base = roomTransitionText(roomId, persona);
+  const capabilities = Array.isArray(profile?.primary_capabilities)
+    ? profile.primary_capabilities
+        .map((item) => String(item).trim())
+        .filter(Boolean)
+        .slice(0, 3)
+    : [];
   const example = Array.isArray(profile?.example_requests) ? String(profile?.example_requests?.[0] || "").trim() : "";
-  if (!example) {
+  if (!capabilities.length && !example) {
     return base;
   }
-  return `${base}\nTry: ${example}`;
+  const lines = [base];
+  if (capabilities.length) {
+    lines.push(`Capabilities: ${capabilities.join(", ")}.`);
+  }
+  if (example) {
+    lines.push(`Try: ${example}`);
+  }
+  return lines.join("\n");
 }
 
 export function lobbyOrientationText(persona: string): string {

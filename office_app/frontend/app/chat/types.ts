@@ -22,6 +22,7 @@ export type ProviderBadge = {
 
 export type RoomCapabilityProfile = {
   room_id?: string;
+  primary_capabilities?: string[];
   operating_notes?: string[];
   example_requests?: string[];
   plugin_affinities?: string[];

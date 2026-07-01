@@ -43,6 +43,7 @@ desktop.ini
 *.log
 logs/
 .veridex-*.pid
+office_app/backend/incident_log.csv
 
 # =========================
 # Runtime data (Veridex workspace state)

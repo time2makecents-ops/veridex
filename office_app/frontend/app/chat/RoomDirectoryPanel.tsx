@@ -21,6 +21,7 @@ export function RoomDirectoryPanel({ activeRoom, onRoomSelect }: RoomDirectoryPa
               >
                 <span>{room.title}</span>
                 <span className="room-option-persona">{room.persona}</span>
+                <span className="room-option-capability">{room.capability}</span>
               </button>
             ))}
           </div>
