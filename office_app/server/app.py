@@ -1954,7 +1954,11 @@ def refresh_handler_bindings() -> None:
     global handle_meeting_state_record_decision
     global handle_meeting_state_add_action_item
     global handle_meeting_state_add_parking_lot
+    global handle_meeting_state_update_title
+    global handle_meeting_state_update_item
+    global handle_meeting_state_delete_item
     global handle_meeting_state_show
+    global handle_meeting_brief_save
 
     handler_deps = HandlerDeps(
         kernel=kernel,
@@ -2062,7 +2066,11 @@ def refresh_handler_bindings() -> None:
     handle_meeting_state_record_decision = meeting_handlers["office.meeting_state_record_decision"]
     handle_meeting_state_add_action_item = meeting_handlers["office.meeting_state_add_action_item"]
     handle_meeting_state_add_parking_lot = meeting_handlers["office.meeting_state_add_parking_lot"]
+    handle_meeting_state_update_title = meeting_handlers["office.meeting_state_update_title"]
+    handle_meeting_state_update_item = meeting_handlers["office.meeting_state_update_item"]
+    handle_meeting_state_delete_item = meeting_handlers["office.meeting_state_delete_item"]
     handle_meeting_state_show = meeting_handlers["office.meeting_state_show"]
+    handle_meeting_brief_save = meeting_handlers["office.meeting_brief_save"]
 
     register_tools(
         router,
@@ -2107,7 +2115,11 @@ def refresh_handler_bindings() -> None:
             "office.meeting_state_record_decision": handle_meeting_state_record_decision,
             "office.meeting_state_add_action_item": handle_meeting_state_add_action_item,
             "office.meeting_state_add_parking_lot": handle_meeting_state_add_parking_lot,
+            "office.meeting_state_update_title": handle_meeting_state_update_title,
+            "office.meeting_state_update_item": handle_meeting_state_update_item,
+            "office.meeting_state_delete_item": handle_meeting_state_delete_item,
             "office.meeting_state_show": handle_meeting_state_show,
+            "office.meeting_brief_save": handle_meeting_brief_save,
             "mailroom.dispatch": handle_mailroom_dispatch,
             "office.artifact_create": handle_artifact_create,
             "office.artifact_get": handle_artifact_get,
@@ -2186,7 +2198,11 @@ register_tools(
         "office.meeting_state_record_decision": handle_meeting_state_record_decision,
         "office.meeting_state_add_action_item": handle_meeting_state_add_action_item,
         "office.meeting_state_add_parking_lot": handle_meeting_state_add_parking_lot,
+        "office.meeting_state_update_title": handle_meeting_state_update_title,
+        "office.meeting_state_update_item": handle_meeting_state_update_item,
+        "office.meeting_state_delete_item": handle_meeting_state_delete_item,
         "office.meeting_state_show": handle_meeting_state_show,
+        "office.meeting_brief_save": handle_meeting_brief_save,
         "mailroom.dispatch": handle_mailroom_dispatch,
         "office.artifact_create": handle_artifact_create,
         "office.artifact_get": handle_artifact_get,

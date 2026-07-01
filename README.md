@@ -151,7 +151,8 @@ Conference Room meeting workflow:
 4. Explicit reschedule requests such as `reschedule meeting evt_12345 to 2026-07-03 from 3pm to 4pm` can prepare `office.calendar_update` confirmations.
 5. Explicit cancel requests such as `cancel meeting evt_12345` can prepare `office.calendar_cancel` confirmations.
 6. Internal meeting state requests such as `start meeting vendor kickoff`, `add agenda item review launch budget`, `record decision use option b`, `add action item Sam will send notes`, `add parking lot item pricing follow-up`, and `show meeting state` persist deterministic meeting notes without creating Google Calendar events.
-7. Calendar actions still require the normal confirmation flow before anything is written to Google Calendar.
+7. The chat toolbar shows a Meeting panel in Conference Room for persisted title/item edits, item deletion, deterministic meeting brief artifact creation, and optional AI-polished brief artifact creation.
+8. Calendar actions still require the normal confirmation flow before anything is written to Google Calendar.
 
 The current frontend chat surface has been split out of `office_app/frontend/app/chat/page.tsx` into focused components and hooks:
 
@@ -214,11 +215,12 @@ python -m unittest discover -s office_app/server -p "test_*.py"
 Last documented stabilization checkpoint:
 
 - Branch: `fix/stabilization-setup`
-- Base commit: `f1919ed Harden room workflows and memo routing`
-- Status: pushed to `origin/fix/stabilization-setup`; current working tree contains an uncommitted reliability and Conference Room meeting-state slice.
+- Base commit: `0924c58 Add Conference Room meeting state persistence`
+- Status: local branch contains the pushed stabilization work plus the current uncommitted Meeting Workspace editor and brief-composer slice.
 - Current slice:
   - `/call` forwards `X-Session-Id` into tool arguments so tool calls and `/request` share the same session room/workspace context.
   - Conference Room meeting state is wired through `MeetingStateStore` for start, agenda, decision, action item, parking-lot, and show commands.
+  - Conference Room exposes a Meeting panel with persisted title/item editing, delete controls, deterministic meeting brief save, and optional AI-polished brief save as a separate artifact.
   - User-style reliability pass covered room switching, memo list/read, Sales/Marketing research routing, file upload/list/get/download, session/workspace lifecycle, calendar confirmation preparation, and meeting-state persistence with isolated test data.
 - Fresh checks at closeout:
   - `git diff --check`

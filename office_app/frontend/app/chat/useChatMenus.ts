@@ -8,10 +8,11 @@ export function useChatMenus() {
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [saveMenuOpen, setSaveMenuOpen] = useState(false);
   const [loadMenuOpen, setLoadMenuOpen] = useState(false);
+  const [meetingMenuOpen, setMeetingMenuOpen] = useState(false);
   const [attachmentOpen, setAttachmentOpen] = useState(false);
   const [attachmentMode, setAttachmentMode] = useState<AttachmentMode>("download");
 
-  function closeHeaderMenus(except?: "workspace" | "room" | "session" | "save" | "load" | "attachment") {
+  function closeHeaderMenus(except?: "workspace" | "room" | "session" | "save" | "load" | "meeting" | "attachment") {
     if (except !== "workspace") {
       setWorkspaceMenuOpen(false);
     }
@@ -27,6 +28,9 @@ export function useChatMenus() {
     if (except !== "load") {
       setLoadMenuOpen(false);
     }
+    if (except !== "meeting") {
+      setMeetingMenuOpen(false);
+    }
     if (except !== "attachment") {
       setAttachmentOpen(false);
     }
@@ -38,6 +42,7 @@ export function useChatMenus() {
     setSessionMenuOpen(false);
     setSaveMenuOpen(false);
     setLoadMenuOpen(false);
+    setMeetingMenuOpen(false);
     setAttachmentOpen(false);
   }
 
@@ -66,6 +71,11 @@ export function useChatMenus() {
     setLoadMenuOpen((current) => !current);
   }
 
+  function toggleMeetingMenu() {
+    closeHeaderMenus("meeting");
+    setMeetingMenuOpen((current) => !current);
+  }
+
   function toggleAttachmentPanel() {
     closeHeaderMenus("attachment");
     setAttachmentMode("download");
@@ -76,12 +86,14 @@ export function useChatMenus() {
     attachmentMode,
     attachmentOpen,
     loadMenuOpen,
+    meetingMenuOpen,
     roomMenuOpen,
     saveMenuOpen,
     sessionMenuOpen,
     workspaceMenuOpen,
     setAttachmentMode,
     setLoadMenuOpen,
+    setMeetingMenuOpen,
     setRoomMenuOpen,
     setSaveMenuOpen,
     setSessionMenuOpen,
@@ -89,6 +101,7 @@ export function useChatMenus() {
     closeAllMenus,
     toggleAttachmentPanel,
     toggleLoadMenu,
+    toggleMeetingMenu,
     toggleRoomMenu,
     toggleSaveMenu,
     toggleSessionMenu,

@@ -78,7 +78,11 @@ VERIDEX_TOOL_DEFINITIONS = {
     "office.meeting_state_record_decision": tool_definition("office.meeting_state_record_decision", "meeting_state.decision.record", "Record a decision in the active internal meeting state.", requires_workspace=True, allowed_rooms=("conference_room",)),
     "office.meeting_state_add_action_item": tool_definition("office.meeting_state_add_action_item", "meeting_state.action_item.add", "Add an action item to the active internal meeting state.", requires_workspace=True, allowed_rooms=("conference_room",)),
     "office.meeting_state_add_parking_lot": tool_definition("office.meeting_state_add_parking_lot", "meeting_state.parking_lot.add", "Add a parking-lot item to the active internal meeting state.", requires_workspace=True, allowed_rooms=("conference_room",)),
+    "office.meeting_state_update_title": tool_definition("office.meeting_state_update_title", "meeting_state.title.update", "Update the active internal meeting title.", requires_workspace=True, allowed_rooms=("conference_room",)),
+    "office.meeting_state_update_item": tool_definition("office.meeting_state_update_item", "meeting_state.item.update", "Update an item in the active internal meeting state.", requires_workspace=True, allowed_rooms=("conference_room",)),
+    "office.meeting_state_delete_item": tool_definition("office.meeting_state_delete_item", "meeting_state.item.delete", "Delete an item from the active internal meeting state.", requires_workspace=True, allowed_rooms=("conference_room",)),
     "office.meeting_state_show": tool_definition("office.meeting_state_show", "meeting_state.show", "Show the active internal Conference Room meeting state.", requires_workspace=True, allowed_rooms=("conference_room",)),
+    "office.meeting_brief_save": tool_definition("office.meeting_brief_save", "meeting_brief.save", "Save the active Conference Room meeting state as a deterministic or polished artifact.", requires_workspace=True, allowed_rooms=("conference_room",)),
     "mailroom.dispatch": tool_definition(
         "mailroom.dispatch",
         "memo.dispatch",

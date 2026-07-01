@@ -1,13 +1,16 @@
 import { roomById } from "./helpers";
+import { shouldShowMeetingWorkspace } from "./meetingWorkspace";
 
 type ChatToolbarProps = {
   activeRoom: string;
   loadMenuOpen: boolean;
+  meetingMenuOpen: boolean;
   recentRooms: string[];
   roomMenuOpen: boolean;
   saveMenuOpen: boolean;
   sessionMenuOpen: boolean;
   onLoadMenuToggle: () => void;
+  onMeetingMenuToggle: () => void;
   onRoomMenuToggle: () => void;
   onRoomSelect: (roomId: string) => void;
   onSaveMenuToggle: () => void;
@@ -17,11 +20,13 @@ type ChatToolbarProps = {
 export function ChatToolbar({
   activeRoom,
   loadMenuOpen,
+  meetingMenuOpen,
   recentRooms,
   roomMenuOpen,
   saveMenuOpen,
   sessionMenuOpen,
   onLoadMenuToggle,
+  onMeetingMenuToggle,
   onRoomMenuToggle,
   onRoomSelect,
   onSaveMenuToggle,
@@ -56,6 +61,15 @@ export function ChatToolbar({
           </button>
         );
       })}
+      {shouldShowMeetingWorkspace(activeRoom) ? (
+        <button
+          type="button"
+          className={`ghost toolbar-button ${meetingMenuOpen ? "toolbar-button-active" : ""}`}
+          onClick={onMeetingMenuToggle}
+        >
+          Meeting
+        </button>
+      ) : null}
       <button
         type="button"
         className={`ghost toolbar-button ${saveMenuOpen ? "toolbar-button-active" : ""}`}

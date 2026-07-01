@@ -12,6 +12,7 @@ import { ChatTranscript } from "./ChatTranscript";
 import { ChatToolbar } from "./ChatToolbar";
 import { DocumentReader } from "./DocumentReader";
 import { AttachmentPanel, LoadFilePanel, SaveFilePanel } from "./FilePanels";
+import { MeetingWorkspacePanel } from "./MeetingWorkspacePanel";
 import {
   backendDisconnectedMessage,
   createMessage,
@@ -55,6 +56,7 @@ export default function ChatPage() {
     attachmentMode,
     attachmentOpen,
     loadMenuOpen,
+    meetingMenuOpen,
     roomMenuOpen,
     saveMenuOpen,
     sessionMenuOpen,
@@ -67,6 +69,7 @@ export default function ChatPage() {
     setWorkspaceMenuOpen,
     toggleAttachmentPanel,
     toggleLoadMenu,
+    toggleMeetingMenu,
     toggleRoomMenu,
     toggleSaveMenu,
     toggleSessionMenu,
@@ -343,11 +346,13 @@ export default function ChatPage() {
           <ChatToolbar
             activeRoom={activeRoom}
             loadMenuOpen={loadMenuOpen}
+            meetingMenuOpen={meetingMenuOpen}
             recentRooms={recentRooms}
             roomMenuOpen={roomMenuOpen}
             saveMenuOpen={saveMenuOpen}
             sessionMenuOpen={sessionMenuOpen}
             onLoadMenuToggle={toggleLoadMenu}
+            onMeetingMenuToggle={toggleMeetingMenu}
             onRoomMenuToggle={toggleRoomMenu}
             onRoomSelect={(roomId) => void handleRoomSelect(roomId)}
             onSaveMenuToggle={toggleSaveMenu}
@@ -407,6 +412,17 @@ export default function ChatPage() {
               onLoadScopeChange={setLoadScope}
               onOpenReader={(file) => void openReader(file)}
               onPrivateBucketChange={setPrivateBucket}
+            />
+          ) : null}
+          {meetingMenuOpen && activeRoom === "conference_room" ? (
+            <MeetingWorkspacePanel
+              sessionId={sessionId}
+              workspaceId={workspaceId}
+              onArtifactSaved={() => {
+                if (workspaceSelectionId === workspaceId) {
+                  void loadWorkspaceSelection(workspaceId);
+                }
+              }}
             />
           ) : null}
         </div>

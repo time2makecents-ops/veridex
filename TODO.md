@@ -34,14 +34,14 @@ Last updated: 2026-07-01
    - Keep `.env.local`, local certs, storage, logs, and runtime databases ignored.
 
 5. Documentation alignment
-   - `README.md` and `VERIDEX_THREAD_HANDOFF.md` have been updated for the pushed `f1919ed` stabilization checkpoint and the current uncommitted reliability/meeting-state slice.
+   - `README.md` and `VERIDEX_THREAD_HANDOFF.md` have been updated for the pushed stabilization checkpoint and the current Meeting Workspace editor/brief-composer slice.
    - Treat older architecture docs as design intent unless recently updated.
    - Update handoff docs after major stabilization milestones.
 
 ## Suggested Future Steps
 
 1. Open a review PR for `fix/stabilization-setup`
-   - Use the pushed `f1919ed` checkpoint as the review base.
+   - Use the pushed `0924c58` meeting-state checkpoint as the review base.
    - Keep the PR focused on stabilization, frontend chat cleanup, governed room workflows, and memo routing.
    - Include build and smoke-test results in the PR body.
 
@@ -80,6 +80,7 @@ Last updated: 2026-07-01
 8. Extend department workflow coverage
    - Conference Room now supports agenda artifact creation plus create/update/cancel calendar preparation from explicit requests.
    - Conference Room now persists internal meeting state through `MeetingStateStore` for start meeting, agenda items, decisions, action items, parking-lot items, and show meeting state without implying Google Calendar writes.
+   - Conference Room now has an in-app Meeting panel for editing the active meeting title and ordered meeting items, deleting items, saving deterministic meeting brief artifacts, and saving optional AI-polished brief artifacts separately.
    - The in-app helper for collaboration shortcuts and room examples is in place on the chat status surface.
    - The room directory and room status surface now show short capability summaries so room selection is easier to scan.
    - Sales and Marketing now route explicit research requests for demographics, trends, audiences, and competitors to governed web search without requiring the phrase `search the web`.

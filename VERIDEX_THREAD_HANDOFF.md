@@ -2,7 +2,7 @@
 Project: Veridex (formerly Office-App)
 Developer: JR
 Current branch: `fix/stabilization-setup`
-Current base commit: `f1919ed Harden room workflows and memo routing`
+Current base commit: `0924c58 Add Conference Room meeting state persistence`
 Remote: `origin/fix/stabilization-setup`
 Environment: FastAPI backend + Next.js frontend
 Purpose: Preserve system intent, architecture, and implementation state so development can continue in a new thread without design drift.
@@ -15,10 +15,9 @@ Use this when resuming on another computer.
 
 ## Current repository checkpoint
 
-- Branch `fix/stabilization-setup` is pushed and aligned with `origin/fix/stabilization-setup` at `f1919ed`.
-- The current working tree contains an uncommitted reliability and Conference Room meeting-state slice on top of `f1919ed`.
-- The `f1919ed` checkpoint contains chat cleanup, request-tool extraction, runtime Git hygiene, room capability UI, governed room workflows, and memo hardening.
-- Current uncommitted slice wires `/call` session-header propagation and Conference Room internal meeting-state persistence through `MeetingStateStore`.
+- Branch `fix/stabilization-setup` includes the committed Conference Room meeting-state persistence checkpoint at `0924c58`.
+- The current working tree contains an uncommitted Meeting Workspace editor and meeting brief-composer slice on top of `0924c58`.
+- The stabilization checkpoints contain chat cleanup, request-tool extraction, runtime Git hygiene, room capability UI, governed room workflows, memo hardening, `/call` session-header propagation, and Conference Room internal meeting-state persistence through `MeetingStateStore`.
 - `office_app/backend/incident_log.csv` is intentionally removed from the Git index and ignored, but the local runtime file should remain on disk.
 
 Fresh validation for the pushed checkpoint:
@@ -96,6 +95,12 @@ Conference Room meeting flow:
 - Conference Room can now start and persist internal meeting state without creating Google Calendar events.
 - Supported internal meeting-state patterns include `start meeting vendor kickoff`, `add agenda item review launch budget`, `record decision use option b`, `add action item Sam will send notes`, `add parking lot item pricing follow-up`, and `show meeting state`.
 - Meeting state is file-backed per workspace through `MeetingStateStore` and tracks the active meeting per session.
+- The Conference Room chat toolbar now exposes a Meeting panel for full persisted meeting editing:
+  - start/load the active meeting state
+  - edit the meeting title
+  - add, edit, and delete agenda, decision, action-item, and parking-lot text items
+  - save a deterministic `meeting_brief` artifact
+  - optionally save a separate AI-polished `meeting_brief_polished` artifact linked to the deterministic source when available
 
 Reliability checkpoint:
 

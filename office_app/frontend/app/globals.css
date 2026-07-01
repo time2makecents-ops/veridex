@@ -871,6 +871,46 @@ button {
   min-width: 96px;
 }
 
+.meeting-workspace-panel {
+  gap: 16px;
+}
+
+.meeting-inline-edit,
+.meeting-item-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.meeting-item-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.meeting-item-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.meeting-inline-edit input,
+.meeting-item-row input {
+  min-height: 42px;
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.meeting-inline-edit button,
+.meeting-compact-button {
+  min-height: 42px;
+  padding: 10px 12px;
+  border-radius: 12px;
+}
+
+.meeting-compact-button {
+  min-width: 74px;
+}
+
 .hidden-file-input {
   display: none;
 }
