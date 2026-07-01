@@ -34,16 +34,16 @@ Last updated: 2026-07-01
    - Keep `.env.local`, local certs, storage, logs, and runtime databases ignored.
 
 5. Documentation alignment
-   - `README.md` and `VERIDEX_THREAD_HANDOFF.md` have been updated for the pushed stabilization checkpoint and the current Meeting Workspace editor/brief-composer slice.
+   - `README.md` and `VERIDEX_THREAD_HANDOFF.md` have been updated for PR #1 and the committed Meeting Workspace editor/brief-composer slice in `9af81fc`.
    - Treat older architecture docs as design intent unless recently updated.
    - Update handoff docs after major stabilization milestones.
 
 ## Suggested Future Steps
 
-1. Open a review PR for `fix/stabilization-setup`
-   - Use the pushed `0924c58` meeting-state checkpoint as the review base.
-   - Keep the PR focused on stabilization, frontend chat cleanup, governed room workflows, and memo routing.
-   - Include build and smoke-test results in the PR body.
+1. Review draft PR #1 for `fix/stabilization-setup`
+   - Treat PR #1 as a large stabilization baseline against `dev`.
+   - Review the newest Meeting Workspace slice via `0924c58..9af81fc`.
+   - Keep future feature work in smaller PRs after this branch lands.
 
 2. Run a deeper behavior pass before more refactors
    - Exercise session switching, workspace switching, room switching, file upload/download, document reader, and integration confirmation.

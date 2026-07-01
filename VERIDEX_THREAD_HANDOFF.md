@@ -16,9 +16,10 @@ Use this when resuming on another computer.
 ## Current repository checkpoint
 
 - Branch `fix/stabilization-setup` includes the committed Conference Room meeting-state persistence checkpoint at `0924c58`.
-- The current working tree contains an uncommitted Meeting Workspace editor and meeting brief-composer slice on top of `0924c58`.
+- PR #1 contains the committed Meeting Workspace editor and meeting brief-composer slice in `9af81fc` on top of `0924c58`.
 - The stabilization checkpoints contain chat cleanup, request-tool extraction, runtime Git hygiene, room capability UI, governed room workflows, memo hardening, `/call` session-header propagation, and Conference Room internal meeting-state persistence through `MeetingStateStore`.
 - `office_app/backend/incident_log.csv` is intentionally removed from the Git index and ignored, but the local runtime file should remain on disk.
+- PR #1 is intentionally large as a stabilization baseline; GitHub's diff API exceeds the 20,000-line limit, so review by commit/slice.
 
 Fresh validation for the pushed checkpoint:
 

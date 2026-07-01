@@ -216,12 +216,15 @@ Last documented stabilization checkpoint:
 
 - Branch: `fix/stabilization-setup`
 - Base commit: `0924c58 Add Conference Room meeting state persistence`
-- Status: local branch contains the pushed stabilization work plus the current uncommitted Meeting Workspace editor and brief-composer slice.
+- Status: PR #1 contains the pushed stabilization work plus the Meeting Workspace editor and brief-composer slice committed in `9af81fc`.
 - Current slice:
   - `/call` forwards `X-Session-Id` into tool arguments so tool calls and `/request` share the same session room/workspace context.
   - Conference Room meeting state is wired through `MeetingStateStore` for start, agenda, decision, action item, parking-lot, and show commands.
   - Conference Room exposes a Meeting panel with persisted title/item editing, delete controls, deterministic meeting brief save, and optional AI-polished brief save as a separate artifact.
   - User-style reliability pass covered room switching, memo list/read, Sales/Marketing research routing, file upload/list/get/download, session/workspace lifecycle, calendar confirmation preparation, and meeting-state persistence with isolated test data.
+- Review note:
+  - PR #1 is intentionally large as a stabilization baseline. GitHub's diff API exceeds the 20,000-line limit for this PR, so review by commit/slice.
+  - For the newest Meeting Workspace work, review `0924c58..9af81fc`.
 - Fresh checks at closeout:
   - `git diff --check`
   - `python -m unittest discover -s office_app/server -p "test_*.py"`
