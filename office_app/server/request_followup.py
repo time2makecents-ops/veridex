@@ -101,6 +101,16 @@ LOCATION_QUESTION_RE = re.compile(
     r"^(?:what\s+is\s+my\s+location|where\s+am\s+i\s+located|what\s+state\s+do\s+i\s+live\s+in|where\s+do\s+i\s+live)\??$",
     re.IGNORECASE,
 )
+CHOICE_REFERENCE_RE = re.compile(
+    r"\b(?:which\s+one|what\s+one|which\s+level|what\s+level|most\s+(?:powerful|effective)\s+one|strongest\s+one|best\s+one)\b",
+    re.IGNORECASE,
+)
+UNVERIFIED_CONTEXT_RE = re.compile(
+    r"\b(?:do\s+not|don't|doesn't|does\s+not|cannot|can't)\s+have\s+(?:any\s+)?verified\s+information\b|"
+    r"\bno\s+verified\s+(?:information|source|evidence)\b|"
+    r"\bsearch\s+(?:the\s+web|the\s+internet|your\s+other\s+sessions)\b",
+    re.IGNORECASE,
+)
 
 MEMORY_REFERENCE_RE = re.compile(
     r"(?:do\s+you|can\s+you|did\s+you|could\s+you)\s+remember\b|"
@@ -177,6 +187,58 @@ class RequestFollowupRouter:
             or "show transcript" in lowered
             or "show trascript" in lowered
         )
+
+    @staticmethod
+    def _recent_assistant_text(recent_turns: List[Dict[str, Any]]) -> str:
+        for turn in reversed(recent_turns[-12:]):
+            if str(turn.get("role") or "").strip().lower() != "assistant":
+                continue
+            text = str(turn.get("text") or "").strip()
+            if text:
+                return text
+        return ""
+
+    @staticmethod
+    def _recent_assistant_has_choice_anchor(assistant_text: str) -> bool:
+        if len(re.findall(r"(?m)^\s*\d+\.\s+", assistant_text)) >= 2:
+            return True
+        return bool(
+            re.search(
+                r"\b(?:include|includes|including|options are|choices are|ways are|through a combination of|are by)\b",
+                assistant_text,
+                re.IGNORECASE,
+            )
+            and ("," in assistant_text or re.search(r"\band\b", assistant_text, re.IGNORECASE))
+        )
+
+    @classmethod
+    def _recent_thread_has_choice_anchor(cls, recent_turns: List[Dict[str, Any]]) -> bool:
+        for turn in reversed(recent_turns[-12:]):
+            if str(turn.get("role") or "").strip().lower() != "assistant":
+                continue
+            text = str(turn.get("text") or "").strip()
+            if text and cls._recent_assistant_has_choice_anchor(text):
+                return True
+        return False
+
+    @classmethod
+    def _conversation_plan_has_safe_anchor(
+        cls,
+        *,
+        request_text: str,
+        recent_turns: List[Dict[str, Any]],
+        answer_type: str,
+    ) -> bool:
+        if answer_type not in {"continuation", "reasoning_followup", "comparative_followup", "contextual_followup"}:
+            return True
+        assistant_text = cls._recent_assistant_text(recent_turns)
+        if not assistant_text:
+            return False
+        if UNVERIFIED_CONTEXT_RE.search(assistant_text):
+            return False
+        if CHOICE_REFERENCE_RE.search(request_text):
+            return cls._recent_thread_has_choice_anchor(recent_turns)
+        return True
 
     @classmethod
     def _build_thread_context(cls, recent_turns: List[Dict[str, Any]]) -> ThreadContext:
@@ -724,6 +786,12 @@ class RequestFollowupRouter:
 
         plan = self.conversation_planner.rewrite_followup(request_text, recent_turns)
         if plan is None:
+            return None
+        if not self._conversation_plan_has_safe_anchor(
+            request_text=request_text,
+            recent_turns=recent_turns,
+            answer_type=plan.answer_type,
+        ):
             return None
         return self.model_route(
             workspace_id,

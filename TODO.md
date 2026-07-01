@@ -17,6 +17,7 @@ Last updated: 2026-07-01
    - Explicit commands should still route deterministically.
    - Ambiguous requests should ask a clarifying question.
    - Recent chat context should only be used for clear follow-ups, not broad room/capability questions.
+   - Active slice: ambiguous short choice follow-ups now fail closed after unverified/no-info entity answers while anchored option-list follow-ups still rewrite safely.
 
 2. Request orchestration cleanup
    - Search/tool execution flow is now extracted from `app.py` into a focused helper module.
@@ -34,16 +35,17 @@ Last updated: 2026-07-01
    - Keep `.env.local`, local certs, storage, logs, and runtime databases ignored.
 
 5. Documentation alignment
-   - `README.md` and `VERIDEX_THREAD_HANDOFF.md` have been updated for PR #1 and the committed Meeting Workspace editor/brief-composer slice in `9af81fc`.
+   - `README.md` and `VERIDEX_THREAD_HANDOFF.md` now track the merged PR #1 baseline, the active routing follow-up reliability branch, and the onboarding camera fallback.
    - Treat older architecture docs as design intent unless recently updated.
    - Update handoff docs after major stabilization milestones.
 
 ## Suggested Future Steps
 
-1. Review draft PR #1 for `fix/stabilization-setup`
-   - Treat PR #1 as a large stabilization baseline against `dev`.
-   - Review the newest Meeting Workspace slice via `0924c58..9af81fc`.
-   - Keep future feature work in smaller PRs after this branch lands.
+1. Finish and review the routing follow-up reliability slice
+   - Keep the branch small and backend-focused.
+   - Confirm ambiguous short follow-ups fail closed without breaking anchored list, grounded search, session-search, or explicit search-confirmation follow-ups.
+   - Confirm onboarding remains usable without camera permission or camera capture.
+   - Open the next PR as a focused stabilization review instead of another large baseline.
 
 2. Run a deeper behavior pass before more refactors
    - Exercise session switching, workspace switching, room switching, file upload/download, document reader, and integration confirmation.

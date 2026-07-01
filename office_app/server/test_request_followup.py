@@ -293,6 +293,34 @@ class RequestFollowupRouterTests(unittest.TestCase):
             "Answer with one level first, then a brief reason.",
         )
 
+    def test_ambiguous_choice_followup_after_unverified_entity_fails_closed(self) -> None:
+        self.grounded_context = None
+        routed = self.router.route_contextual_followup(
+            "ws1",
+            "which one?",
+            [
+                {"role": "user", "text": "tell me about blairally"},
+                {"role": "assistant", "text": "I do not have verified information about blairally."},
+            ],
+        )
+        self.assertIsNone(routed)
+
+    def test_choice_followup_after_numbered_list_still_routes_to_model(self) -> None:
+        self.grounded_context = None
+        routed = self.router.route_contextual_followup(
+            "ws1",
+            "which one?",
+            [
+                {"role": "user", "text": "what are ways to market a restaurant?"},
+                {"role": "assistant", "text": "1. Social media.\n2. Loyalty programs.\n3. Local partnerships."},
+            ],
+        )
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertIn("choose the single strongest option", routed["arguments"]["user_prompt"])
+        self.assertIn("Social media", routed["arguments"]["user_prompt"])
+
     def test_yes_after_offer_routes_to_web_search_for_recent_entity(self) -> None:
         routed = self.router.route_contextual_followup(
             "ws1",

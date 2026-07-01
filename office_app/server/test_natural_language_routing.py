@@ -1054,6 +1054,24 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         )
         self.assertIsNone(routed)
 
+    def test_ambiguous_choice_followup_with_unverified_entity_stays_normal_chat(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                transcript_rows=[
+                    {"role": "user", "text": "tell me about blairally"},
+                    {"role": "assistant", "text": "I do not have verified information about blairally."},
+                ]
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "which one?", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "model")
+        self.assertEqual(routed["reason"], "Conversation-first intent matched before broad tool routing.")
+        self.assertNotIn("blairally", routed["arguments"]["user_prompt"].lower())
+
     def test_bar_repeat_customer_advice_prompt_is_rewritten(self) -> None:
         routed = self.pipeline.route_user_request("default", "what are the main ways bars increase repeat customers?")
         self.assertEqual(routed["route_kind"], "model")

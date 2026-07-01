@@ -1,9 +1,9 @@
 # VERIDEX THREAD HANDOFF
 Project: Veridex (formerly Office-App)
 Developer: JR
-Current branch: `fix/stabilization-setup`
-Current base commit: `0924c58 Add Conference Room meeting state persistence`
-Remote: `origin/fix/stabilization-setup`
+Current branch: `feat/routing-followup-reliability`
+Current base commit: `f6bd164 Merge pull request #1 from time2makecents-ops/fix/stabilization-setup`
+Remote: not pushed
 Environment: FastAPI backend + Next.js frontend
 Purpose: Preserve system intent, architecture, and implementation state so development can continue in a new thread without design drift.
 
@@ -15,18 +15,19 @@ Use this when resuming on another computer.
 
 ## Current repository checkpoint
 
-- Branch `fix/stabilization-setup` includes the committed Conference Room meeting-state persistence checkpoint at `0924c58`.
-- PR #1 contains the committed Meeting Workspace editor and meeting brief-composer slice in `9af81fc` on top of `0924c58`.
-- The stabilization checkpoints contain chat cleanup, request-tool extraction, runtime Git hygiene, room capability UI, governed room workflows, memo hardening, `/call` session-header propagation, and Conference Room internal meeting-state persistence through `MeetingStateStore`.
+- PR #1 has been merged into `dev` at `f6bd164`.
+- Branch `feat/routing-followup-reliability` starts from the merged PR #1 baseline.
+- The merged stabilization baseline contains chat cleanup, request-tool extraction, runtime Git hygiene, room capability UI, governed room workflows, memo hardening, `/call` session-header propagation, and Conference Room internal meeting-state persistence through `MeetingStateStore`.
+- The active slice keeps `/request` follow-up routing fail-closed for ambiguous short choice follow-ups after unverified/no-info entity answers, while preserving anchored list, grounded search, session-search, and explicit search-confirmation follow-ups.
+- The onboarding page now lets users continue to PIN setup without a face photo when camera permission, preview, or capture fails. Backend and frontend proxy onboarding were verified with missing `face_photo_data`.
 - `office_app/backend/incident_log.csv` is intentionally removed from the Git index and ignored, but the local runtime file should remain on disk.
-- PR #1 is intentionally large as a stabilization baseline; GitHub's diff API exceeds the 20,000-line limit, so review by commit/slice.
 
-Fresh validation for the pushed checkpoint:
+Fresh validation for the active routing follow-up slice:
 
 - `git diff --check` passed
-- `python -m unittest discover -s office_app/server -p "test_*.py"` passed
-- `npm.cmd test` passed from `C:\Office-App\office_app\frontend`
-- `npm.cmd run build` passed from `C:\Office-App\office_app\frontend`
+- `python -m unittest discover -s office_app/server -p "test_*.py"` passed with 371 tests
+- `npm.cmd test` passed with 19 frontend tests
+- `npm.cmd run build` passed
 - `C:\Office-App\office_app\smoke_test.ps1` passed
 
 ## Start

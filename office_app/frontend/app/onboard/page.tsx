@@ -4,8 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { onboard } from "@/lib/api";
 import { setStoredSessionId } from "@/lib/session";
-
-type Stage = "intro" | "camera" | "pin";
+import { cameraFailureNotice, nextStageAfterCameraFailure, type OnboardingStage } from "./onboardingCamera";
 
 export default function OnboardPage() {
   const router = useRouter();
@@ -15,7 +14,7 @@ export default function OnboardPage() {
   const [fullName, setFullName] = useState("");
   const [userName, setUserName] = useState("");
   const [pinCode, setPinCode] = useState("");
-  const [stage, setStage] = useState<Stage>("intro");
+  const [stage, setStage] = useState<OnboardingStage>("intro");
   const [countdown, setCountdown] = useState<number | null>(null);
   const [facePhotoData, setFacePhotoData] = useState("");
   const [error, setError] = useState("");
@@ -144,8 +143,9 @@ export default function OnboardPage() {
       setStage("pin");
       setCountdown(null);
     } catch (err) {
-      setCameraError(err instanceof Error ? err.message : "Camera permission is required.");
-      setStage("intro");
+      setCameraError(cameraFailureNotice(err));
+      setFacePhotoData("");
+      setStage(nextStageAfterCameraFailure());
       setCountdown(null);
       stopCamera();
     }

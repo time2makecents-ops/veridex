@@ -212,22 +212,19 @@ python -m unittest discover -s office_app/server -p "test_*.py"
 
 # Current Checkpoint
 
-Last documented stabilization checkpoint:
+Current development checkpoint:
 
-- Branch: `fix/stabilization-setup`
-- Base commit: `0924c58 Add Conference Room meeting state persistence`
-- Status: PR #1 contains the pushed stabilization work plus the Meeting Workspace editor and brief-composer slice committed in `9af81fc`.
+- Branch: `feat/routing-followup-reliability`
+- Base commit: `f6bd164 Merge pull request #1 from time2makecents-ops/fix/stabilization-setup`
+- Status: PR #1 has been merged into `dev`; new stabilization work should continue in smaller focused branches.
 - Current slice:
-  - `/call` forwards `X-Session-Id` into tool arguments so tool calls and `/request` share the same session room/workspace context.
-  - Conference Room meeting state is wired through `MeetingStateStore` for start, agenda, decision, action item, parking-lot, and show commands.
-  - Conference Room exposes a Meeting panel with persisted title/item editing, delete controls, deterministic meeting brief save, and optional AI-polished brief save as a separate artifact.
-  - User-style reliability pass covered room switching, memo list/read, Sales/Marketing research routing, file upload/list/get/download, session/workspace lifecycle, calendar confirmation preparation, and meeting-state persistence with isolated test data.
-- Review note:
-  - PR #1 is intentionally large as a stabilization baseline. GitHub's diff API exceeds the 20,000-line limit for this PR, so review by commit/slice.
-  - For the newest Meeting Workspace work, review `0924c58..9af81fc`.
-- Fresh checks at closeout:
-  - `git diff --check`
-  - `python -m unittest discover -s office_app/server -p "test_*.py"`
-  - `npm.cmd test`
-  - `npm.cmd run build`
-  - `office_app/smoke_test.ps1`
+  - `/request` follow-up routing now fails closed when a short choice follow-up such as `which one?` follows an unverified/no-info entity response.
+  - Anchored choice follow-ups after real numbered or plain-sentence option lists still rewrite to model prompts.
+  - The change is limited to the final conversation-planner fallback in `RequestFollowupRouter`; deterministic commands, grounded search follow-ups, session-search follow-ups, and explicit search confirmations remain routed before that fallback.
+  - Onboarding now lets users continue to PIN setup without a face photo when camera permission, preview, or capture fails; backend onboarding already accepts a missing `face_photo_data`.
+- Fresh checks for this slice:
+  - `git diff --check` passed
+  - `python -m unittest discover -s office_app/server -p "test_*.py"` passed with 371 tests
+  - `npm.cmd test` passed with 19 frontend tests
+  - `npm.cmd run build` passed
+  - `office_app/smoke_test.ps1` passed
