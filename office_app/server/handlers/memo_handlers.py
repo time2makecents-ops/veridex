@@ -210,6 +210,7 @@ def build_memo_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="One memo may target only one room. Send separate memos.")
 
         body = str(args["body"]).strip()
+        subject = str(args.get("subject") or "").strip() or None
         explicit_persona = str(args.get("explicit_persona", "")).strip() or None
 
         # Mailroom memos are text-only. Do not let a model reply imply that Nancy sent email.
@@ -234,6 +235,7 @@ def build_memo_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             from_room=from_room_external,
             to_room=to_room_raw,
             body=body,
+            subject=subject,
             explicit_persona=explicit_persona,
             policy_check_fn=deps.pipeline.assert_mailroom_allowed,
         )

@@ -1525,6 +1525,110 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["arguments"]["explicit_persona"], "Marketing Director")
         self.assertEqual(routed["arguments"]["body"], "turn this research into a campaign plan")
 
+    def test_cross_room_host_question_requires_memo_body_without_switching_rooms(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="hr_department", active_persona="HR Manager"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request(
+            "default",
+            "is there a way you could ask the host in the marketing department?",
+        )
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "memo.dispatch.body_required")
+        self.assertEqual(routed["tool"], "office.capability_info")
+        self.assertEqual(routed["arguments"]["to_room"], "marketing_room")
+        self.assertEqual(routed["arguments"]["active_room"], "hr_department")
+        self.assertIn("does not switch rooms", routed["arguments"]["response_text"])
+
+    def test_identity_followup_after_model_claim_uses_authoritative_room_state(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="hr_department",
+                active_persona="HR Manager",
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "text": "I've switched to the Marketing Department. I am now the Marketing Director.",
+                    }
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "ok your title still says HR manager. who are you now?", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "room.persona_role")
+        self.assertEqual(routed["arguments"]["active_room"], "hr_department")
+        self.assertEqual(routed["arguments"]["active_persona"], "HR Manager")
+        self.assertIn("HR Manager", routed["arguments"]["response_text"])
+        self.assertNotIn("Marketing Director", routed["arguments"]["response_text"])
+
+    def test_department_status_after_model_claim_uses_authoritative_room_state(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="hr_department",
+                active_persona="HR Manager",
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "text": "I am now in the Marketing Department.",
+                    }
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "what department am I in?", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "workspace.state.get")
+        self.assertEqual(routed["tool"], "office.state_get")
+
+    def test_ack_after_model_switch_claim_does_not_continue_fake_navigation(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="hr_department",
+                active_persona="HR Manager",
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "text": "Okay, I will switch to the Marketing Department now.",
+                    }
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "ok", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "room.authority")
+        self.assertEqual(routed["arguments"]["active_room"], "hr_department")
+        self.assertEqual(routed["arguments"]["active_persona"], "HR Manager")
+        self.assertIn("still in HR Department", routed["arguments"]["response_text"])
+
+    def test_model_route_forbids_unbacked_room_or_persona_switch_claims(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="hr_department", active_persona="HR Manager"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "can you help me think through the policy?")
+        self.assertEqual(routed["route_kind"], "model")
+        system_prompt = routed["arguments"]["system_prompt"]
+        self.assertIn("Never claim you switched rooms", system_prompt)
+        self.assertIn("Only a navigation route", system_prompt)
+
     def test_marketing_collaboration_request_routes_to_art_department_memo(self) -> None:
         pipeline = RequestPipeline(
             kernel=DummyKernel(active_room="marketing_room", active_persona="Marketing Director"),
@@ -1859,6 +1963,578 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertIn("Here in IT Department", routed["arguments"]["response_text"])
         self.assertIn("Technical support", routed["arguments"]["response_text"])
         self.assertIn("memo system", routed["arguments"]["response_text"])
+
+    def test_my_office_email_capability_uses_nancy_guidance(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="my_office", active_persona="Nancy"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "can you send emails for me?")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "nancy.capability.info")
+        text = routed["arguments"]["response_text"]
+        self.assertIn("Nancy can draft email", text)
+        self.assertIn("Gmail", text)
+        self.assertIn("Profile", text)
+        self.assertIn("Calendar", text)
+
+    def test_my_office_overview_uses_nancy_guidance(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="my_office", active_persona="Nancy"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "what can you do for me?")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "nancy.capability.info")
+        self.assertIn("Nancy can draft email", routed["arguments"]["response_text"])
+        self.assertIn("memo system", routed["arguments"]["response_text"])
+
+    def test_nancy_prefixed_capability_uses_nancy_guidance_from_other_room(self) -> None:
+        routed = self.sales_pipeline.route_user_request("default", "Nancy, what can you do for me?")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "nancy.capability.info")
+        self.assertIn("Nancy can draft email", routed["arguments"]["response_text"])
+
+    def test_nancy_prefixed_calendar_create_routes_to_calendar_tool(self) -> None:
+        routed = self.sales_pipeline.route_user_request(
+            "default",
+            "Nancy, schedule meeting quarterly planning on 2026-07-03 from 2pm to 3pm with sam@example.com",
+        )
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "integration.calendar.create")
+        self.assertEqual(routed["tool"], "office.calendar_create")
+        self.assertEqual(routed["arguments"]["event"]["summary"], "quarterly planning")
+        self.assertEqual(routed["arguments"]["event"]["attendees"], [{"email": "sam@example.com"}])
+
+    def test_nancy_email_review_confirmation_routes_to_gmail_send_not_model(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "text": (
+                            "Nancy: I've prepared the email to time2makecents@gmail.com with the subject line "
+                            "\"testing\" and the body \"This is a test email.\" Here's the email for your review:\n\n"
+                            "Subject: testing\nBody: This is a test email.\n\nIs this correct?"
+                        ),
+                    }
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "send", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "integration.gmail.send")
+        self.assertEqual(routed["tool"], "office.gmail_send")
+        self.assertEqual(routed["arguments"]["to"], ["time2makecents@gmail.com"])
+        self.assertEqual(routed["arguments"]["subject"], "testing")
+        self.assertEqual(routed["arguments"]["body"], "This is a test email.")
+
+    def test_nancy_recipient_only_email_request_asks_for_subject(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="my_office", active_persona="Nancy"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "send an email to time2makecents@gmail.com.", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "nancy.email.subject_required")
+        self.assertEqual(routed["arguments"]["to"], "time2makecents@gmail.com")
+        self.assertIn("what subject should i use", routed["arguments"]["response_text"].lower())
+
+    def test_nancy_message_to_recipient_asks_for_subject_without_reusing_stale_body(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "text": "Subject: old subject\nBody: stale body",
+                    }
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "send message to youlookifind@gmail.com", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "nancy.email.subject_required")
+        self.assertEqual(routed["arguments"]["to"], "youlookifind@gmail.com")
+        self.assertNotEqual(routed["tool"], "office.gmail_send")
+
+    def test_nancy_subject_followup_asks_for_body(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                transcript_rows=[
+                    {"role": "user", "text": "send an email to time2makecents@gmail.com."},
+                    {"role": "assistant", "text": "What subject should I use for the email to time2makecents@gmail.com?"},
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "subject this is a test", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "nancy.email.body_required")
+        self.assertEqual(routed["arguments"]["to"], "time2makecents@gmail.com")
+        self.assertEqual(routed["arguments"]["subject"], "this is a test")
+        self.assertIn("body", routed["arguments"]["response_text"].lower())
+
+    def test_nancy_body_followup_prepares_send_confirmation(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                transcript_rows=[
+                    {"role": "user", "text": "send an email to time2makecents@gmail.com."},
+                    {"role": "assistant", "text": "What subject should I use for the email to time2makecents@gmail.com?"},
+                    {"role": "user", "text": "subject this is a test"},
+                    {"role": "assistant", "text": "What should the body say?\nTo: time2makecents@gmail.com\nSubject: this is a test"},
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "body hello from nancy", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "integration.gmail.send")
+        self.assertEqual(routed["tool"], "office.gmail_send")
+        self.assertEqual(routed["arguments"]["to"], ["time2makecents@gmail.com"])
+        self.assertEqual(routed["arguments"]["subject"], "this is a test")
+        self.assertEqual(routed["arguments"]["body"], "hello from nancy")
+        self.assertEqual(routed["arguments"]["assistant_persona"], "Nancy")
+
+    def test_nancy_complete_email_request_still_routes_to_gmail_send(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="my_office", active_persona="Nancy"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request(
+            "default",
+            "send an email to time2makecents@gmail.com subject: testing body: hello from nancy",
+            session_id="sess_1",
+        )
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["tool"], "office.gmail_send")
+        self.assertEqual(routed["arguments"]["to"], ["time2makecents@gmail.com"])
+        self.assertEqual(routed["arguments"]["subject"], "testing")
+        self.assertEqual(routed["arguments"]["body"], "hello from nancy")
+
+    def test_nancy_send_same_message_to_new_recipient_routes_to_gmail_send(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "text": "I've sent the email to timetomakecents@gmail.com with the subject line \"testing\" and the body \"This is a test email.\"",
+                    }
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "send the same message but to time2makecents@gmail.com", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["tool"], "office.gmail_send")
+        self.assertEqual(routed["arguments"]["to"], ["time2makecents@gmail.com"])
+        self.assertEqual(routed["arguments"]["subject"], "testing")
+        self.assertEqual(routed["arguments"]["body"], "This is a test email.")
+
+    def test_nancy_verify_sent_email_routes_to_gmail_sent_search_not_model(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "text": "I've sent the email to timetomakecents@gmail.com with the subject line \"testing\" and the body \"This is a test email.\"",
+                    }
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "verify email was sent", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "integration.gmail.search")
+        self.assertEqual(routed["tool"], "office.gmail_search")
+        self.assertIn("in:sent", routed["arguments"]["query"])
+        self.assertIn("timetomakecents@gmail.com", routed["arguments"]["query"])
+        self.assertIn("testing", routed["arguments"]["query"])
+
+    def test_nancy_google_connected_disagreement_stays_deterministic(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "text": "Nancy: Google is configured but not connected. Connect Google from Profile before I can send Gmail.",
+                    }
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "profile says its connected", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "nancy.google_connection_status")
+        self.assertIn("backend integration state", routed["arguments"]["response_text"])
+
+    def test_nancy_check_my_inbox_routes_to_gmail_search(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="my_office", active_persona="Nancy"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "check my inbox", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "integration.gmail.search")
+        self.assertEqual(routed["tool"], "office.gmail_search")
+        self.assertEqual(routed["arguments"]["query"], "in:inbox")
+
+    def test_nancy_who_are_they_from_after_inbox_search_repeats_gmail_search(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                transcript_rows=[
+                    {"role": "user", "text": "check my inbox"},
+                    {"role": "assistant", "text": "Found 3 Gmail message(s).\n1. From: Alex <alex@example.com> | Subject: Update"},
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "who are they from", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "integration.gmail.search")
+        self.assertEqual(routed["tool"], "office.gmail_search")
+        self.assertEqual(routed["arguments"]["query"], "in:inbox")
+
+    def test_nancy_inbox_followup_outranks_unfinished_compose_prompt(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                transcript_rows=[
+                    {"role": "user", "text": "send an email to time2makecents@gmail.com."},
+                    {"role": "assistant", "text": "What subject should I use for the email to time2makecents@gmail.com?"},
+                    {"role": "user", "text": "check my inbox"},
+                    {"role": "assistant", "text": "Found 3 Gmail message(s).\n1. From: Alex <alex@example.com> | Subject: Update"},
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "who are they from", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "integration.gmail.search")
+        self.assertEqual(routed["tool"], "office.gmail_search")
+        self.assertEqual(routed["arguments"]["query"], "in:inbox")
+
+    def test_nancy_read_number_after_inbox_outranks_unfinished_compose_prompt(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                transcript_rows=[
+                    {"role": "user", "text": "send an email to time2makecents@gmail.com."},
+                    {"role": "assistant", "text": "What subject should I use for the email to time2makecents@gmail.com?"},
+                    {"role": "user", "text": "who are they from"},
+                    {"role": "assistant", "text": "What should the body say?\nTo: time2makecents@gmail.com\nSubject: who are they from"},
+                    {"role": "user", "text": "Do I have unread emails?"},
+                    {"role": "assistant", "text": "Found 2 Gmail message(s).\n1. From: James Willis <time2makecents@gmail.com> | Subject: Re: this is a test"},
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "read 1", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "integration.gmail.read")
+        self.assertEqual(routed["tool"], "office.gmail_read")
+        self.assertEqual(routed["arguments"]["message_index"], 1)
+
+    def test_nancy_show_message_from_sender_outranks_unfinished_compose_prompt(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                transcript_rows=[
+                    {"role": "user", "text": "send an email to time2makecents@gmail.com."},
+                    {"role": "assistant", "text": "What should the body say?\nTo: time2makecents@gmail.com\nSubject: who are they from"},
+                    {"role": "user", "text": "Do I have unread emails?"},
+                    {"role": "assistant", "text": "Found 2 Gmail message(s).\n1. From: James Willis <time2makecents@gmail.com> | Subject: Re: this is a test"},
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "SHOW.\nMe the message from time2makecents", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "integration.gmail.search")
+        self.assertEqual(routed["tool"], "office.gmail_search")
+        self.assertEqual(routed["arguments"]["query"], "from:time2makecents")
+
+    def test_nancy_reply_question_searches_gmail_instead_of_session_memory(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="my_office", active_persona="Nancy"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "did i get a reply back from time2makecents?", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "integration.gmail.search")
+        self.assertEqual(routed["tool"], "office.gmail_search")
+        self.assertIn("time2makecents", routed["arguments"]["query"])
+
+    def test_nancy_reply_after_loaded_gmail_thread_asks_for_reply_body(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                transcript_rows=[
+                    {"role": "user", "text": "read 1"},
+                    {
+                        "role": "assistant",
+                        "text": (
+                            "Loaded Gmail thread with 2 message(s).\n\n"
+                            "1. From: James Willis <time2makecents@gmail.com>\n"
+                            "   To: James Willis <veridexcorp@gmail.com>\n"
+                            "   Subject: Re: this is a test\n\n"
+                            "This is a test email.\n\n"
+                            "Would you like to reply?"
+                        ),
+                    },
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "reply", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "nancy.email.reply_body_required")
+        self.assertEqual(routed["arguments"]["response_text"], "What would you like to say?")
+        self.assertNotIn("Loaded Gmail thread", routed["arguments"]["response_text"])
+
+    def test_nancy_reply_body_after_loaded_gmail_thread_routes_to_send_confirmation(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                transcript_rows=[
+                    {"role": "user", "text": "read 1"},
+                    {
+                        "role": "assistant",
+                        "text": (
+                            "Loaded Gmail thread with 2 message(s).\n\n"
+                            "1. From: James Willis <time2makecents@gmail.com>\n"
+                            "   To: James Willis <veridexcorp@gmail.com>\n"
+                            "   Subject: Re: this is a test\n\n"
+                            "This is a test email.\n\n"
+                            "Would you like to reply?"
+                        ),
+                    },
+                    {"role": "user", "text": "reply"},
+                    {"role": "assistant", "text": "What would you like to say?"},
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request(
+            "default",
+            "i appreciate your prompt response.\n\nkind regards,\nJR",
+            session_id="sess_1",
+        )
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "integration.gmail.send")
+        self.assertEqual(routed["tool"], "office.gmail_send")
+        self.assertEqual(routed["arguments"]["to"], ["time2makecents@gmail.com"])
+        self.assertEqual(routed["arguments"]["subject"], "Re: this is a test")
+        self.assertEqual(routed["arguments"]["body"], "i appreciate your prompt response.\n\nkind regards,\nJR")
+        self.assertEqual(routed["arguments"]["assistant_persona"], "Nancy")
+
+    def test_nancy_prefixed_reply_body_keeps_newlines_and_routes_to_send_confirmation(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="sales_department",
+                active_persona="Sales Director",
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "text": (
+                            "Loaded Gmail message.\n"
+                            "From: James Willis <time2makecents@gmail.com>\n"
+                            "To: James Willis <veridexcorp@gmail.com>\n"
+                            "Subject: this is a test\n\n"
+                            "Would you like to reply?"
+                        ),
+                    },
+                    {"role": "user", "text": "Nancy, reply"},
+                    {"role": "assistant", "text": "What would you like to say?"},
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request(
+            "default",
+            "Nancy, i appreciate your prompt response.\n\nkind regards,\nJR",
+            session_id="sess_1",
+        )
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["tool"], "office.gmail_send")
+        self.assertEqual(routed["arguments"]["to"], ["time2makecents@gmail.com"])
+        self.assertEqual(routed["arguments"]["subject"], "Re: this is a test")
+        self.assertEqual(routed["arguments"]["body"], "i appreciate your prompt response.\n\nkind regards,\nJR")
+
+    def test_nancy_new_messages_routes_to_unread_gmail_search(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="my_office", active_persona="Nancy"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "do i have any new messages?", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "integration.gmail.search")
+        self.assertEqual(routed["tool"], "office.gmail_search")
+        self.assertEqual(routed["arguments"]["query"], "in:inbox is:unread")
+
+    def test_nancy_read_new_messages_routes_to_unread_gmail_search(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="my_office", active_persona="Nancy"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "read new messages", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "integration.gmail.search")
+        self.assertEqual(routed["tool"], "office.gmail_search")
+        self.assertEqual(routed["arguments"]["query"], "in:inbox is:unread")
+
+    def test_nancy_read_and_timeframe_message_requests_build_gmail_queries(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="my_office", active_persona="Nancy"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+
+        read_week = pipeline.route_user_request("default", "list read messages in the last week", session_id="sess_1")
+        all_day = pipeline.route_user_request("default", "list all messages in the last day", session_id="sess_1")
+
+        self.assertEqual(read_week["tool"], "office.gmail_search")
+        self.assertEqual(read_week["arguments"]["query"], "in:inbox is:read newer_than:7d")
+        self.assertEqual(all_day["tool"], "office.gmail_search")
+        self.assertEqual(all_day["arguments"]["query"], "in:inbox newer_than:1d")
+
+    def test_nancy_help_me_compose_email_starts_guided_compose(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="my_office", active_persona="Nancy"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "help me compose an email", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "nancy.email.recipient_required")
+        self.assertIn("Who should I send it to", routed["arguments"]["response_text"])
+
+    def test_nancy_named_recipient_routes_to_contact_resolution(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="my_office", active_persona="Nancy"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "send email to James", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "contact.email.resolve")
+        self.assertEqual(routed["tool"], "office.contact_resolve_email")
+        self.assertEqual(routed["arguments"]["name"], "James")
+
+    def test_nancy_check_again_after_email_check_repeats_gmail_search(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                transcript_rows=[
+                    {"role": "user", "text": "can you check my email?"},
+                    {"role": "assistant", "text": "Found 2 Gmail message(s)."},
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "check again", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "integration.gmail.search")
+        self.assertEqual(routed["tool"], "office.gmail_search")
+        self.assertEqual(routed["arguments"]["query"], "in:inbox")
 
     def test_search_capability_with_query_routes_to_web_search(self) -> None:
         routed = self.pipeline.route_user_request("default", "can you search the internet for Eugene events?")
@@ -2263,6 +2939,13 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["route_kind"], "tool")
         self.assertEqual(routed["capability"], "workspace.state.get")
         self.assertEqual(routed["tool"], "office.state_get")
+
+    def test_marketing_navigation_still_switches_rooms(self) -> None:
+        routed = self.pipeline.route_user_request("default", "go to marketing department")
+        self.assertEqual(routed["route_kind"], "navigation")
+        self.assertEqual(routed["capability"], "room.navigate")
+        self.assertEqual(routed["room_id"], "marketing_room")
+        self.assertEqual(routed["tool"], "office.room_set")
 
     def test_new_session_routes_to_session_create(self) -> None:
         routed = self.pipeline.route_user_request("default", "new session for event flier")

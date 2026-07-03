@@ -5,6 +5,8 @@ import {
   confirmationLabelForAction,
   roomStatusText,
   roomPersonaValues,
+  shouldShowMessageText,
+  speakerForStructuredResponse,
   visibleMessagesForScope,
 } from "./helpers";
 import type { Message } from "./types";
@@ -62,6 +64,29 @@ describe("visibleMessagesForScope", () => {
 });
 
 describe("confirmation helpers", () => {
+  it("keeps Nancy as speaker for Nancy clarify responses", () => {
+    expect(
+      speakerForStructuredResponse(
+        {
+          speaker: "Nancy",
+          routing: { route_kind: "clarify" },
+        },
+        "Sales Director",
+      ),
+    ).toBe("Nancy");
+  });
+
+  it("uses Navigator for clarify responses without an explicit speaker", () => {
+    expect(
+      speakerForStructuredResponse(
+        {
+          routing: { route_kind: "clarify" },
+        },
+        "Sales Director",
+      ),
+    ).toBe("Navigator");
+  });
+
   it("labels Gmail send confirmations and leaves other actions unlabeled", () => {
     expect(confirmationLabelForAction("gmail.send")).toBe("Confirm Gmail Send");
     expect(confirmationLabelForAction("calendar.create")).toBeUndefined();
@@ -85,6 +110,66 @@ describe("confirmation helpers", () => {
     expect(message.sessionId).toBe("sess_1");
     expect(message.speaker).toBe("Navigator");
     expect(message.text).toBe("Review and confirm the send.");
+  });
+
+  it("carries Gmail cards and email review metadata onto assistant messages", () => {
+    const message = assistantMessageForResponse(
+      {
+        gmail_messages: [
+          {
+            id: "msg_1",
+            index: 1,
+            from: "Alex <alex@example.com>",
+            subject: "Project update",
+            date: "Thu, 2 Jul 2026 08:00:00 -0700",
+            snippet: "Latest status.",
+          },
+        ],
+        email_review: {
+          to: ["jane@example.com"],
+          subject: "Welcome",
+          body: "Thanks for trying Veridex.",
+        },
+        gmail_thread: [
+          {
+            id: "msg_1",
+            from: "Alex <alex@example.com>",
+            subject: "Project update",
+            body_text: "Thread body",
+          },
+        ],
+      },
+      "Found 1 Gmail message.",
+      "Nancy",
+      "my_office",
+      "sess_1",
+    );
+
+    expect(message.gmailMessages?.[0].subject).toBe("Project update");
+    expect(message.emailReview?.body).toBe("Thanks for trying Veridex.");
+    expect(message.gmailThread?.[0].body_text).toBe("Thread body");
+  });
+
+  it("hides duplicate plain text when structured Gmail cards are present", () => {
+    expect(
+      shouldShowMessageText({
+        id: "msg",
+        role: "assistant",
+        speaker: "Nancy",
+        text: "Found 2 Gmail message(s).\n1. From...",
+        gmailMessages: [{ id: "gmail_1", from: "Alex <alex@example.com>", subject: "Update" }],
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowMessageText({
+        id: "msg",
+        role: "assistant",
+        speaker: "Nancy",
+        text: "Loaded Gmail thread.",
+        gmailThread: [{ id: "gmail_1", from: "Alex <alex@example.com>", body_text: "Full body" }],
+      }),
+    ).toBe(false);
+    expect(shouldShowMessageText({ id: "plain", role: "assistant", text: "Normal reply" })).toBe(true);
   });
 });
 

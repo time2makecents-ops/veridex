@@ -280,6 +280,24 @@ class RequestPipeline:
         re.compile(r"^(?:please\s+)?send\s+this\s+to\s+(?P<target>.+?)\s+(?:for|on)\s+(?P<body>.+)$", re.IGNORECASE),
         re.compile(r"^(?:please\s+)?coordinate\s+with\s+(?P<target>.+?)\s+(?:for|on)\s+(?P<body>.+)$", re.IGNORECASE),
     )
+    CROSS_ROOM_HOST_QUESTION_PATTERNS = (
+        re.compile(
+            r"^(?:is\s+there\s+a\s+way\s+)?(?:you\s+)?(?:could|can|would)?\s*ask\s+"
+            r"(?:the\s+)?(?:host|assistant|persona|person)\s+(?:in|from|at)\s+(?P<target>.+?)\??$",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"^(?:can|could|would)\s+you\s+ask\s+(?P<target>.+?)\??$",
+            re.IGNORECASE,
+        ),
+    )
+    ROOM_SWITCH_CLAIM_RE = re.compile(
+        r"\b(?:i(?:'ve| have| will)?|we(?:'ve| have| will)?|i am|i'm)\s+"
+        r"(?:now\s+)?(?:switch(?:ed|ing)?|move(?:d|ing)?|go(?:ing)?|in|at|became|becoming)\s+"
+        r"(?:to\s+|into\s+|the\s+)?(?:[a-z0-9 ]+\s+)?(?:room|department|office|persona|director|manager|host)\b",
+        re.IGNORECASE,
+    )
+    ROOM_SWITCH_ACK_RE = re.compile(r"^(?:ok|okay|yes|yeah|yep|sure|i am ready|i'm ready|ready)\.?$", re.IGNORECASE)
     CONFERENCE_ROOM_MEETING_RE = re.compile(
         r"^(?:please\s+)?(?:schedule|set\s+up|create|draft)\s+(?:a\s+)?(?:meeting|meeting\s+invite|calendar\s+invite|calendar\s+event)"
         r"(?:\s+(?:called|titled))?\s+(?P<title>.+?)\s+on\s+(?P<date>\d{4}-\d{2}-\d{2})\s+from\s+"
@@ -553,6 +571,15 @@ class RequestPipeline:
         "For factual questions about a specific company, entity, or person, do not invent unsupported details. "
         "If verified grounding is missing, say so directly and offer search when appropriate."
     )
+    MODEL_ROOM_AUTHORITY_RULE = (
+        "Never claim you switched rooms, changed departments, or became another persona from a model response. "
+        "Only a navigation route through office.room_set can change the active room or active persona. "
+        "If the user wants another department without explicit navigation, explain that mailroom dispatch can contact it and does not switch rooms."
+    )
+    MODEL_EXTERNAL_ACTION_RULE = (
+        "Never claim you sent, scheduled, confirmed, verified, or checked an external email/calendar action from a model response. "
+        "Only explicit Gmail/Calendar tool results can report external action state, and Gmail sends require confirmation before delivery."
+    )
     CORRECTION_VOCABULARY = (
         "artifact",
         "artifacts",
@@ -596,9 +623,15 @@ class RequestPipeline:
         "what room am i in",
         "which room am i in",
         "what room is this",
+        "what department am i in",
+        "which department am i in",
+        "what department are we in",
+        "which department are we in",
         "where are we",
         "current room",
         "what room are we in",
+        "did we move",
+        "did we switch",
     )
     ROOM_DIRECTORY_HINTS = (
         "what rooms are there",
@@ -673,6 +706,10 @@ class RequestPipeline:
         "create a new session",
     )
     PERSONA_ROLE_HINTS = (
+        "who are you now",
+        "who are you",
+        "what is your title",
+        "what title are you",
         "what is your job here",
         "what is your role here",
         "what is your role in the app",
@@ -1344,6 +1381,58 @@ class RequestPipeline:
                 **session_objects_route,
             }
 
+        nancy_capability_route = self.route_nancy_capability_request(workspace_id, request_text)
+        if nancy_capability_route is not None:
+            return {
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **nancy_capability_route,
+            }
+
+        nancy_contact_route = self.route_nancy_contact_request(workspace_id, request_text)
+        if nancy_contact_route is not None:
+            return {
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **nancy_contact_route,
+            }
+
+        nancy_gmail_reply_route = self.route_nancy_gmail_reply_request(
+            workspace_id,
+            request_text,
+            recent_turns=recent_turns,
+        )
+        if nancy_gmail_reply_route is not None:
+            return {
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **nancy_gmail_reply_route,
+            }
+
+        nancy_gmail_read_route = self.route_nancy_gmail_read_request(
+            workspace_id,
+            request_text,
+            recent_turns=recent_turns,
+        )
+        if nancy_gmail_read_route is not None:
+            return {
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **nancy_gmail_read_route,
+            }
+
+        nancy_email_compose_route = self.route_nancy_email_compose_request(
+            workspace_id,
+            request_text,
+            recent_turns=recent_turns,
+        )
+        if nancy_email_compose_route is not None:
+            return {
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **nancy_email_compose_route,
+            }
+
         nancy_direct_route = self.route_nancy_direct_request(workspace_id, request_text)
         if nancy_direct_route is not None:
             return {
@@ -1351,6 +1440,18 @@ class RequestPipeline:
                 "workspace_id": workspace_id,
                 "request": request_text,
                 **nancy_direct_route,
+            }
+
+        nancy_email_followup_route = self.route_nancy_email_followup_request(
+            workspace_id,
+            request_text,
+            recent_turns=recent_turns,
+        )
+        if nancy_email_followup_route is not None:
+            return {
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **nancy_email_followup_route,
             }
 
         memo_access_route = self.route_memo_access_request(workspace_id, request_text)
@@ -1375,6 +1476,14 @@ class RequestPipeline:
                 "workspace_id": workspace_id,
                 "request": request_text,
                 **memo_dispatch_route,
+            }
+
+        cross_room_host_route = self.route_cross_room_host_question(workspace_id, request_text)
+        if cross_room_host_route is not None:
+            return {
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **cross_room_host_route,
             }
 
         collaboration_route = self.route_department_collaboration_request(workspace_id, request_text)
@@ -1457,6 +1566,23 @@ class RequestPipeline:
                 "request": request_text,
                 **session_route,
                 }
+
+        status_route = self.route_room_status_request(workspace_id, request_text)
+        if status_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **status_route,
+            }
+
+        room_authority_route = self.route_room_authority_followup(
+            workspace_id,
+            request_text,
+            recent_turns=recent_turns,
+        )
+        if room_authority_route is not None:
+            return room_authority_route
 
         persona_role_route = self.route_persona_role_request(workspace_id, request_text)
         if persona_role_route is not None:
@@ -1581,15 +1707,6 @@ class RequestPipeline:
                 "workspace_id": workspace_id,
                 "request": request_text,
                 **integration_route,
-            }
-
-        status_route = self.route_room_status_request(workspace_id, request_text)
-        if status_route is not None:
-            return {
-                "route_kind": "tool",
-                "workspace_id": workspace_id,
-                "request": request_text,
-                **status_route,
             }
 
         search_route = self.route_search_request(workspace_id, request_text, recent_turns=recent_turns, session_id=session_id)
@@ -1851,7 +1968,8 @@ class RequestPipeline:
             f"The active room is {active_room}. The active persona is {active_persona}. "
             "Respond clearly, concisely, and in a way that fits the current office context. "
             f"{self.MODEL_CONTEXT_RULE} {self.MODEL_NO_BACKGROUND_RULE} {self.MODEL_DIRECT_ANSWER_RULE} "
-            f"{self.MODEL_CAPABILITY_RULE} {self.MODEL_RISK_RULE} {self.MODEL_GROUNDING_RULE}"
+            f"{self.MODEL_CAPABILITY_RULE} {self.MODEL_RISK_RULE} {self.MODEL_GROUNDING_RULE} "
+            f"{self.MODEL_ROOM_AUTHORITY_RULE} {self.MODEL_EXTERNAL_ACTION_RULE}"
         )
         return {
             "route_kind": "model",
@@ -2063,6 +2181,53 @@ class RequestPipeline:
             "reason": f"Matched a memo dispatch request to {target_room.get('title') or room_id}.",
         }
 
+    def nancy_capability_response_text(self) -> str:
+        return (
+            "Nancy can draft email text locally, prepare Gmail sends for confirmation, and prepare Calendar create, update, "
+            "or cancel requests when you give explicit details. If Google is not connected, connect Google from Profile "
+            "before I can send Gmail or change Calendar events. Nancy can also help coordinate with other departments "
+            "through the memo system while keeping the active room's chat separate."
+        )
+
+    def route_nancy_capability_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip())
+        if not text:
+            return None
+        direct_match = self.NANCY_DIRECT_RE.match(text)
+        body = str(direct_match.group("body") or "").strip() if direct_match else text
+        lowered = body.lower()
+        ctx = self.current_context(workspace_id)
+        active_room = str(ctx.get("active_room") or "").strip()
+        if not direct_match and active_room != "my_office":
+            return None
+        has_action_details = bool(
+            re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", body, re.IGNORECASE)
+            and re.search(r"\bsubject(?:\s+line)?\b", body, re.IGNORECASE)
+            and re.search(r"\bbody\b", body, re.IGNORECASE)
+        )
+        has_calendar_details = bool(
+            self.CONFERENCE_ROOM_MEETING_RE.match(body)
+            or self.CONFERENCE_ROOM_MEETING_UPDATE_RE.match(body)
+            or self.CONFERENCE_ROOM_MEETING_CANCEL_RE.match(body)
+        )
+        if has_action_details or has_calendar_details:
+            return None
+        asks_capability = bool(
+            re.search(r"\bwhat can you (?:do|help)\b|\bwhat are your capabilities\b|\bwhat tools do you have\b", lowered)
+            or re.search(r"\bcan you\b.*\b(?:send|draft|write).*\b(?:email|emails|gmail)\b", lowered)
+            or re.search(r"\bcan you\b.*\b(?:schedule|create|update|cancel|change).*\b(?:calendar|meeting|invite|event)\b", lowered)
+            or re.search(r"\b(?:gmail|email|calendar)\b.*\b(?:available|connected|work|capabilit|able)\b", lowered)
+        )
+        if not asks_capability:
+            return None
+        return {
+            "route_kind": "clarify",
+            "capability": "nancy.capability.info",
+            "tool": "office.capability_info",
+            "arguments": {"response_text": self.nancy_capability_response_text()},
+            "reason": "Matched a Nancy capability question.",
+        }
+
     def route_nancy_direct_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         match = self.NANCY_DIRECT_RE.match(re.sub(r"\s+", " ", str(request_text or "").strip()))
         if not match:
@@ -2070,12 +2235,15 @@ class RequestPipeline:
         body = str(match.group("body") or "").strip()
         lowered = body.lower()
         if not re.search(r"\b(?:draft|send)\s+(?:an?\s+)?(?:email|gmail)\b", lowered):
+            calendar_route = self.route_nancy_calendar_request(body)
+            if calendar_route is not None:
+                return calendar_route
             return {
                 "route_kind": "clarify",
                 "capability": "nancy.direct.unsupported",
                 "tool": "office.capability_info",
-                "arguments": {"response_text": "Nancy can draft an email or prepare it for confirmation. State the recipient, subject, and body."},
-                "reason": "Direct Nancy request was not an email action.",
+                "arguments": {"response_text": self.nancy_capability_response_text()},
+                "reason": "Direct Nancy request was not a supported email or calendar action.",
             }
 
         recipient_match = re.search(r"\bto\s+(?:[^@\s.,]+\s+(?:at\s+)?)?(?P<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b", body, re.IGNORECASE)
@@ -2107,6 +2275,716 @@ class RequestPipeline:
             "arguments": {"to": [recipient], "subject": subject, "body": email_body, "assistant_persona": "Nancy"},
             "reason": "Matched a direct Nancy Gmail request.",
         }
+
+    def _nancy_email_text_for_routing(self, request_text: str) -> str:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip())
+        match = self.NANCY_DIRECT_RE.match(text)
+        return str(match.group("body") or "").strip() if match else text
+
+    def _nancy_email_start_fields(self, request_text: str) -> Optional[Dict[str, str]]:
+        text = self._nancy_email_text_for_routing(request_text)
+        if not text:
+            return None
+        match = re.search(
+            r"\b(?:send|draft|compose|write)\s+(?:an?\s+)?(?:email|gmail|message)\s+to\s+"
+            r"(?:[^@\s.,]+\s+(?:at\s+)?)?(?P<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b",
+            text,
+            re.IGNORECASE,
+        )
+        if not match:
+            return None
+        subject_match = re.search(r"\bsubject(?:\s+line)?\s*(?:is|:)?\s*(?P<subject>.+?)(?=\s+\bbody\s*(?:is|:)?\s*|$)", text, re.IGNORECASE)
+        body_match = re.search(r"\bbody\s*(?:is|:)?\s*(?P<body>.+)$", text, re.IGNORECASE)
+        return {
+            "to": str(match.group("email") or "").strip(),
+            "subject": str(subject_match.group("subject") or "").strip(" .\"'") if subject_match else "",
+            "body": str(body_match.group("body") or "").strip(" \"'") if body_match else "",
+        }
+
+    def _recent_nancy_compose_prompt(self, recent_turns: List[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+        for row in reversed(recent_turns[-10:]):
+            if str(row.get("role") or "").strip().lower() != "assistant":
+                continue
+            text = str(row.get("text") or "").strip()
+            if not text:
+                continue
+            recipient_match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", text, re.IGNORECASE)
+            if not recipient_match:
+                continue
+            subject_line = re.search(r"(?im)^\s*Subject:\s*(?P<subject>.+?)\s*$", text)
+            if re.search(r"\bwhat subject should i use\b", text, re.IGNORECASE):
+                return {
+                    "stage": "subject",
+                    "to": str(recipient_match.group(0) or "").strip(),
+                    "subject": "",
+                    "body": "",
+                }
+            if re.search(r"\bwhat should the email say\b", text, re.IGNORECASE):
+                return {
+                    "stage": "message",
+                    "to": str(recipient_match.group(0) or "").strip(),
+                    "subject": "",
+                    "body": "",
+                }
+            if re.search(r"\bwhat should the body say\b", text, re.IGNORECASE):
+                return {
+                    "stage": "body",
+                    "to": str(recipient_match.group(0) or "").strip(),
+                    "subject": str(subject_line.group("subject") or "").strip(" .\"'") if subject_line else "",
+                    "body": "",
+                }
+        return None
+
+    def _nancy_subject_from_followup(self, request_text: str) -> str:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip())
+        text = re.sub(r"^(?:the\s+)?subject(?:\s+line)?\s*(?:should\s+read|should\s+be|is|:)?\s*", "", text, flags=re.IGNORECASE).strip()
+        return text.strip(" .\"'")
+
+    def _nancy_body_from_followup(self, request_text: str) -> str:
+        text = str(request_text or "").strip()
+        text = re.sub(r"^(?:the\s+)?body\s*(?:should\s+read|should\s+be|is|:)?\s*", "", text, flags=re.IGNORECASE).strip()
+        return text.strip(" \"'")
+
+    def _nancy_subject_from_body(self, body: str) -> str:
+        text = re.sub(r"\s+", " ", str(body or "").strip())
+        text = re.sub(r"^(?:tell|let)\s+(?:him|her|them)\s+(?:that\s+)?", "", text, flags=re.IGNORECASE).strip()
+        if not text:
+            return "Message from Veridex"
+        words = text.strip(" .!?\"'").split()
+        subject = " ".join(words[:7]).strip()
+        return subject[:60] if subject else "Message from Veridex"
+
+    def nancy_email_review_text(self, *, to: str, subject: str, body: str) -> str:
+        return (
+            f"Here is the email for review.\n\n"
+            f"To: {to}\n"
+            f"Subject: {subject}\n"
+            f"Body: {body}\n\n"
+            "Say send when you want me to prepare the Gmail send confirmation."
+        )
+
+    def route_nancy_email_compose_request(
+        self,
+        workspace_id: str,
+        request_text: str,
+        *,
+        recent_turns: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        ctx = self.current_context(workspace_id)
+        normalized_request = re.sub(r"\s+", " ", str(request_text or "").strip())
+        direct_match = self.NANCY_DIRECT_RE.match(normalized_request)
+        if not direct_match and str(ctx.get("active_room") or "").strip() != "my_office":
+            return None
+        compose_text = str(direct_match.group("body") or "").strip() if direct_match else normalized_request
+        if re.match(r"^(?:please\s+)?(?:help me\s+)?(?:compose|write|draft)\s+(?:an?\s+)?(?:email|gmail|message)\.?$", compose_text, re.IGNORECASE):
+            return {
+                "route_kind": "clarify",
+                "capability": "nancy.email.recipient_required",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": "Who should I send it to?",
+                },
+                "reason": "Nancy guided email compose request needs a recipient.",
+            }
+        fields = self._nancy_email_start_fields(request_text)
+        if fields is not None:
+            to = str(fields.get("to") or "").strip()
+            subject = str(fields.get("subject") or "").strip()
+            body = str(fields.get("body") or "").strip()
+            if subject and body:
+                return {
+                    "route_kind": "tool",
+                    "capability": "integration.gmail.send",
+                    "tool": "office.gmail_send",
+                    "arguments": {"to": [to], "subject": subject, "body": body, "assistant_persona": "Nancy"},
+                    "reason": "Matched a complete Nancy email request.",
+                }
+            if not subject:
+                return {
+                    "route_kind": "clarify",
+                    "capability": "nancy.email.subject_required",
+                    "tool": "office.capability_info",
+                    "arguments": {
+                        "response_text": f"What subject should I use for the email to {to}?",
+                        "to": to,
+                    },
+                    "reason": "Nancy email request included a recipient but no subject.",
+                }
+            return {
+                "route_kind": "clarify",
+                "capability": "nancy.email.body_required",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": f"What should the body say?\nTo: {to}\nSubject: {subject}",
+                    "to": to,
+                    "subject": subject,
+                },
+                "reason": "Nancy email request included recipient and subject but no body.",
+            }
+        compose = self._recent_nancy_compose_prompt(recent_turns)
+        if compose is None:
+            return None
+        stage = str(compose.get("stage") or "")
+        to = str(compose.get("to") or "").strip()
+        if stage == "message":
+            body = self._nancy_body_from_followup(request_text)
+            if not body:
+                return None
+            subject = self._nancy_subject_from_body(body)
+            return {
+                "route_kind": "clarify",
+                "capability": "nancy.email.review",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": self.nancy_email_review_text(to=to, subject=subject, body=body),
+                    "to": to,
+                    "subject": subject,
+                    "body": body,
+                },
+                "reason": "Matched a Nancy guided email message follow-up.",
+            }
+        if stage == "subject":
+            subject = self._nancy_subject_from_followup(request_text)
+            if not subject:
+                return None
+            return {
+                "route_kind": "clarify",
+                "capability": "nancy.email.body_required",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": f"What should the body say?\nTo: {to}\nSubject: {subject}",
+                    "to": to,
+                    "subject": subject,
+                },
+                "reason": "Matched a Nancy email subject follow-up.",
+            }
+        if stage == "body":
+            subject = str(compose.get("subject") or "").strip()
+            body = self._nancy_body_from_followup(request_text)
+            if not body or not subject:
+                return None
+            return {
+                "route_kind": "tool",
+                "capability": "integration.gmail.send",
+                "tool": "office.gmail_send",
+                "arguments": {
+                    "to": [to],
+                    "subject": subject,
+                    "body": body,
+                    "assistant_persona": "Nancy",
+                },
+                "reason": "Matched a Nancy email body follow-up and prepared Gmail send confirmation.",
+            }
+        return None
+
+    def route_nancy_contact_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        ctx = self.current_context(workspace_id)
+        direct_match = self.NANCY_DIRECT_RE.match(re.sub(r"\s+", " ", str(request_text or "").strip()))
+        if not direct_match and str(ctx.get("active_room") or "").strip() != "my_office":
+            return None
+        text = str(direct_match.group("body") or "").strip() if direct_match else str(request_text or "").strip()
+        normalized = re.sub(r"\s+", " ", text)
+        if not normalized:
+            return None
+        save_match = re.match(
+            r"^(?:save|add)\s+(?P<name>.+?)\s+(?:as|with email|email)\s+(?P<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\.?$",
+            normalized,
+            re.IGNORECASE,
+        )
+        if save_match:
+            name = str(save_match.group("name") or "").strip(" .\"'")
+            email = str(save_match.group("email") or "").strip()
+            return {
+                "route_kind": "tool",
+                "capability": "contact.save",
+                "tool": "office.contact_save",
+                "arguments": {"display_name": name, "email": email, "aliases": [name], "assistant_persona": "Nancy"},
+                "reason": "Matched a Nancy contact save request.",
+            }
+        if re.match(r"^(?:list|show)\s+(?:my\s+)?contacts(?:\s+|\.?$)", normalized, re.IGNORECASE):
+            return {
+                "route_kind": "tool",
+                "capability": "contact.list",
+                "tool": "office.contact_list",
+                "arguments": {"query": "", "assistant_persona": "Nancy"},
+                "reason": "Matched a Nancy contact list request.",
+            }
+        named = re.match(
+            r"^(?:help me\s+)?(?:send|draft|compose|write|email)\s+(?:an?\s+)?(?:email|gmail|message)?\s*(?:to\s+)?(?P<name>[A-Za-z][A-Za-z0-9 .'-]{1,80})\.?$",
+            normalized,
+            re.IGNORECASE,
+        )
+        if named and not re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", normalized, re.IGNORECASE):
+            name = str(named.group("name") or "").strip(" .\"'")
+            if name and not re.search(r"\b(?:email|gmail|message|subject|body)\b", name, re.IGNORECASE):
+                return {
+                    "route_kind": "tool",
+                    "capability": "contact.email.resolve",
+                    "tool": "office.contact_resolve_email",
+                    "arguments": {"name": name, "assistant_persona": "Nancy"},
+                    "reason": "Matched a Nancy named-contact email request.",
+                }
+        return None
+
+    def _recent_nancy_email_context(self, recent_turns: List[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+        for row in reversed(recent_turns[-10:]):
+            if str(row.get("role") or "").strip().lower() != "assistant":
+                continue
+            text = str(row.get("text") or "").strip()
+            if not text or not re.search(r"\b(?:email|gmail)\b", text, re.IGNORECASE):
+                continue
+            recipients = re.findall(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", text, re.IGNORECASE)
+            if not recipients:
+                continue
+            subject = ""
+            body = ""
+            subject_line = re.search(r"(?im)^\s*Subject:\s*(?P<subject>.+?)\s*$", text)
+            if subject_line:
+                subject = str(subject_line.group("subject") or "").strip(" .\"'")
+            if not subject:
+                subject_phrase = re.search(r"\bsubject(?:\s+line)?\s+(?:is\s+)?\"(?P<subject>[^\"]+)\"", text, re.IGNORECASE)
+                if subject_phrase:
+                    subject = str(subject_phrase.group("subject") or "").strip(" .\"'")
+            body_line = re.search(r"(?im)^\s*Body:\s*(?P<body>.+?)\s*$", text)
+            if body_line:
+                body = str(body_line.group("body") or "").strip(" \"'")
+            if not body:
+                body_phrase = re.search(r"\bbody\s+(?:is\s+)?\"(?P<body>[^\"]+)\"", text, re.IGNORECASE)
+                if body_phrase:
+                    body = str(body_phrase.group("body") or "").strip(" \"'")
+            if subject:
+                return {
+                    "to": recipients[-1].strip(),
+                    "subject": subject,
+                    "body": body,
+                }
+        return None
+
+    def _recent_google_disconnected_notice(self, recent_turns: List[Dict[str, Any]]) -> bool:
+        for row in reversed(recent_turns[-6:]):
+            if str(row.get("role") or "").strip().lower() != "assistant":
+                continue
+            text = str(row.get("text") or "").lower()
+            if "google is configured but not connected" in text or "connect google from profile" in text:
+                return True
+        return False
+
+    def route_nancy_email_followup_request(
+        self,
+        workspace_id: str,
+        request_text: str,
+        *,
+        recent_turns: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        ctx = self.current_context(workspace_id)
+        if str(ctx.get("active_room") or "").strip() != "my_office":
+            return None
+        text = re.sub(r"\s+", " ", str(request_text or "").strip())
+        lowered = text.lower()
+        if not text:
+            return None
+        if self._recent_google_disconnected_notice(recent_turns) and re.search(r"\bprofile\b.*\bconnected\b|\bconnected\b.*\bprofile\b", lowered):
+            return {
+                "route_kind": "clarify",
+                "capability": "nancy.google_connection_status",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": (
+                        "I can only trust the backend integration state for sending. If Profile now shows Google connected, "
+                        "try the explicit Gmail request again; I will route it through the Gmail confirmation flow and will not claim it sent from chat alone."
+                    )
+                },
+                "reason": "User disputed a recent Google disconnected notice.",
+            }
+        email_context = self._recent_nancy_email_context(recent_turns)
+        if email_context is None:
+            return None
+        recipient_match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", text, re.IGNORECASE)
+        if re.search(r"\bverify\b.*\b(?:email|gmail|sent)\b|\b(?:email|gmail)\b.*\b(?:sent|delivered)\b", lowered):
+            query_parts = ["in:sent"]
+            recipient = str(email_context.get("to") or "").strip()
+            subject = str(email_context.get("subject") or "").strip()
+            if recipient:
+                query_parts.append(f"to:{recipient}")
+            if subject:
+                query_parts.append(f'subject:"{subject}"')
+            return {
+                "route_kind": "tool",
+                "capability": "integration.gmail.search",
+                "tool": "office.gmail_search",
+                "arguments": {"query": " ".join(query_parts)},
+                "reason": "Matched a Nancy sent-email verification follow-up.",
+            }
+        if recipient_match and (re.search(r"\bsend\b.*\b(?:same|that|message|email)\b", lowered) or "same message" in lowered):
+            return {
+                "route_kind": "tool",
+                "capability": "integration.gmail.send",
+                "tool": "office.gmail_send",
+                "arguments": {
+                    "to": [str(recipient_match.group(0) or "").strip()],
+                    "subject": str(email_context.get("subject") or ""),
+                    "body": str(email_context.get("body") or ""),
+                    "assistant_persona": "Nancy",
+                },
+                "reason": "Matched a Nancy same-email send follow-up.",
+            }
+        if re.match(r"^(?:yes|yep|yeah|correct|send|send it|looks good|approved|approve|confirm)\.?$", lowered):
+            return {
+                "route_kind": "tool",
+                "capability": "integration.gmail.send",
+                "tool": "office.gmail_send",
+                "arguments": {
+                    "to": [str(email_context.get("to") or "")],
+                    "subject": str(email_context.get("subject") or ""),
+                    "body": str(email_context.get("body") or ""),
+                    "assistant_persona": "Nancy",
+                },
+                "reason": "Matched a Nancy email-review confirmation follow-up.",
+            }
+        return None
+
+    def _nancy_gmail_check_query(self, request_text: str) -> Optional[str]:
+        lowered = re.sub(r"\s+", " ", str(request_text or "").strip().lower())
+        if not lowered:
+            return None
+        timeframe = ""
+        if re.search(r"\b(?:last|past)\s+day\b|\btoday\b|\b24\s*hours?\b", lowered):
+            timeframe = "newer_than:1d"
+        elif re.search(r"\b(?:last|past)\s+week\b|\b7\s*days?\b", lowered):
+            timeframe = "newer_than:7d"
+        elif re.search(r"\b(?:last|past)\s+month\b|\b30\s*days?\b", lowered):
+            timeframe = "newer_than:30d"
+        if re.search(r"\bdid i get (?:a\s+)?reply(?: back)? from (?P<sender>[A-Za-z0-9._%+-]+(?:@[A-Z0-9.-]+\.[A-Z]{2,})?)\??$", lowered, re.IGNORECASE):
+            sender = re.search(r"\bdid i get (?:a\s+)?reply(?: back)? from (?P<sender>[A-Za-z0-9._%+-]+(?:@[A-Z0-9.-]+\.[A-Z]{2,})?)\??$", lowered, re.IGNORECASE)
+            sender_text = str(sender.group("sender") or "").strip(" .?") if sender else ""
+            return f"from:{sender_text}" if sender_text else "in:inbox"
+        status = ""
+        if re.search(r"\b(?:new|unread)\s+(?:messages?|emails?|gmail)\b|\b(?:read|list|show)\s+new\s+messages\b|\bdo i have any new messages\b|\bany new messages\b", lowered):
+            status = "is:unread"
+        elif re.search(r"\b(?:read)\s+(?:messages?|emails?|gmail)\b|\b(?:list|show)\s+read\s+(?:messages?|emails?|gmail)\b", lowered):
+            status = "is:read"
+        list_request = bool(
+            re.search(r"\b(?:check|show|open|read|list|look at|look in)\s+(?:my\s+)?(?:all\s+)?(?:email|emails|gmail|inbox|messages)\b", lowered)
+            or re.search(r"\b(?:email|emails|gmail|inbox|messages)\b.*\b(?:check|show|open|read|list)\b", lowered)
+        )
+        if list_request or status or timeframe:
+            parts = ["in:inbox"]
+            if status:
+                parts.append(status)
+            if timeframe:
+                parts.append(timeframe)
+            return " ".join(parts)
+        return None
+
+    def _recent_nancy_gmail_check_query(self, recent_turns: List[Dict[str, Any]]) -> Optional[str]:
+        for row in reversed(recent_turns[-8:]):
+            role = str(row.get("role") or "").strip().lower()
+            text = str(row.get("text") or "")
+            if role == "user":
+                query = self._nancy_gmail_check_query(text)
+                if query:
+                    return query
+            if role == "assistant" and re.search(r"\bGmail message\(s\)\b|\binbox\b", text, re.IGNORECASE):
+                return "in:inbox"
+        return None
+
+    def _recent_nancy_gmail_result_query(self, recent_turns: List[Dict[str, Any]]) -> Optional[str]:
+        for row in reversed(recent_turns[-8:]):
+            text = str(row.get("text") or "")
+            if str(row.get("role") or "").strip().lower() == "user":
+                query = self._nancy_gmail_check_query(text)
+                if query:
+                    return query
+            if str(row.get("role") or "").strip().lower() == "assistant" and "Gmail message(s)" in text:
+                return "in:inbox"
+        return None
+
+    @staticmethod
+    def _email_from_header_value(value: str) -> str:
+        match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", str(value or ""), re.IGNORECASE)
+        return str(match.group(0) or "").strip() if match else ""
+
+    @staticmethod
+    def _reply_subject(subject: str) -> str:
+        clean = str(subject or "").strip(" .\"'")
+        if not clean:
+            return "Re:"
+        return clean if re.match(r"^re\s*:", clean, re.IGNORECASE) else f"Re: {clean}"
+
+    def _recent_loaded_gmail_reply_context(self, recent_turns: List[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+        for row in reversed(recent_turns[-12:]):
+            if str(row.get("role") or "").strip().lower() != "assistant":
+                continue
+            text = str(row.get("text") or "").strip()
+            if not text or not re.search(r"\bwould you like to reply\?", text, re.IGNORECASE):
+                continue
+            if not re.search(r"\bloaded gmail (?:message|thread)\b", text, re.IGNORECASE):
+                continue
+            from_values = re.findall(r"(?im)^\s*(?:\d+\.\s*)?From:\s*(?P<from>.+?)\s*$", text)
+            subject_values = re.findall(r"(?im)^\s*Subject:\s*(?P<subject>.+?)\s*$", text)
+            if not from_values:
+                continue
+            recipient = self._email_from_header_value(from_values[-1])
+            if not recipient:
+                continue
+            subject = self._reply_subject(subject_values[-1] if subject_values else "")
+            return {"to": recipient, "subject": subject}
+        return None
+
+    def _recent_nancy_gmail_reply_prompt(self, recent_turns: List[Dict[str, Any]]) -> bool:
+        for row in reversed(recent_turns[-6:]):
+            if str(row.get("role") or "").strip().lower() != "assistant":
+                continue
+            if re.match(r"^\s*what would you like to say\?\s*$", str(row.get("text") or ""), re.IGNORECASE):
+                return True
+        return False
+
+    def route_nancy_gmail_reply_request(
+        self,
+        workspace_id: str,
+        request_text: str,
+        *,
+        recent_turns: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        ctx = self.current_context(workspace_id)
+        raw_request = str(request_text or "").strip()
+        normalized_request = re.sub(r"\s+", " ", raw_request)
+        direct_match = self.NANCY_DIRECT_RE.match(normalized_request)
+        if not direct_match and str(ctx.get("active_room") or "").strip() != "my_office":
+            return None
+        raw_direct_match = re.match(r"^(?:hey\s+)?nancy\s*[,.:\-]?\s*(?P<body>[\s\S]+)$", raw_request, re.IGNORECASE)
+        text = str(raw_direct_match.group("body") or "").strip() if direct_match and raw_direct_match else raw_request
+        collapsed = re.sub(r"\s+", " ", text).strip()
+        lowered = collapsed.lower()
+        reply_context = self._recent_loaded_gmail_reply_context(recent_turns)
+        if reply_context is None:
+            return None
+        if re.match(r"^(?:please\s+)?reply\.?$", lowered):
+            return {
+                "route_kind": "clarify",
+                "capability": "nancy.email.reply_body_required",
+                "tool": "office.capability_info",
+                "arguments": {"response_text": "What would you like to say?"},
+                "reason": "Matched a Nancy Gmail reply request after a loaded Gmail message.",
+            }
+        if not self._recent_nancy_gmail_reply_prompt(recent_turns):
+            return None
+        body = str(text or "").strip()
+        if not body:
+            return None
+        return {
+            "route_kind": "tool",
+            "capability": "integration.gmail.send",
+            "tool": "office.gmail_send",
+            "arguments": {
+                "to": [reply_context["to"]],
+                "subject": reply_context["subject"],
+                "body": body,
+                "assistant_persona": "Nancy",
+            },
+            "reason": "Matched a Nancy Gmail reply body follow-up.",
+        }
+
+    def route_nancy_gmail_read_request(
+        self,
+        workspace_id: str,
+        request_text: str,
+        *,
+        recent_turns: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        ctx = self.current_context(workspace_id)
+        if str(ctx.get("active_room") or "").strip() != "my_office":
+            return None
+        text = re.sub(r"\s+", " ", str(request_text or "").strip())
+        lowered = text.lower()
+        query = self._nancy_gmail_check_query(text)
+        if query is None and re.match(r"^(?:check again|try again|refresh|refresh it)\.?$", lowered):
+            query = self._recent_nancy_gmail_check_query(recent_turns)
+        if query is None and re.match(r"^(?:who are they from|who sent them|what are they about|show me the senders)\??$", lowered):
+            query = self._recent_nancy_gmail_result_query(recent_turns)
+        number_match = re.match(r"^(?:read|open|show|view)\s+(?:message\s+|email\s+)?(?:number\s+)?(?P<index>\d+)\b", lowered)
+        if query is None and number_match:
+            return {
+                "route_kind": "tool",
+                "capability": "integration.gmail.read",
+                "tool": "office.gmail_read",
+                "arguments": {"message_index": int(number_match.group("index"))},
+                "reason": "Matched a Nancy numbered Gmail read follow-up.",
+            }
+        if query is None:
+            sender_match = re.search(
+                r"^(?:show|read|open|view)[\s.!,]*(?:me\s+)?(?:the\s+)?(?:message|email)\s+from\s+(?P<sender>[A-Za-z0-9._%+-]+(?:@[A-Z0-9.-]+\.[A-Z]{2,})?)",
+                text,
+                re.IGNORECASE,
+            )
+            if sender_match:
+                sender = str(sender_match.group("sender") or "").strip(" .?!")
+                query = f"from:{sender}" if sender else self._recent_nancy_gmail_result_query(recent_turns)
+        if query is None:
+            return None
+        return {
+            "route_kind": "tool",
+            "capability": "integration.gmail.search",
+            "tool": "office.gmail_search",
+            "arguments": {"query": query},
+            "reason": "Matched a Nancy Gmail inbox check request.",
+        }
+
+    def route_nancy_calendar_request(self, request_text: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip())
+        if not text:
+            return None
+        cancel_match = self.CONFERENCE_ROOM_MEETING_CANCEL_RE.match(text)
+        if cancel_match:
+            return {
+                "route_kind": "tool",
+                "capability": "integration.calendar.cancel",
+                "tool": "office.calendar_cancel",
+                "arguments": {"event_id": str(cancel_match.group("event_id") or "").strip(), "assistant_persona": "Nancy"},
+                "reason": "Matched a direct Nancy calendar cancel request.",
+            }
+        update_match = self.CONFERENCE_ROOM_MEETING_UPDATE_RE.match(text)
+        if update_match:
+            attendees = self._parse_attendee_emails(update_match.group("attendees"))
+            event = {
+                "start": self._conference_room_datetime_payload(update_match.group("date"), update_match.group("start")),
+                "end": self._conference_room_datetime_payload(update_match.group("date"), update_match.group("end")),
+            }
+            title = str(update_match.group("title") or "").strip(" .,:;")
+            if title:
+                event["summary"] = title
+            if attendees:
+                event["attendees"] = [{"email": email} for email in attendees]
+            return {
+                "route_kind": "tool",
+                "capability": "integration.calendar.update",
+                "tool": "office.calendar_update",
+                "arguments": {
+                    "event_id": str(update_match.group("event_id") or "").strip(),
+                    "event": event,
+                    "assistant_persona": "Nancy",
+                },
+                "reason": "Matched a direct Nancy calendar update request.",
+            }
+        match = self.CONFERENCE_ROOM_MEETING_RE.match(text)
+        if match:
+            attendees = self._parse_attendee_emails(match.group("attendees"))
+            event = {
+                "summary": str(match.group("title") or "").strip(" .,:;"),
+                "start": self._conference_room_datetime_payload(match.group("date"), match.group("start")),
+                "end": self._conference_room_datetime_payload(match.group("date"), match.group("end")),
+            }
+            if attendees:
+                event["attendees"] = [{"email": email} for email in attendees]
+            return {
+                "route_kind": "tool",
+                "capability": "integration.calendar.create",
+                "tool": "office.calendar_create",
+                "arguments": {"event": event, "assistant_persona": "Nancy"},
+                "reason": "Matched a direct Nancy calendar create request.",
+            }
+        if self.CONFERENCE_ROOM_MEETING_HINT_RE.search(text):
+            return {
+                "route_kind": "clarify",
+                "capability": "nancy.direct.calendar_details_required",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": (
+                        "Nancy can prepare Calendar actions when you give explicit meeting details. "
+                        "Examples: schedule meeting quarterly planning on 2026-07-03 from 2pm to 3pm with sam@example.com; "
+                        "reschedule meeting evt_12345 to 2026-07-03 from 3pm to 4pm; cancel meeting evt_12345."
+                    )
+                },
+                "reason": "Direct Nancy calendar request was missing scheduling details.",
+            }
+        return None
+
+    def route_cross_room_host_question(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip())
+        if not text or self.is_explicit_room_navigation(text):
+            return None
+        target_text = ""
+        for pattern in self.CROSS_ROOM_HOST_QUESTION_PATTERNS:
+            match = pattern.match(text)
+            if match:
+                target_text = str(match.group("target") or "").strip(" .,:;?!")
+                break
+        if not target_text:
+            return None
+        if re.search(r"\bto\s+\S+", target_text, re.IGNORECASE):
+            return None
+        target_text = re.sub(r"^(?:the|a|an)\s+", "", target_text, flags=re.IGNORECASE)
+        target_room = self.resolve_memo_target_room(target_text)
+        if target_room is None:
+            return None
+        ctx = self.current_context(workspace_id)
+        active_room = str(ctx.get("active_room") or "lobby").strip()
+        active_persona = str(ctx.get("active_persona") or "Receptionist").strip()
+        room_id = str(target_room.get("id") or "").strip()
+        if not room_id or room_id == active_room:
+            return None
+        room_title = str(target_room.get("title") or room_id).strip()
+        persona = str(target_room.get("default_persona") or "").strip()
+        active_room_title = self.room_title_for_id(active_room)
+        response_text = (
+            f"Yes, I can coordinate with {room_title} through the mailroom, but that does not switch rooms. "
+            f"I am still in {active_room_title} as {active_persona}. "
+            f"What should I ask {persona or room_title}?"
+        )
+        return {
+            "route_kind": "clarify",
+            "capability": "memo.dispatch.body_required",
+            "tool": "office.capability_info",
+            "arguments": {
+                "response_text": response_text,
+                "workspace_id": workspace_id,
+                "to_room": room_id,
+                "explicit_persona": persona or None,
+                "active_room": active_room,
+                "active_persona": active_persona,
+            },
+            "reason": f"Asked for a cross-room host contact without memo body for {room_title}.",
+        }
+
+    def route_room_authority_followup(
+        self,
+        workspace_id: str,
+        request_text: str,
+        *,
+        recent_turns: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip())
+        if not text or not self.ROOM_SWITCH_ACK_RE.match(text):
+            return None
+        for row in reversed(recent_turns[-4:]):
+            if str(row.get("role") or "").strip().lower() != "assistant":
+                continue
+            assistant_text = str(row.get("text") or "")
+            if not self.ROOM_SWITCH_CLAIM_RE.search(assistant_text):
+                continue
+            ctx = self.current_context(workspace_id)
+            active_room = str(ctx.get("active_room") or "lobby").strip()
+            active_persona = str(ctx.get("active_persona") or "Receptionist").strip()
+            room_title = self.room_title_for_id(active_room)
+            response_text = (
+                f"I am still in {room_title} as {active_persona}. "
+                "A room or persona change only happens when Veridex runs a real room navigation action. "
+                "Say an explicit command like 'go to Marketing Department' to move, or tell me what to send by memo."
+            )
+            return {
+                "route_kind": "clarify",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                "capability": "room.authority",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": response_text,
+                    "active_room": active_room,
+                    "active_persona": active_persona,
+                },
+                "reason": "Corrected an ambiguous follow-up after an unbacked model-side room switch claim.",
+            }
+        return None
 
     def route_department_collaboration_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         text = re.sub(r"\s+", " ", str(request_text or "").strip())

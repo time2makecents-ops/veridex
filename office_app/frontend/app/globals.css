@@ -85,6 +85,89 @@ button {
   padding-bottom: max(24px, env(safe-area-inset-bottom));
 }
 
+.debug-notes {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.debug-notes-button,
+.debug-notes-panel {
+  pointer-events: auto;
+}
+
+.debug-notes-button {
+  min-height: 42px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 10px 24px rgba(16, 17, 20, 0.18);
+}
+
+.debug-notes-panel {
+  width: min(360px, calc(100vw - 32px));
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 18px 40px rgba(16, 17, 20, 0.22);
+  padding: 12px;
+}
+
+.debug-notes-header,
+.debug-notes-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.debug-notes-title {
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.debug-notes-path,
+.debug-notes-status {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.debug-notes-close,
+.debug-notes-primary,
+.debug-notes-secondary {
+  min-height: 34px;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.debug-notes-close {
+  width: 34px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.debug-notes-textarea {
+  min-height: 150px;
+  margin: 10px 0;
+  border-radius: 8px;
+  padding: 10px;
+  resize: vertical;
+}
+
+.debug-notes-primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.debug-notes-secondary {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .card {
   background: rgba(255, 255, 255, 0.88);
   border: 1px solid rgba(216, 210, 199, 0.9);
@@ -296,6 +379,109 @@ button {
   color: rgba(255, 255, 255, 0.86);
 }
 
+.memo-panel {
+  gap: 16px;
+}
+
+.memo-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(260px, 1.1fr);
+  gap: 14px;
+}
+
+.memo-compose,
+.memo-inbox,
+.memo-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.memo-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.memo-field input,
+.memo-field select,
+.memo-field textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.memo-list {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.memo-list-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+}
+
+.memo-list-button span:first-child {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.memo-list-button span:not(:first-child) {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.memo-list-button.toolbar-button-active span {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.memo-detail {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.memo-detail-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.memo-detail-header span,
+.memo-meta {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.memo-body,
+.memo-reply {
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.memo-reply {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(45, 106, 255, 0.06);
+}
+
+@media (max-width: 760px) {
+  .memo-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .memo-detail-header {
+    flex-direction: column;
+  }
+}
+
 .composer-actions {
   display: flex;
   gap: 10px;
@@ -310,6 +496,11 @@ button {
   line-height: 1;
   display: grid;
   place-items: center;
+}
+
+.composer-inline-button {
+  min-width: 72px;
+  min-height: 42px;
 }
 
 .muted {
@@ -815,6 +1006,112 @@ button {
   word-break: break-word;
 }
 
+.gmail-card-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.gmail-card,
+.email-review-card {
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.36);
+  padding: 10px 12px;
+}
+
+.gmail-card-button {
+  width: 100%;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.gmail-card-button:hover,
+.gmail-card-button:focus-visible {
+  border-color: rgba(96, 165, 250, 0.72);
+  background: rgba(15, 23, 42, 0.52);
+}
+
+.gmail-card-detail {
+  border-color: rgba(226, 232, 240, 0.34);
+  background: rgba(2, 6, 23, 0.28);
+}
+
+.gmail-card-topline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.gmail-card-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: rgba(226, 232, 240, 0.16);
+  color: #f8fafc;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.gmail-card-from,
+.gmail-card-subject,
+.email-review-row strong {
+  overflow-wrap: anywhere;
+}
+
+.gmail-card-from {
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.gmail-card-subject {
+  margin-top: 6px;
+  color: #e2e8f0;
+  font-weight: 650;
+}
+
+.gmail-card-date,
+.gmail-card-snippet {
+  margin-top: 4px;
+  color: #cbd5e1;
+  font-size: 0.88rem;
+}
+
+.gmail-card-body,
+.email-review-body {
+  margin: 10px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  color: #e2e8f0;
+}
+
+.gmail-card-detail .gmail-card-date,
+.gmail-card-detail .gmail-card-body {
+  color: #f8fafc;
+  line-height: 1.5;
+}
+
+.email-review-card {
+  margin-top: 10px;
+}
+
+.email-review-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.email-review-row span {
+  color: #94a3b8;
+}
+
 .download-list {
   display: flex;
   flex-direction: column;
@@ -949,13 +1246,19 @@ button {
 }
 
 .lobby-composer textarea {
+  flex: 1 1 260px;
+  min-width: 0;
   min-height: 84px;
   resize: vertical;
 }
 
 .lobby-composer button {
   align-self: flex-end;
-  min-width: 120px;
+  min-width: 96px;
+}
+
+.lobby-composer .composer-inline-button {
+  min-width: 72px;
 }
 
 .lobby-terminal-image-wrap {

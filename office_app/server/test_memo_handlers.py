@@ -184,6 +184,26 @@ class MemoHandlerTests(unittest.TestCase):
         self.assertIn("Response from Navigator (control_room):", memo_text)
         self.assertIn("System health is nominal.", memo_text)
 
+    def test_mailroom_dispatch_accepts_explicit_subject(self) -> None:
+        router = CapturingModelRouter("System health is nominal.")
+        handlers = build_memo_handlers(self._deps(router))
+
+        response = handlers["mailroom.dispatch"](
+            {
+                "workspace_id": self.workspace_id,
+                "to_room": "control_room",
+                "subject": "System Health Review",
+                "body": "Please assess current system health.",
+            }
+        )
+
+        memo_id = response["structuredContent"]["memo_id"]
+        stored_obj, body = self.memo_service.get_memo(self.workspace_id, memo_id)
+        self.assertEqual(body, "Please assess current system health.")
+        self.assertEqual(stored_obj["subject"], "System Health Review")
+        self.assertEqual(response["structuredContent"]["subject"], "System Health Review")
+        self.assertIn("Memo subject: System Health Review", router.user_prompts[0])
+
     def test_memos_list_includes_reply_status_and_actionable_text(self) -> None:
         router = CapturingModelRouter("System health is nominal.")
         handlers = build_memo_handlers(self._deps(router))

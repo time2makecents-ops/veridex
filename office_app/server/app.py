@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from office_app.server.archive_service import ArchiveService
 from office_app.server.command_router import CommandRouter
+from office_app.server.debug_notes_service import DebugNotesStore
 from office_app.server.errors import error_missing_required_field
 from office_app.server.model_router import ModelRouter, ModelRoutingError
 from office_app.server.receptionist_context_service import ReceptionistContextService
@@ -107,6 +108,7 @@ nancy_service = NancyService(
     store=store,
     utc_now_fn=utc_now,
 )
+debug_notes_store = DebugNotesStore(runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
 
 
 def build_tool_context(tool_name: str, args: Dict[str, Any], definition: ToolDefinition) -> ToolContext:
@@ -283,6 +285,15 @@ class ReceptionistContextUpdateRequest(BaseModel):
     current_prompt_state: Optional[dict[str, Any]] = None
 
 
+class DebugNoteUpdateRequest(BaseModel):
+    page_path: str = Field(..., description="Frontend route path, such as /chat")
+    text: str = Field(default="", description="Developer debugging note text")
+    session_id: Optional[str] = Field(default=None, description="Optional active session id")
+    workspace_id: Optional[str] = Field(default=None, description="Optional active workspace id")
+    active_room: Optional[str] = Field(default=None, description="Optional active room id")
+    active_persona: Optional[str] = Field(default=None, description="Optional active persona name")
+
+
 class IntegrationActionRequest(BaseModel):
     action_kind: str = Field(..., description="Google action: gmail.send, calendar.create, calendar.update, or calendar.cancel")
     payload: Dict[str, Any] = Field(default_factory=dict)
@@ -309,6 +320,31 @@ def health() -> Dict[str, Any]:
 @app.get("/tools")
 def tools() -> Dict[str, Any]:
     return pipeline.tools_response()
+
+
+@app.get("/debug-notes")
+def get_debug_note(page_path: str = "/", active_room: str = "", active_persona: str = "") -> Dict[str, Any]:
+    record = debug_notes_store.get_note(page_path, active_room=active_room, active_persona=active_persona)
+    return {
+        "structuredContent": record,
+        "content": [{"type": "text", "text": f"Loaded debug notes for {record['page_path']}."}],
+    }
+
+
+@app.put("/debug-notes")
+def put_debug_note(payload: DebugNoteUpdateRequest) -> Dict[str, Any]:
+    record = debug_notes_store.save_note(
+        page_path=payload.page_path,
+        text=payload.text,
+        session_id=payload.session_id or "",
+        workspace_id=payload.workspace_id or "",
+        active_room=payload.active_room or "",
+        active_persona=payload.active_persona or "",
+    )
+    return {
+        "structuredContent": record,
+        "content": [{"type": "text", "text": f"Saved debug notes for {record['page_path']}."}],
+    }
 
 
 @app.post("/call")
@@ -1780,6 +1816,13 @@ def _navigator_activation_for_capability(capability: str, *, reason: str = "") -
     return None
 
 
+def _clarify_speaker_for_capability(capability: str) -> Optional[str]:
+    normalized = str(capability or "").strip().lower()
+    if normalized.startswith("nancy."):
+        return "Nancy"
+    return None
+
+
 def _session_room_title(*, workspace_id: str, session_id: str) -> str:
     room_id = ""
     try:
@@ -1807,6 +1850,15 @@ def _entity_grounding_response_text(*, workspace_id: str, session_id: str, entit
 
 
 def _apply_navigator_activation(response: Dict[str, Any], *, capability: str, reason: str = "") -> Dict[str, Any]:
+    capability = str(capability or "").strip()
+    clarify_speaker = _clarify_speaker_for_capability(capability)
+    if clarify_speaker:
+        enriched = dict(response)
+        structured = dict(enriched.get("structuredContent") or {})
+        structured.setdefault("speaker", clarify_speaker)
+        enriched["structuredContent"] = structured
+        return enriched
+
     activation = _navigator_activation_for_capability(capability, reason=reason)
     if activation is None:
         structured = response.get("structuredContent")
@@ -1873,12 +1925,16 @@ def _normalize_model_governance_response(
 def _response_speaker(response: Dict[str, Any]) -> Optional[str]:
     structured = response.get("structuredContent")
     if isinstance(structured, dict):
-        routing = structured.get("routing")
-        if isinstance(routing, dict) and str(routing.get("route_kind") or "").strip().lower() == "clarify":
-            return "Navigator"
         speaker = str(structured.get("speaker") or "").strip()
         if speaker:
             return speaker
+        routing = structured.get("routing")
+        if isinstance(routing, dict):
+            capability_speaker = _clarify_speaker_for_capability(str(routing.get("capability") or ""))
+            if capability_speaker:
+                return capability_speaker
+            if str(routing.get("route_kind") or "").strip().lower() == "clarify":
+                return "Navigator"
         activation = structured.get("navigator_activation")
         if isinstance(activation, dict) and activation.get("activated"):
             return "Navigator"
@@ -1942,8 +1998,12 @@ def refresh_handler_bindings() -> None:
     global handle_image_generate
     global handle_gmail_search
     global handle_gmail_read
+    global handle_gmail_thread_read
     global handle_gmail_draft
     global handle_gmail_send
+    global handle_contact_resolve_email
+    global handle_contact_save
+    global handle_contact_list
     global handle_calendar_list
     global handle_calendar_create
     global handle_calendar_update
@@ -2054,8 +2114,12 @@ def refresh_handler_bindings() -> None:
     handle_image_generate = image_handlers["office.image_generate"]
     handle_gmail_search = integration_handlers["office.gmail_search"]
     handle_gmail_read = integration_handlers["office.gmail_read"]
+    handle_gmail_thread_read = integration_handlers["office.gmail_thread_read"]
     handle_gmail_draft = integration_handlers["office.gmail_draft"]
     handle_gmail_send = integration_handlers["office.gmail_send"]
+    handle_contact_resolve_email = integration_handlers["office.contact_resolve_email"]
+    handle_contact_save = integration_handlers["office.contact_save"]
+    handle_contact_list = integration_handlers["office.contact_list"]
     handle_calendar_list = integration_handlers["office.calendar_list"]
     handle_calendar_create = integration_handlers["office.calendar_create"]
     handle_calendar_update = integration_handlers["office.calendar_update"]
@@ -2103,8 +2167,12 @@ def refresh_handler_bindings() -> None:
             "office.image_generate": handle_image_generate,
             "office.gmail_search": handle_gmail_search,
             "office.gmail_read": handle_gmail_read,
+            "office.gmail_thread_read": handle_gmail_thread_read,
             "office.gmail_draft": handle_gmail_draft,
             "office.gmail_send": handle_gmail_send,
+            "office.contact_resolve_email": handle_contact_resolve_email,
+            "office.contact_save": handle_contact_save,
+            "office.contact_list": handle_contact_list,
             "office.calendar_list": handle_calendar_list,
             "office.calendar_create": handle_calendar_create,
             "office.calendar_update": handle_calendar_update,
@@ -2186,8 +2254,12 @@ register_tools(
     "office.image_generate": handle_image_generate,
     "office.gmail_search": handle_gmail_search,
         "office.gmail_read": handle_gmail_read,
+        "office.gmail_thread_read": handle_gmail_thread_read,
         "office.gmail_draft": handle_gmail_draft,
         "office.gmail_send": handle_gmail_send,
+        "office.contact_resolve_email": handle_contact_resolve_email,
+        "office.contact_save": handle_contact_save,
+        "office.contact_list": handle_contact_list,
         "office.calendar_list": handle_calendar_list,
         "office.calendar_create": handle_calendar_create,
         "office.calendar_update": handle_calendar_update,

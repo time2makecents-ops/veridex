@@ -30,12 +30,13 @@ class MemoService:
         body: str,
         explicit_persona: Optional[str],
         policy_check_fn,
+        subject: Optional[str] = None,
     ) -> Dict[str, Any]:
         to_room_external = normalize_external_room(to_room)
         policy_check_fn(from_room, to_room_external)
         dest_room = validate_room(to_room_external)
 
-        subject = generate_subject(body)
+        memo_subject = str(subject or "").strip() or generate_subject(body)
         memo_id = __import__("uuid").uuid4().hex
         to_persona = explicit_persona or str(dest_room.get("default_persona") or "Navigator")
 
@@ -44,19 +45,19 @@ class MemoService:
             from_room=from_room,
             to_room=to_room_external,
             to_persona=to_persona,
-            subject=subject,
+            subject=memo_subject,
             body=body,
             created_utc=self.utc_now(),
             thread_id=None,
         )
         self.memo_store_for(workspace_id).append(memo)
-        self.store.append_transcript(workspace_id, "system", from_room, f"Memo dispatched to {to_room_external}: {subject}")
+        self.store.append_transcript(workspace_id, "system", from_room, f"Memo dispatched to {to_room_external}: {memo_subject}")
 
         return {
             "memo_id": memo_id,
             "to_room": to_room_external,
             "to_persona": to_persona,
-            "subject": subject,
+            "subject": memo_subject,
             "dest_room_title": dest_room["title"],
         }
 

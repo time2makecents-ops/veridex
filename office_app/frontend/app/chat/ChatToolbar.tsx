@@ -1,16 +1,19 @@
 import { roomById } from "./helpers";
 import { shouldShowMeetingWorkspace } from "./meetingWorkspace";
+import { isNancyButtonHighlighted } from "./shortcutHelpers";
 
 type ChatToolbarProps = {
   activeRoom: string;
   loadMenuOpen: boolean;
   meetingMenuOpen: boolean;
+  nancyMode: boolean;
   recentRooms: string[];
   roomMenuOpen: boolean;
   saveMenuOpen: boolean;
   sessionMenuOpen: boolean;
   onLoadMenuToggle: () => void;
   onMeetingMenuToggle: () => void;
+  onNancyToggle: () => void;
   onRoomMenuToggle: () => void;
   onRoomSelect: (roomId: string) => void;
   onSaveMenuToggle: () => void;
@@ -21,12 +24,14 @@ export function ChatToolbar({
   activeRoom,
   loadMenuOpen,
   meetingMenuOpen,
+  nancyMode,
   recentRooms,
   roomMenuOpen,
   saveMenuOpen,
   sessionMenuOpen,
   onLoadMenuToggle,
   onMeetingMenuToggle,
+  onNancyToggle,
   onRoomMenuToggle,
   onRoomSelect,
   onSaveMenuToggle,
@@ -70,6 +75,13 @@ export function ChatToolbar({
           Meeting
         </button>
       ) : null}
+      <button
+        type="button"
+        className={`ghost toolbar-button ${isNancyButtonHighlighted(activeRoom, nancyMode) ? "toolbar-button-active" : ""}`}
+        onClick={onNancyToggle}
+      >
+        Nancy
+      </button>
       <button
         type="button"
         className={`ghost toolbar-button ${saveMenuOpen ? "toolbar-button-active" : ""}`}

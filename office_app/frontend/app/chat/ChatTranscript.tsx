@@ -1,6 +1,7 @@
 import type { RefObject } from "react";
 
-import type { ChatScope, Message } from "./types";
+import { shouldShowMessageText } from "./helpers";
+import type { ChatScope, EmailReview, GmailMessageDetail, GmailMessageSummary, Message } from "./types";
 
 type ChatTranscriptProps = {
   activePersona: string;
@@ -17,7 +18,52 @@ type ChatTranscriptProps = {
   sessionId: string;
   onChatScopeChange: (scope: ChatScope) => void;
   onConfirmIntegration: (confirmationId: string, room: string, targetSessionId: string) => void;
+  onOpenGmailThread: (message: GmailMessageSummary, room: string, targetSessionId: string) => void;
 };
+
+function GmailSummaryCard({ message, onOpen }: { message: GmailMessageSummary; onOpen: (message: GmailMessageSummary) => void }) {
+  return (
+    <button type="button" className="gmail-card gmail-card-button" onClick={() => onOpen(message)}>
+      <div className="gmail-card-topline">
+        <span className="gmail-card-index">{message.index || ""}</span>
+        <span className="gmail-card-from">{message.from || "Unknown sender"}</span>
+      </div>
+      <div className="gmail-card-subject">{message.subject || "(no subject)"}</div>
+      {message.date ? <div className="gmail-card-date">{message.date}</div> : null}
+      {message.snippet ? <div className="gmail-card-snippet">{message.snippet}</div> : null}
+    </button>
+  );
+}
+
+function GmailDetailCard({ message }: { message: GmailMessageDetail }) {
+  return (
+    <article className="gmail-card gmail-card-detail">
+      <div className="gmail-card-topline">
+        <span className="gmail-card-from">{message.from || "Unknown sender"}</span>
+      </div>
+      {message.to ? <div className="gmail-card-date">To: {message.to}</div> : null}
+      <div className="gmail-card-subject">{message.subject || "(no subject)"}</div>
+      {message.date ? <div className="gmail-card-date">{message.date}</div> : null}
+      {message.body_text ? <pre className="gmail-card-body">{message.body_text}</pre> : null}
+    </article>
+  );
+}
+
+function EmailReviewCard({ review }: { review: EmailReview }) {
+  return (
+    <article className="email-review-card">
+      <div className="email-review-row">
+        <span>To</span>
+        <strong>{review.to.join(", ")}</strong>
+      </div>
+      <div className="email-review-row">
+        <span>Subject</span>
+        <strong>{review.subject || "(no subject)"}</strong>
+      </div>
+      <pre className="email-review-body">{review.body}</pre>
+    </article>
+  );
+}
 
 export function ChatTranscript({
   activePersona,
@@ -34,6 +80,7 @@ export function ChatTranscript({
   sessionId,
   onChatScopeChange,
   onConfirmIntegration,
+  onOpenGmailThread,
 }: ChatTranscriptProps) {
   return (
     <>
@@ -65,7 +112,27 @@ export function ChatTranscript({
               <div className={`chat-role ${isNavigator ? "navigator-role" : ""}`}>
                 {isNavigator ? <strong>Navigator</strong> : speakerLabel}
               </div>
-              <div className="chat-text">{message.text}</div>
+              {shouldShowMessageText(message) ? <div className="chat-text">{message.text}</div> : null}
+              {message.gmailMessages?.length ? (
+                <div className="gmail-card-list">
+                  {message.gmailMessages.map((gmailMessage) => (
+                    <GmailSummaryCard
+                      key={gmailMessage.id || `${gmailMessage.index}`}
+                      message={gmailMessage}
+                      onOpen={(selected) => onOpenGmailThread(selected, message.room || activeRoom, message.sessionId || sessionId)}
+                    />
+                  ))}
+                </div>
+              ) : null}
+              {message.gmailMessage ? <GmailDetailCard message={message.gmailMessage} /> : null}
+              {message.gmailThread?.length ? (
+                <div className="gmail-card-list">
+                  {message.gmailThread.map((gmailMessage) => (
+                    <GmailDetailCard key={gmailMessage.id} message={gmailMessage} />
+                  ))}
+                </div>
+              ) : null}
+              {message.emailReview ? <EmailReviewCard review={message.emailReview} /> : null}
               {message.confirmationId ? (
                 <button
                   type="button"

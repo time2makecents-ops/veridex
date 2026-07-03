@@ -106,6 +106,23 @@ export type ArtifactRecord = {
   [key: string]: unknown;
 };
 
+export type MemoRecord = {
+  memo_id: string;
+  created_utc?: string;
+  from_room?: string;
+  to_room?: string;
+  to_persona?: string;
+  subject?: string;
+  body?: string;
+  reply_status?: string;
+  reply_text?: string;
+  reply_persona?: string;
+  reply_room?: string;
+  replied_utc?: string;
+  is_refusal?: boolean;
+  [key: string]: unknown;
+};
+
 export type UserRecord = {
   user_id: string;
   name?: string;
@@ -415,6 +432,25 @@ export async function listWorkspaceFiles(workspace_id: string): Promise<FileReco
   });
   const structured = response.structuredContent as { files?: unknown } | undefined;
   return Array.isArray(structured?.files) ? (structured.files as FileRecord[]) : [];
+}
+
+export async function sendMemo(args: Record<string, unknown>): Promise<ToolResponse> {
+  return callTool("mailroom.dispatch", args);
+}
+
+export async function listMemos(limit = 25): Promise<MemoRecord[]> {
+  const response = await callTool("office.memos_list", { limit });
+  const structured = response.structuredContent as { memos?: unknown } | undefined;
+  return Array.isArray(structured?.memos) ? (structured.memos as MemoRecord[]) : [];
+}
+
+export async function getMemo(memoId: string): Promise<MemoRecord> {
+  const response = await callTool("office.memo_get", { memo_id: memoId });
+  const structured = response.structuredContent as MemoRecord | undefined;
+  if (structured && typeof structured.memo_id === "string") {
+    return structured;
+  }
+  throw new Error("Unable to load memo.");
 }
 
 export async function activateWorkspace(workspace_id: string): Promise<{ workspace_id: string; session_id?: string; title?: string; description?: string }> {

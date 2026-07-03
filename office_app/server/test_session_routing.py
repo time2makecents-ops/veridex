@@ -41,6 +41,55 @@ from office_app.server.search_service import SearchServiceError
 
 
 class SessionRoutingTests(unittest.TestCase):
+    def test_nancy_clarify_response_keeps_nancy_speaker(self) -> None:
+        response = {
+            "structuredContent": {
+                "response_text": "What subject should I use for this email?",
+                "routing": {
+                    "route_kind": "clarify",
+                    "capability": "nancy.email.subject_required",
+                    "tool": "office.capability_info",
+                    "reason": "Nancy needs the email subject before sending.",
+                },
+            },
+            "content": [{"type": "text", "text": "What subject should I use for this email?"}],
+        }
+
+        enriched = app_module._apply_navigator_activation(
+            response,
+            capability="nancy.email.subject_required",
+            reason="Nancy needs the email subject before sending.",
+        )
+
+        structured = enriched["structuredContent"]
+        self.assertNotIn("navigator_activation", structured)
+        self.assertEqual(app_module._response_speaker(enriched), "Nancy")
+
+    def test_grounding_clarify_response_still_uses_navigator_speaker(self) -> None:
+        response = {
+            "structuredContent": {
+                "response_text": "Veridex does not have verified information about Acme.",
+                "routing": {
+                    "route_kind": "clarify",
+                    "capability": "clarification.entity_grounding",
+                    "tool": "office.capability_info",
+                    "reason": "Verification required before stating unsupported facts.",
+                },
+            },
+            "content": [{"type": "text", "text": "Veridex does not have verified information about Acme."}],
+        }
+
+        enriched = app_module._apply_navigator_activation(
+            response,
+            capability="clarification.entity_grounding",
+            reason="Verification required before stating unsupported facts.",
+        )
+
+        structured = enriched["structuredContent"]
+        self.assertEqual(structured["speaker"], "Navigator")
+        self.assertTrue(structured["navigator_activation"]["activated"])
+        self.assertEqual(app_module._response_speaker(enriched), "Navigator")
+
     def test_nl_create_workspace_executes_tool_and_persists_workspace(self) -> None:
         runtime_dir = Path.cwd() / "office_app" / "runtime" / "_session_routing_test_nl_workspace_create"
         workspaces_dir = runtime_dir / "workspaces"

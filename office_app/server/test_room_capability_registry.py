@@ -54,6 +54,11 @@ class RoomCapabilityRegistryTests(unittest.TestCase):
         self.assertTrue(any("schedule meeting" in example for example in profile["example_requests"]))
         self.assertTrue(any("reschedule meeting" in example for example in profile["example_requests"]))
 
+    def test_google_read_group_allows_gmail_thread_read_from_my_office(self) -> None:
+        self.assertTrue(self.registry.is_tool_allowed("my_office", "office.gmail_search"))
+        self.assertTrue(self.registry.is_tool_allowed("my_office", "office.gmail_read"))
+        self.assertTrue(self.registry.is_tool_allowed("my_office", "office.gmail_thread_read"))
+
     def test_policy_engine_enforces_room_capability_profile(self) -> None:
         engine = ToolPolicyEngine(room_capability_registry=self.registry)
         definition = VERIDEX_TOOL_DEFINITIONS["office.image_generate"]

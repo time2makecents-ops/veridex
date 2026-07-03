@@ -64,6 +64,7 @@
     "google_read": [
       "office.calendar_list",
       "office.gmail_read",
+      "office.gmail_thread_read",
       "office.gmail_search"
     ],
     "google_write_prepare": [

@@ -3,8 +3,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import html
 import json
 import os
+import re
 import secrets
 import sqlite3
 from contextlib import contextmanager
@@ -140,6 +142,21 @@ class IntegrationStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_contacts (
+                    user_id TEXT NOT NULL,
+                    email TEXT NOT NULL,
+                    display_name TEXT NOT NULL DEFAULT '',
+                    aliases_json TEXT NOT NULL DEFAULT '[]',
+                    source TEXT NOT NULL DEFAULT 'manual',
+                    last_seen_at TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, email)
+                )
+                """
+            )
             conn.commit()
 
     @staticmethod
@@ -211,6 +228,48 @@ class IntegrationStore:
             conn.commit()
         return self._row(row) if row else None
 
+    def upsert_contact(self, record: Dict[str, Any]) -> None:
+        columns = (
+            "user_id", "email", "display_name", "aliases_json", "source",
+            "last_seen_at", "created_at", "updated_at",
+        )
+        with self._connection() as conn:
+            existing = conn.execute(
+                "SELECT * FROM user_contacts WHERE user_id = ? AND email = ?",
+                (record["user_id"], record["email"]),
+            ).fetchone()
+            if existing:
+                existing_aliases = json.loads(str(existing["aliases_json"] or "[]"))
+                next_aliases = json.loads(str(record["aliases_json"] or "[]"))
+                aliases = list(dict.fromkeys(str(item).strip() for item in existing_aliases + next_aliases if str(item).strip()))
+                record = dict(record)
+                record["display_name"] = record["display_name"] or str(existing["display_name"] or "")
+                record["aliases_json"] = json.dumps(aliases)
+                record["created_at"] = str(existing["created_at"] or record["created_at"])
+            conn.execute(
+                f"INSERT INTO user_contacts ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)}) "
+                "ON CONFLICT(user_id, email) DO UPDATE SET "
+                "display_name=excluded.display_name, aliases_json=excluded.aliases_json, source=excluded.source, "
+                "last_seen_at=excluded.last_seen_at, updated_at=excluded.updated_at",
+                [record[column] for column in columns],
+            )
+            conn.commit()
+
+    def search_contacts(self, user_id: str, query: str, limit: int = 10) -> list[Dict[str, Any]]:
+        needle = f"%{str(query or '').strip().lower()}%"
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM user_contacts
+                WHERE user_id = ?
+                  AND (lower(email) LIKE ? OR lower(display_name) LIKE ? OR lower(aliases_json) LIKE ?)
+                ORDER BY updated_at DESC, display_name ASC, email ASC
+                LIMIT ?
+                """,
+                (user_id, needle, needle, needle, max(1, min(limit, 50))),
+            ).fetchall()
+        return [self._row(row) for row in rows]
+
 
 class IntegrationService:
     def __init__(self, *, runtime_dir: Path, now_fn=utc_now_iso, env: Optional[Dict[str, str]] = None) -> None:
@@ -223,6 +282,7 @@ class IntegrationService:
         else:
             self.env = env
         self.store = IntegrationStore(Path(runtime_dir) / "veridex.db")
+        self._gmail_result_context: Dict[str, list[Dict[str, Any]]] = {}
 
     def _config(self, key: str) -> str:
         return str(self.env.get(key) or "").strip()
@@ -248,6 +308,85 @@ class IntegrationService:
                 "updated_at": str(row.get("updated_at") or "") if row else "",
             })
         return result
+
+    def google_connection_status(self, user_id: str) -> Dict[str, Any]:
+        for connection in self.list_connections(user_id):
+            if str(connection.get("provider") or "") == GOOGLE_PROVIDER:
+                return connection
+        return {"provider": GOOGLE_PROVIDER, "configured": self._google_configured(), "connected": False, "account_email": "", "scopes": []}
+
+    @staticmethod
+    def _normalize_email(value: str) -> str:
+        match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", str(value or ""), re.IGNORECASE)
+        return str(match.group(0) if match else value or "").strip().lower()
+
+    @staticmethod
+    def _name_from_email_header(value: str) -> str:
+        text = str(value or "").strip()
+        match = re.match(r'\s*"?([^"<]+?)"?\s*<[^>]+>', text)
+        if match:
+            return str(match.group(1) or "").strip()
+        return ""
+
+    @staticmethod
+    def _contact_payload(row: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(row)
+        try:
+            payload["aliases"] = json.loads(str(payload.pop("aliases_json", "[]") or "[]"))
+        except Exception:
+            payload["aliases"] = []
+        return payload
+
+    def save_contact(
+        self,
+        user_id: str,
+        *,
+        email: str,
+        display_name: str = "",
+        aliases: Optional[list[str]] = None,
+        source: str = "manual",
+    ) -> Dict[str, Any]:
+        normalized_email = self._normalize_email(email)
+        if not normalized_email or "@" not in normalized_email:
+            raise HTTPException(status_code=400, detail="A valid contact email is required.")
+        now = self.now()
+        clean_aliases = list(dict.fromkeys(str(item).strip() for item in (aliases or []) if str(item).strip()))
+        record = {
+            "user_id": user_id,
+            "email": normalized_email,
+            "display_name": str(display_name or "").strip(),
+            "aliases_json": json.dumps(clean_aliases),
+            "source": str(source or "manual").strip() or "manual",
+            "last_seen_at": now,
+            "created_at": now,
+            "updated_at": now,
+        }
+        self.store.upsert_contact(record)
+        matches = self.store.search_contacts(user_id, normalized_email, 1)
+        return self._contact_payload(matches[0]) if matches else self._contact_payload(record)
+
+    def search_contacts(self, user_id: str, query: str, limit: int = 10) -> list[Dict[str, Any]]:
+        return [self._contact_payload(row) for row in self.store.search_contacts(user_id, query, limit)]
+
+    def remember_gmail_results(self, user_id: str, session_id: str, messages: list[Dict[str, Any]]) -> None:
+        key = f"{user_id}:{session_id}"
+        self._gmail_result_context[key] = [dict(message) for message in messages]
+
+    def gmail_result_by_index(self, user_id: str, session_id: str, index: int) -> Optional[Dict[str, Any]]:
+        if index < 1:
+            return None
+        messages = self._gmail_result_context.get(f"{user_id}:{session_id}") or []
+        if index > len(messages):
+            return None
+        return dict(messages[index - 1])
+
+    def learn_contact_from_header(self, user_id: str, header_value: str, *, source: str = "gmail") -> Optional[Dict[str, Any]]:
+        email = self._normalize_email(header_value)
+        if not email or "@" not in email:
+            return None
+        name = self._name_from_email_header(header_value)
+        aliases = [name] if name else []
+        return self.save_contact(user_id, email=email, display_name=name, aliases=aliases, source=source)
 
     def begin_google_connect(self, *, user_id: str, session_id: str) -> str:
         if not self._google_configured():
@@ -351,10 +490,114 @@ class IntegrationService:
     def gmail_search(self, user_id: str, query: str, max_results: int = 10) -> list[Dict[str, Any]]:
         params = urlencode({"q": query, "maxResults": max(1, min(max_results, 25))})
         response = self._google_authorized_json(user_id, "GET", f"https://gmail.googleapis.com/gmail/v1/users/me/messages?{params}")
-        return list(response.get("messages") or [])
+        messages: list[Dict[str, Any]] = []
+        for item in list(response.get("messages") or []):
+            message_id = str(item.get("id") or "").strip()
+            if not message_id:
+                continue
+            metadata_params = urlencode(
+                [
+                    ("format", "metadata"),
+                    ("metadataHeaders", "From"),
+                    ("metadataHeaders", "Subject"),
+                    ("metadataHeaders", "Date"),
+                ]
+            )
+            detail = self._google_authorized_json(user_id, "GET", f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}?{metadata_params}")
+            message = {
+                "id": message_id,
+                "threadId": str(detail.get("threadId") or item.get("threadId") or ""),
+                "from": self._gmail_header(detail, "From"),
+                "subject": self._gmail_header(detail, "Subject"),
+                "date": self._gmail_header(detail, "Date"),
+                "snippet": str(detail.get("snippet") or ""),
+            }
+            self.learn_contact_from_header(user_id, str(message.get("from") or ""), source="gmail")
+            messages.append(message)
+        return messages
 
     def gmail_read(self, user_id: str, message_id: str) -> Dict[str, Any]:
-        return self._google_authorized_json(user_id, "GET", f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}?format=full")
+        message = self._google_authorized_json(user_id, "GET", f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}?format=full")
+        result = self._normalize_gmail_message(message, fallback_id=message_id)
+        self.learn_contact_from_header(user_id, result["from"], source="gmail")
+        return result
+
+    def gmail_thread_read(self, user_id: str, thread_id: str) -> list[Dict[str, Any]]:
+        thread = self._google_authorized_json(user_id, "GET", f"https://gmail.googleapis.com/gmail/v1/users/me/threads/{thread_id}?format=full")
+        messages: list[Dict[str, Any]] = []
+        for raw_message in list(thread.get("messages") or []):
+            if not isinstance(raw_message, dict):
+                continue
+            message = self._normalize_gmail_message(raw_message)
+            self.learn_contact_from_header(user_id, message["from"], source="gmail")
+            messages.append(message)
+        return messages
+
+    def _normalize_gmail_message(self, message: Dict[str, Any], *, fallback_id: str = "") -> Dict[str, Any]:
+        return {
+            "id": str(message.get("id") or fallback_id),
+            "threadId": str(message.get("threadId") or ""),
+            "from": self._gmail_header(message, "From"),
+            "to": self._gmail_header(message, "To"),
+            "subject": self._gmail_header(message, "Subject"),
+            "date": self._gmail_header(message, "Date"),
+            "snippet": str(message.get("snippet") or ""),
+            "body_text": self._gmail_plain_text(message),
+            "raw": message,
+        }
+
+    @staticmethod
+    def _gmail_header(message: Dict[str, Any], name: str) -> str:
+        payload = message.get("payload")
+        headers = payload.get("headers") if isinstance(payload, dict) else []
+        for header in headers if isinstance(headers, list) else []:
+            if str(header.get("name") or "").strip().lower() == name.lower():
+                return str(header.get("value") or "").strip()
+        return ""
+
+    @classmethod
+    def _gmail_plain_text(cls, message: Dict[str, Any]) -> str:
+        payload = message.get("payload")
+        payload_dict = payload if isinstance(payload, dict) else {}
+        text = cls._gmail_payload_text(payload_dict, "text/plain")
+        if not text:
+            text = cls._html_to_text(cls._gmail_payload_text(payload_dict, "text/html"))
+        return re.sub(r"\r\n?", "\n", text).strip()
+
+    @classmethod
+    def _gmail_payload_text(cls, payload: Dict[str, Any], preferred_mime_type: str) -> str:
+        body = payload.get("body") if isinstance(payload, dict) else {}
+        data = body.get("data") if isinstance(body, dict) else ""
+        mime_type = str(payload.get("mimeType") or "").lower().split(";", 1)[0].strip()
+        if data and mime_type == preferred_mime_type:
+            return cls._decode_gmail_body_data(str(data))
+        parts = payload.get("parts") if isinstance(payload, dict) else []
+        collected: list[str] = []
+        for part in parts if isinstance(parts, list) else []:
+            if isinstance(part, dict):
+                part_text = cls._gmail_payload_text(part, preferred_mime_type)
+                if part_text:
+                    collected.append(part_text)
+        return "\n\n".join(collected)
+
+    @staticmethod
+    def _decode_gmail_body_data(data: str) -> str:
+        try:
+            padded = data + ("=" * (-len(data) % 4))
+            return base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _html_to_text(value: str) -> str:
+        text = re.sub(r"(?i)<br\s*/?>", "\n", value)
+        text = re.sub(r"(?i)</(?:div|p|blockquote|li|tr|h[1-6])>", "\n", text)
+        text = re.sub(r"(?is)<[^>]+>", "", text)
+        text = html.unescape(text)
+        text = text.replace("\xa0", " ")
+        text = re.sub(r"[ \t]+\n", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
 
     def calendar_list(self, user_id: str, time_min: Optional[str] = None, time_max: Optional[str] = None) -> list[Dict[str, Any]]:
         params: Dict[str, Any] = {"singleEvents": "true", "orderBy": "startTime", "maxResults": 50}
@@ -402,6 +645,8 @@ class IntegrationService:
         body = str(payload.get("body") or "")
         raw = "\r\n".join([f"To: {', '.join(recipients)}", f"Subject: {subject}", "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "", body])
         encoded = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+        for recipient in recipients:
+            self.save_contact(user_id, email=recipient, display_name="", aliases=[], source="gmail_send")
         return self._google_authorized_json(user_id, "POST", "https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {"raw": encoded})
 
     def _post_form(self, url: str, form: Dict[str, Any]) -> Dict[str, Any]:

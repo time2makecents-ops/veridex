@@ -172,6 +172,10 @@ export function deleteSessionRoomPersona(
 }
 
 export function speakerForStructuredResponse(response: ChatStructuredResponse | undefined, fallbackPersona: string): string {
+  const explicitSpeaker = String(response?.speaker || "").trim();
+  if (explicitSpeaker) {
+    return explicitSpeaker;
+  }
   const speaker =
     response?.routing?.route_kind === "clarify" || response?.navigator_activation?.activated
       ? "Navigator"
@@ -215,7 +219,18 @@ export function assistantMessageForResponse(
     sessionId,
     confirmationId: typeof response?.confirmation_id === "string" ? response.confirmation_id : undefined,
     confirmationLabel: confirmationLabelForAction(response?.action_kind),
+    gmailMessages: Array.isArray(response?.gmail_messages) ? response.gmail_messages : undefined,
+    gmailMessage: response?.gmail_message,
+    gmailThread: Array.isArray(response?.gmail_thread) ? response.gmail_thread : undefined,
+    emailReview: response?.email_review,
   });
+}
+
+export function shouldShowMessageText(message: Message): boolean {
+  if (message.gmailMessages?.length || message.gmailMessage || message.gmailThread?.length || message.emailReview) {
+    return false;
+  }
+  return Boolean(message.text);
 }
 
 export function integrationConfirmationMessage(text: string, room: string, sessionId: string): Message {

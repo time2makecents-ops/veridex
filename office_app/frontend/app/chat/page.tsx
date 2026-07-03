@@ -13,6 +13,7 @@ import { ChatToolbar } from "./ChatToolbar";
 import { DocumentReader } from "./DocumentReader";
 import { AttachmentPanel, LoadFilePanel, SaveFilePanel } from "./FilePanels";
 import { MeetingWorkspacePanel } from "./MeetingWorkspacePanel";
+import { MemoPanel } from "./MemoPanel";
 import {
   backendDisconnectedMessage,
   createMessage,
@@ -23,6 +24,7 @@ import {
 } from "./helpers";
 import { RoomDirectoryPanel } from "./RoomDirectoryPanel";
 import { SessionNamePrompt, SessionPanel } from "./SessionPanel";
+import { nextNancyMode } from "./shortcutHelpers";
 import {
   type ChatScope,
   type LobbyState,
@@ -47,6 +49,7 @@ export default function ChatPage() {
   const [providerBadge, setProviderBadge] = useState<ProviderBadge | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatScope, setChatScope] = useState<ChatScope>("room");
+  const [nancyMode, setNancyMode] = useState(false);
   const [confirmingIntegrationId, setConfirmingIntegrationId] = useState("");
   const [confirmedIntegrationIds, setConfirmedIntegrationIds] = useState<string[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
@@ -57,6 +60,7 @@ export default function ChatPage() {
     attachmentOpen,
     loadMenuOpen,
     meetingMenuOpen,
+    memoMenuOpen,
     roomMenuOpen,
     saveMenuOpen,
     sessionMenuOpen,
@@ -70,6 +74,7 @@ export default function ChatPage() {
     toggleAttachmentPanel,
     toggleLoadMenu,
     toggleMeetingMenu,
+    toggleMemoMenu,
     toggleRoomMenu,
     toggleSaveMenu,
     toggleSessionMenu,
@@ -206,7 +211,7 @@ export default function ChatPage() {
     workspaceId,
   });
 
-  const { confirmIntegrationAction, handleDraftKeyDown, handleSubmit } = useChatComposerActions({
+  const { confirmIntegrationAction, handleDraftKeyDown, handleSubmit, openGmailThread } = useChatComposerActions({
     activePersona,
     activeRoom,
     appendMessage,
@@ -216,6 +221,7 @@ export default function ChatPage() {
     draft,
     draftRef,
     loading,
+    nancyMode,
     refreshCurrentThread,
     refreshSessions,
     refreshWorkspaces,
@@ -297,6 +303,10 @@ export default function ChatPage() {
     setMessages((current) => [...current, message]);
   }
 
+  function toggleNancyMode() {
+    setNancyMode((current) => nextNancyMode(activeRoom, current));
+  }
+
   async function handleCreateWorkspaceAndFocus() {
     await handleCreateWorkspace();
   }
@@ -347,12 +357,14 @@ export default function ChatPage() {
             activeRoom={activeRoom}
             loadMenuOpen={loadMenuOpen}
             meetingMenuOpen={meetingMenuOpen}
+            nancyMode={nancyMode}
             recentRooms={recentRooms}
             roomMenuOpen={roomMenuOpen}
             saveMenuOpen={saveMenuOpen}
             sessionMenuOpen={sessionMenuOpen}
             onLoadMenuToggle={toggleLoadMenu}
             onMeetingMenuToggle={toggleMeetingMenu}
+            onNancyToggle={toggleNancyMode}
             onRoomMenuToggle={toggleRoomMenu}
             onRoomSelect={(roomId) => void handleRoomSelect(roomId)}
             onSaveMenuToggle={toggleSaveMenu}
@@ -425,6 +437,7 @@ export default function ChatPage() {
               }}
             />
           ) : null}
+          {memoMenuOpen ? <MemoPanel activePersona={activePersona} activeRoom={activeRoom} sessionId={sessionId} /> : null}
         </div>
       </section>
 
@@ -444,17 +457,23 @@ export default function ChatPage() {
           sessionId={sessionId}
           onChatScopeChange={setChatScope}
           onConfirmIntegration={(confirmationId, room, targetSessionId) => void confirmIntegrationAction(confirmationId, room, targetSessionId)}
+          onOpenGmailThread={(message, room, targetSessionId) => void openGmailThread(message, room, targetSessionId)}
         />
         <ChatComposer
           activePersona={activePersona}
+          activeRoom={activeRoom}
           draft={draft}
           draftRef={draftRef}
           loading={loading}
+          memoMenuOpen={memoMenuOpen}
+          nancyMode={nancyMode}
           onDraftChange={setDraft}
           onFileActionsToggle={() => {
             toggleAttachmentPanel();
           }}
           onKeyDown={handleDraftKeyDown}
+          onMemoToggle={toggleMemoMenu}
+          onNancyToggle={toggleNancyMode}
           onSubmit={handleSubmit}
         />
 

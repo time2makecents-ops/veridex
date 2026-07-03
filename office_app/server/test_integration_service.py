@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,10 @@ from fastapi import HTTPException
 
 from office_app.server.integration_service import IntegrationService, TokenCipher
 from office_app.server.request_pipeline import RequestPipeline
+
+
+def _gmail_body_data(text: str) -> str:
+    return base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii").rstrip("=")
 
 
 class IntegrationServiceTests(unittest.TestCase):
@@ -87,6 +92,148 @@ class IntegrationServiceTests(unittest.TestCase):
         self.assertEqual(calendar["tool"], "office.calendar_list")
         self.assertEqual(gmail["tool"], "office.gmail_search")
         self.assertEqual(gmail["arguments"]["query"], "invoices")
+
+    def test_gmail_search_enriches_messages_with_sender_subject_date_and_snippet(self) -> None:
+        responses = [
+            {"messages": [{"id": "msg_1", "threadId": "thr_1"}]},
+            {
+                "id": "msg_1",
+                "threadId": "thr_1",
+                "snippet": "Latest project status",
+                "payload": {
+                    "headers": [
+                        {"name": "From", "value": "Alex <alex@example.com>"},
+                        {"name": "Subject", "value": "Project update"},
+                        {"name": "Date", "value": "Thu, 2 Jul 2026 08:00:00 -0700"},
+                    ]
+                },
+            },
+        ]
+        with patch.object(self.service, "_google_authorized_json", side_effect=responses):
+            messages = self.service.gmail_search("user_a", "in:inbox", 10)
+        self.assertEqual(messages[0]["id"], "msg_1")
+        self.assertEqual(messages[0]["from"], "Alex <alex@example.com>")
+        self.assertEqual(messages[0]["subject"], "Project update")
+        self.assertEqual(messages[0]["date"], "Thu, 2 Jul 2026 08:00:00 -0700")
+        self.assertEqual(messages[0]["snippet"], "Latest project status")
+        contacts = self.service.search_contacts("user_a", "Alex")
+        self.assertEqual(contacts[0]["email"], "alex@example.com")
+        self.assertEqual(contacts[0]["display_name"], "Alex")
+
+    def test_address_book_save_search_and_alias_resolution(self) -> None:
+        saved = self.service.save_contact(
+            "user_a",
+            email="time2makecents@gmail.com",
+            display_name="James Willis",
+            aliases=["James", "Time2"],
+            source="manual",
+        )
+        self.assertEqual(saved["email"], "time2makecents@gmail.com")
+
+        by_name = self.service.search_contacts("user_a", "James")
+        by_alias = self.service.search_contacts("user_a", "Time2")
+
+        self.assertEqual(by_name[0]["email"], "time2makecents@gmail.com")
+        self.assertEqual(by_alias[0]["display_name"], "James Willis")
+
+    def test_gmail_read_returns_readable_headers_and_plain_text_body(self) -> None:
+        encoded = "SGVsbG8gZnJvbSBHbWFpbC4".rstrip("=")
+        response = {
+            "id": "msg_1",
+            "threadId": "thr_1",
+            "snippet": "Hello from Gmail.",
+            "payload": {
+                "headers": [
+                    {"name": "From", "value": "Alex <alex@example.com>"},
+                    {"name": "To", "value": "JR <jr@example.com>"},
+                    {"name": "Subject", "value": "Project update"},
+                    {"name": "Date", "value": "Thu, 2 Jul 2026 08:00:00 -0700"},
+                ],
+                "parts": [
+                    {
+                        "mimeType": "text/plain",
+                        "body": {"data": encoded},
+                    }
+                ],
+            },
+        }
+        with patch.object(self.service, "_google_authorized_json", return_value=response):
+            message = self.service.gmail_read("user_a", "msg_1")
+        self.assertEqual(message["id"], "msg_1")
+        self.assertEqual(message["from"], "Alex <alex@example.com>")
+        self.assertEqual(message["to"], "JR <jr@example.com>")
+        self.assertEqual(message["subject"], "Project update")
+        self.assertEqual(message["body_text"], "Hello from Gmail.")
+
+    def test_gmail_thread_read_returns_readable_messages(self) -> None:
+        encoded = "SGVsbG8gZnJvbSB0aGUgdGhyZWFkLg".rstrip("=")
+        response = {
+            "id": "thread_1",
+            "messages": [
+                {
+                    "id": "msg_1",
+                    "threadId": "thread_1",
+                    "snippet": "Hello from the thread.",
+                    "payload": {
+                        "headers": [
+                            {"name": "From", "value": "Alex <alex@example.com>"},
+                            {"name": "To", "value": "JR <jr@example.com>"},
+                            {"name": "Subject", "value": "Project update"},
+                            {"name": "Date", "value": "Thu, 2 Jul 2026 08:00:00 -0700"},
+                        ],
+                        "parts": [{"mimeType": "text/plain", "body": {"data": encoded}}],
+                    },
+                }
+            ],
+        }
+        with patch.object(self.service, "_google_authorized_json", return_value=response):
+            messages = self.service.gmail_thread_read("user_a", "thread_1")
+        self.assertEqual(messages[0]["id"], "msg_1")
+        self.assertEqual(messages[0]["threadId"], "thread_1")
+        self.assertEqual(messages[0]["from"], "Alex <alex@example.com>")
+        self.assertEqual(messages[0]["body_text"], "Hello from the thread.")
+
+    def test_gmail_thread_read_prefers_plain_text_over_html_alternative(self) -> None:
+        plain = "Got it! Thanks for testing. : )\n\nJR"
+        html = '<div dir="ltr">Got it! Thanks for testing. : )<br><br>JR</div>'
+        response = {
+            "id": "thread_1",
+            "messages": [
+                {
+                    "id": "msg_1",
+                    "threadId": "thread_1",
+                    "payload": {
+                        "headers": [{"name": "From", "value": "James Willis <time2makecents@gmail.com>"}],
+                        "parts": [
+                            {"mimeType": "text/plain", "body": {"data": _gmail_body_data(plain)}},
+                            {"mimeType": "text/html", "body": {"data": _gmail_body_data(html)}},
+                        ],
+                    },
+                }
+            ],
+        }
+        with patch.object(self.service, "_google_authorized_json", return_value=response):
+            messages = self.service.gmail_thread_read("user_a", "thread_1")
+        self.assertEqual(messages[0]["body_text"], plain)
+        self.assertNotIn("<div", messages[0]["body_text"])
+
+    def test_gmail_read_strips_html_when_plain_text_is_missing(self) -> None:
+        response = {
+            "id": "msg_1",
+            "payload": {
+                "headers": [{"name": "From", "value": "Alex <alex@example.com>"}],
+                "parts": [
+                    {
+                        "mimeType": "text/html",
+                        "body": {"data": _gmail_body_data('<div>Hello&nbsp;JR<br>Line 2</div>')},
+                    }
+                ],
+            },
+        }
+        with patch.object(self.service, "_google_authorized_json", return_value=response):
+            message = self.service.gmail_read("user_a", "msg_1")
+        self.assertEqual(message["body_text"], "Hello JR\nLine 2")
+        self.assertNotIn("<div", message["body_text"])
 
     def test_direct_nancy_email_send_routes_to_confirmation_tool(self) -> None:
         pipeline = RequestPipeline(

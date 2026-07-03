@@ -13,6 +13,31 @@ export type Message = {
   sessionId?: string;
   confirmationId?: string;
   confirmationLabel?: string;
+  gmailMessages?: GmailMessageSummary[];
+  gmailMessage?: GmailMessageDetail;
+  gmailThread?: GmailMessageDetail[];
+  emailReview?: EmailReview;
+};
+
+export type GmailMessageSummary = {
+  id: string;
+  threadId?: string;
+  index?: number;
+  from?: string;
+  subject?: string;
+  date?: string;
+  snippet?: string;
+};
+
+export type GmailMessageDetail = GmailMessageSummary & {
+  to?: string;
+  body_text?: string;
+};
+
+export type EmailReview = {
+  to: string[];
+  subject: string;
+  body: string;
 };
 
 export type ProviderBadge = {
@@ -41,6 +66,10 @@ export type ChatStructuredResponse = {
   fallback_used?: boolean;
   confirmation_id?: string;
   action_kind?: string;
+  gmail_messages?: GmailMessageSummary[];
+  gmail_message?: GmailMessageDetail;
+  gmail_thread?: GmailMessageDetail[];
+  email_review?: EmailReview;
 };
 
 export type DeleteWorkspaceStructuredResponse = {
