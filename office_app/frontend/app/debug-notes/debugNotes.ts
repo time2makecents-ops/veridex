@@ -46,6 +46,14 @@ export function debugNoteContextKey(pagePath: string, activeRoom?: string, activ
   return normalized;
 }
 
+export function debugNoteScopeLabel(record: DebugNoteRecord): string {
+  const pagePath = String(record.page_path || "/");
+  if (String(record.note_scope || "") === "room_persona") {
+    return `${pagePath} / ${record.active_room || ""} / ${record.active_persona || ""}`;
+  }
+  return pagePath;
+}
+
 export function buildDebugNotePayload(input: DebugNotePayloadInput): DebugNoteRecord {
   return {
     page_path: normalizeDebugPagePath(input.pagePath),

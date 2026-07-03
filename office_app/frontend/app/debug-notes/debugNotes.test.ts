@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { buildDebugNotePayload, debugNoteContextKey, normalizeDebugPagePath, prepareDebugNoteForEditing } from "./debugNotes";
+import {
+  buildDebugNotePayload,
+  debugNoteContextKey,
+  debugNoteScopeLabel,
+  normalizeDebugPagePath,
+  prepareDebugNoteForEditing,
+} from "./debugNotes";
 
 describe("normalizeDebugPagePath", () => {
   it("normalizes empty and malformed paths to safe route keys", () => {
@@ -54,6 +60,20 @@ describe("debugNoteContextKey", () => {
       "/chat|sales_department|Sales Director",
     );
     expect(debugNoteContextKey("/profile", "sales_department", "Sales Director")).toBe("/profile");
+  });
+});
+
+describe("debugNoteScopeLabel", () => {
+  it("formats room/persona scoped chat notes consistently", () => {
+    expect(
+      debugNoteScopeLabel({
+        page_path: "/chat",
+        text: "",
+        note_scope: "room_persona",
+        active_room: "my_office",
+        active_persona: "Nancy",
+      }),
+    ).toBe("/chat / my_office / Nancy");
   });
 });
 

@@ -5,7 +5,14 @@ import { usePathname } from "next/navigation";
 
 import { getStoredSessionId } from "@/lib/session";
 
-import { debugNoteContextKey, fetchDebugNote, normalizeDebugPagePath, prepareDebugNoteForEditing, saveDebugNote } from "./debugNotes";
+import {
+  debugNoteContextKey,
+  debugNoteScopeLabel,
+  fetchDebugNote,
+  normalizeDebugPagePath,
+  prepareDebugNoteForEditing,
+  saveDebugNote,
+} from "./debugNotes";
 
 type PageContext = {
   workspaceId: string;
@@ -60,7 +67,7 @@ export function DebugNotesWidget() {
       pendingSelectionRef.current = prepared.selectionStart;
       setText(prepared.text);
       setUpdatedAt(String(record.updated_at || ""));
-      setScopeLabel(String(record.note_scope || "") === "room_persona" ? `${record.page_path} / ${record.active_room} / ${record.active_persona}` : record.page_path);
+      setScopeLabel(debugNoteScopeLabel(record));
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unable to load notes.");
     } finally {
@@ -81,7 +88,7 @@ export function DebugNotesWidget() {
         activePersona: pageContext.activePersona,
       });
       setUpdatedAt(String(record.updated_at || ""));
-      setScopeLabel(String(record.note_scope || "") === "room_persona" ? `${record.page_path} / ${record.active_room} / ${record.active_persona}` : record.page_path);
+      setScopeLabel(debugNoteScopeLabel(record));
       setStatus("Saved");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unable to save notes.");
