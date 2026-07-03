@@ -954,7 +954,7 @@ def handle_natural_language_request(
             return enriched
 
     if routed["route_kind"] == "tool":
-        return execute_tool_route(
+        tool_response = execute_tool_route(
             routed=routed,
             workspace_id=workspace_id,
             session_id=session_id,
@@ -973,6 +973,16 @@ def handle_natural_language_request(
             ),
             response_speaker=_response_speaker,
         )
+        routed_args = dict(routed.get("arguments") or {})
+        if str(routed.get("capability") or "") == "integration.gmail.send":
+            routed_args["clear_pending_nancy_email"] = True
+        _apply_pending_nancy_email_state(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            routed_args=routed_args,
+            response=tool_response,
+        )
+        return tool_response
 
     if routed["route_kind"] == "navigation":
         if routed.get("requires_confirmation"):
@@ -1089,6 +1099,7 @@ def handle_natural_language_request(
         return enriched
 
     if routed["route_kind"] == "clarify":
+        routed_args = dict(routed.get("arguments") or {})
         if str(routed.get("capability") or "") == "session.rename.name_required":
             current_state = kernel.get_state(workspace_id)
             current_state = _set_pending_session_rename(current_state, session_id, request_text)
@@ -1102,13 +1113,13 @@ def handle_natural_language_request(
             current_state = _set_pending_session_list(current_state, session_id, request_text)
             current_state.pop("pending_room_navigation", None)
             store.save_state(workspace_id, current_state)
-        if str(routed.get("arguments", {}).get("clear_pending_break_room_joke") or "").strip().lower() in {"1", "true", "yes"}:
+        if str(routed_args.get("clear_pending_break_room_joke") or "").strip().lower() in {"1", "true", "yes"}:
             current_state = kernel.get_state(workspace_id)
             current_state = _clear_pending_break_room_joke(current_state, session_id)
             store.save_state(workspace_id, current_state)
-        response_text = str(routed.get("arguments", {}).get("response_text") or "Did you mean something else?")
+        response_text = str(routed_args.get("response_text") or "Did you mean something else?")
         if str(routed.get("capability") or "") == "clarification.entity_grounding":
-            entity_subject = str(routed.get("arguments", {}).get("entity_subject") or "").strip()
+            entity_subject = str(routed_args.get("entity_subject") or "").strip()
             if entity_subject:
                 response_text = _entity_grounding_response_text(
                     workspace_id=workspace_id,
@@ -1129,6 +1140,12 @@ def handle_natural_language_request(
             },
             "content": [{"type": "text", "text": response_text}],
         }
+        _apply_pending_nancy_email_state(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            routed_args=routed_args,
+            response=response,
+        )
         response = _apply_navigator_activation(
             response,
             capability=str(routed.get("capability") or ""),
@@ -1722,6 +1739,73 @@ def _clear_pending_session_list(state: Dict[str, Any], session_id: str) -> Dict[
     else:
         state.pop("pending_session_list_by_session", None)
     return state
+
+
+def _pending_nancy_email(state: Dict[str, Any], session_id: str) -> Optional[Dict[str, Any]]:
+    pending_map = state.get("pending_nancy_email_by_session")
+    if not isinstance(pending_map, dict):
+        return None
+    pending = pending_map.get(session_id)
+    return pending if isinstance(pending, dict) else None
+
+
+def _set_pending_nancy_email(state: Dict[str, Any], session_id: str, compose: Dict[str, Any]) -> Dict[str, Any]:
+    pending_map = dict(state.get("pending_nancy_email_by_session") or {})
+    pending_map[session_id] = {
+        "mode": str(compose.get("mode") or "compose"),
+        "stage": str(compose.get("stage") or "").strip(),
+        "to": str(compose.get("to") or "").strip(),
+        "subject": str(compose.get("subject") or ""),
+        "body": str(compose.get("body") or ""),
+        "source": str(compose.get("source") or ""),
+        "ts": utc_now(),
+    }
+    state["pending_nancy_email_by_session"] = pending_map
+    return state
+
+
+def _clear_pending_nancy_email(state: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+    pending_map = state.get("pending_nancy_email_by_session")
+    if not isinstance(pending_map, dict):
+        return state
+    next_map = dict(pending_map)
+    next_map.pop(session_id, None)
+    if next_map:
+        state["pending_nancy_email_by_session"] = next_map
+    else:
+        state.pop("pending_nancy_email_by_session", None)
+    return state
+
+
+def _apply_pending_nancy_email_state(
+    *,
+    workspace_id: str,
+    session_id: str,
+    routed_args: Dict[str, Any],
+    response: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    structured = response.get("structuredContent") if isinstance(response, dict) else None
+    compose = None
+    if isinstance(structured, dict) and isinstance(structured.get("nancy_email_compose"), dict):
+        compose = structured.get("nancy_email_compose")
+    if compose is None and isinstance(routed_args.get("nancy_email_compose"), dict):
+        compose = routed_args.get("nancy_email_compose")
+    clear_requested = bool(routed_args.get("clear_pending_nancy_email"))
+    if isinstance(structured, dict) and structured.get("clear_pending_nancy_email"):
+        clear_requested = True
+    if compose is None and not clear_requested:
+        return response
+    state = kernel.get_state(workspace_id)
+    if clear_requested:
+        state = _clear_pending_nancy_email(state, session_id)
+    if isinstance(compose, dict):
+        state = _set_pending_nancy_email(state, session_id, compose)
+        if isinstance(structured, dict):
+            structured["nancy_email_compose"] = compose
+    if clear_requested and isinstance(structured, dict):
+        structured["clear_pending_nancy_email"] = True
+    store.save_state(workspace_id, state)
+    return response
 
 
 def _pending_workspace_switch(state: Dict[str, Any], session_id: str) -> Optional[Dict[str, Any]]:

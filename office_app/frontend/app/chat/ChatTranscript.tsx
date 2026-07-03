@@ -18,6 +18,7 @@ type ChatTranscriptProps = {
   sessionId: string;
   onChatScopeChange: (scope: ChatScope) => void;
   onConfirmIntegration: (confirmationId: string, room: string, targetSessionId: string) => void;
+  onEmailContact: (contact: ContactRecord, room: string, targetSessionId: string) => void;
   onOpenGmailThread: (message: GmailMessageSummary, room: string, targetSessionId: string) => void;
 };
 
@@ -49,7 +50,7 @@ function GmailDetailCard({ message }: { message: GmailMessageDetail }) {
   );
 }
 
-function ContactCard({ contact }: { contact: ContactRecord }) {
+function ContactCard({ contact, onEmail }: { contact: ContactRecord; onEmail: (contact: ContactRecord) => void }) {
   const label = contact.display_name || contact.email || "Unnamed contact";
   const aliases = Array.isArray(contact.aliases) ? contact.aliases.filter(Boolean).join(", ") : "";
   return (
@@ -58,6 +59,11 @@ function ContactCard({ contact }: { contact: ContactRecord }) {
       <div className="contact-card-email">{contact.email}</div>
       {aliases ? <div className="contact-card-meta">Aliases: {aliases}</div> : null}
       {contact.source ? <div className="contact-card-meta">Source: {contact.source}</div> : null}
+      <div className="contact-card-actions">
+        <button type="button" className="ghost contact-card-action" onClick={() => onEmail(contact)}>
+          Email
+        </button>
+      </div>
     </article>
   );
 }
@@ -93,6 +99,7 @@ export function ChatTranscript({
   sessionId,
   onChatScopeChange,
   onConfirmIntegration,
+  onEmailContact,
   onOpenGmailThread,
 }: ChatTranscriptProps) {
   return (
@@ -148,7 +155,11 @@ export function ChatTranscript({
               {message.contacts?.length ? (
                 <div className="contact-card-list">
                   {message.contacts.map((contact) => (
-                    <ContactCard key={contact.email || contact.display_name} contact={contact} />
+                    <ContactCard
+                      key={contact.email || contact.display_name}
+                      contact={contact}
+                      onEmail={(selected) => onEmailContact(selected, message.room || activeRoom, message.sessionId || sessionId)}
+                    />
                   ))}
                 </div>
               ) : null}

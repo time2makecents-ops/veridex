@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   assistantMessageForResponse,
+  contactEmailRequest,
   confirmationLabelForAction,
   roomStatusText,
   roomPersonaValues,
@@ -197,6 +198,15 @@ describe("confirmation helpers", () => {
 
     expect(message.contacts?.[0].email).toBe("time2makecents@gmail.com");
     expect(shouldShowMessageText(message)).toBe(false);
+  });
+
+  it("builds a Nancy contact email request from the selected contact card", () => {
+    expect(
+      contactEmailRequest({
+        email: "time2makecents@gmail.com",
+        display_name: "James Willis",
+      }),
+    ).toBe("Nancy, email time2makecents@gmail.com");
   });
 
   it("hides duplicate plain text when structured Gmail cards are present", () => {

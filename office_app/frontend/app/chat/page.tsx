@@ -211,7 +211,7 @@ export default function ChatPage() {
     workspaceId,
   });
 
-  const { confirmIntegrationAction, handleDraftKeyDown, handleSubmit, openGmailThread } = useChatComposerActions({
+  const { confirmIntegrationAction, handleDraftKeyDown, handleSubmit, openGmailThread, startEmailToContact } = useChatComposerActions({
     activePersona,
     activeRoom,
     appendMessage,
@@ -457,6 +457,7 @@ export default function ChatPage() {
           sessionId={sessionId}
           onChatScopeChange={setChatScope}
           onConfirmIntegration={(confirmationId, room, targetSessionId) => void confirmIntegrationAction(confirmationId, room, targetSessionId)}
+          onEmailContact={(contact, room, targetSessionId) => void startEmailToContact(contact, room, targetSessionId)}
           onOpenGmailThread={(message, room, targetSessionId) => void openGmailThread(message, room, targetSessionId)}
         />
         <ChatComposer

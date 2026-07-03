@@ -6,6 +6,7 @@ import { clearStoredSessionId } from "@/lib/session";
 
 import {
   assistantMessageForResponse,
+  contactEmailRequest,
   createMessage,
   providerBadgeForResponse,
   roomPersonaValues,
@@ -13,7 +14,7 @@ import {
   workspaceLabelById,
 } from "./helpers";
 import { buildNancyModeRequest, effectiveNancyMode } from "./shortcutHelpers";
-import { type ChatStructuredResponse, type GmailMessageSummary, type Message, type ProviderBadge } from "./types";
+import { type ChatStructuredResponse, type ContactRecord, type GmailMessageSummary, type Message, type ProviderBadge } from "./types";
 
 type UseChatComposerActionsArgs = {
   activePersona: string;
@@ -198,6 +199,24 @@ export function useChatComposerActions({
     [appendMessage, setError],
   );
 
+  const startEmailToContact = useCallback(
+    async (contact: ContactRecord, room: string, targetSessionId: string) => {
+      const requestValue = contactEmailRequest(contact);
+      if (!String(contact.email || "").trim()) {
+        return;
+      }
+      setError("");
+      try {
+        const response = await request(requestValue, targetSessionId);
+        const structuredResponse = response.structuredContent as ChatStructuredResponse | undefined;
+        appendMessage(assistantMessageForResponse(structuredResponse, requestText(response), "Nancy", room, targetSessionId));
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unable to start Nancy email compose.");
+      }
+    },
+    [appendMessage, setError],
+  );
+
   const handleSubmit = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -223,5 +242,6 @@ export function useChatComposerActions({
     handleSubmit,
     openGmailThread,
     sendText,
+    startEmailToContact,
   };
 }

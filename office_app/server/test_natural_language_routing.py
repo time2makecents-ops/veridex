@@ -15,6 +15,7 @@ class DummyKernel:
         transcript_rows: list[dict[str, str]] | None = None,
         grounded_search_by_session: dict[str, dict[str, object]] | None = None,
         pending_break_room_jokes: dict[str, dict[str, str]] | None = None,
+        state: dict[str, object] | None = None,
     ):
         self.active_room = active_room
         self.active_persona = active_persona
@@ -22,6 +23,7 @@ class DummyKernel:
         self.store = DummyStore(transcript_rows or [])
         self.grounded_search_by_session = grounded_search_by_session or {}
         self.pending_break_room_jokes = pending_break_room_jokes or {}
+        self.state = state or {}
 
     def current_context(self, workspace_id: str):
         return {
@@ -34,13 +36,15 @@ class DummyKernel:
         return {"workspaces": []}
 
     def get_state(self, workspace_id: str):
-        return {
+        state = {
             "active_room": self.active_room,
             "active_persona": self.active_persona,
             "gates": self.gates,
             "grounded_search_by_session": self.grounded_search_by_session,
             "pending_break_room_jokes": self.pending_break_room_jokes,
         }
+        state.update(self.state)
+        return state
 
 
 class DummyStore:
@@ -2055,6 +2059,21 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["arguments"]["to"], "time2makecents@gmail.com")
         self.assertIn("what subject should i use", routed["arguments"]["response_text"].lower())
 
+    def test_nancy_contact_card_email_request_asks_for_subject(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="sales_department", active_persona="Sales Director"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "Nancy, email time2makecents@gmail.com", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "nancy.email.subject_required")
+        self.assertEqual(routed["arguments"]["to"], "time2makecents@gmail.com")
+        self.assertEqual(routed["arguments"]["nancy_email_compose"]["stage"], "subject")
+        self.assertEqual(routed["arguments"]["nancy_email_compose"]["source"], "direct")
+
     def test_nancy_message_to_recipient_asks_for_subject_without_reusing_stale_body(self) -> None:
         pipeline = RequestPipeline(
             kernel=DummyKernel(
@@ -2125,6 +2144,95 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["arguments"]["subject"], "this is a test")
         self.assertEqual(routed["arguments"]["body"], "hello from nancy")
         self.assertEqual(routed["arguments"]["assistant_persona"], "Nancy")
+
+    def test_nancy_pending_subject_state_asks_for_body(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                state={
+                    "pending_nancy_email_by_session": {
+                        "sess_1": {
+                            "mode": "compose",
+                            "stage": "subject",
+                            "to": "time2makecents@gmail.com",
+                            "subject": "",
+                            "body": "",
+                            "source": "contact",
+                        }
+                    }
+                },
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "project update", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "nancy.email.body_required")
+        self.assertEqual(routed["arguments"]["to"], "time2makecents@gmail.com")
+        self.assertEqual(routed["arguments"]["subject"], "project update")
+        self.assertEqual(routed["arguments"]["nancy_email_compose"]["stage"], "body")
+
+    def test_nancy_pending_body_state_prepares_gmail_send(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                state={
+                    "pending_nancy_email_by_session": {
+                        "sess_1": {
+                            "mode": "compose",
+                            "stage": "body",
+                            "to": "time2makecents@gmail.com",
+                            "subject": "project update",
+                            "body": "",
+                            "source": "contact",
+                        }
+                    }
+                },
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "body hello from nancy", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "integration.gmail.send")
+        self.assertEqual(routed["tool"], "office.gmail_send")
+        self.assertEqual(routed["arguments"]["to"], ["time2makecents@gmail.com"])
+        self.assertEqual(routed["arguments"]["subject"], "project update")
+        self.assertEqual(routed["arguments"]["body"], "hello from nancy")
+
+    def test_nancy_pending_email_cancel_clears_compose_state(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="my_office",
+                active_persona="Nancy",
+                state={
+                    "pending_nancy_email_by_session": {
+                        "sess_1": {
+                            "mode": "compose",
+                            "stage": "body",
+                            "to": "time2makecents@gmail.com",
+                            "subject": "project update",
+                            "body": "",
+                            "source": "contact",
+                        }
+                    }
+                },
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "cancel", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "nancy.email.cancelled")
+        self.assertTrue(routed["arguments"]["clear_pending_nancy_email"])
 
     def test_nancy_complete_email_request_still_routes_to_gmail_send(self) -> None:
         pipeline = RequestPipeline(

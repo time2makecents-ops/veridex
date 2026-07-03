@@ -205,6 +205,14 @@ def build_integration_handlers(*, integration_service, user_service) -> Dict[str
                 "speaker": "Nancy",
                 "resolved_contact": contact,
                 "response_text": text,
+                "nancy_email_compose": {
+                    "mode": "compose",
+                    "stage": "subject",
+                    "to": email,
+                    "subject": "",
+                    "body": "",
+                    "source": "contact",
+                },
             },
             "content": [{"type": "text", "text": text}],
         }

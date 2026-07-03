@@ -90,6 +90,88 @@ class SessionRoutingTests(unittest.TestCase):
         self.assertTrue(structured["navigator_activation"]["activated"])
         self.assertEqual(app_module._response_speaker(enriched), "Navigator")
 
+    def test_pending_nancy_email_state_is_scoped_by_session(self) -> None:
+        state = {}
+
+        updated = app_module._set_pending_nancy_email(
+            state,
+            "sess_1",
+            {
+                "mode": "compose",
+                "stage": "subject",
+                "to": "time2makecents@gmail.com",
+                "subject": "",
+                "body": "",
+                "source": "contact",
+            },
+        )
+
+        pending = app_module._pending_nancy_email(updated, "sess_1")
+        self.assertIsNotNone(pending)
+        self.assertEqual(pending["stage"], "subject")
+        self.assertEqual(pending["to"], "time2makecents@gmail.com")
+        self.assertIsNone(app_module._pending_nancy_email(updated, "sess_2"))
+
+        cleared = app_module._clear_pending_nancy_email(updated, "sess_1")
+        self.assertNotIn("pending_nancy_email_by_session", cleared)
+
+    def test_pending_nancy_email_state_clears_through_route_state_helper(self) -> None:
+        class FakeKernel:
+            def __init__(self) -> None:
+                self.state = {
+                    "pending_nancy_email_by_session": {
+                        "sess_1": {
+                            "mode": "compose",
+                            "stage": "body",
+                            "to": "time2makecents@gmail.com",
+                            "subject": "Project update",
+                            "body": "",
+                            "source": "direct",
+                        },
+                        "sess_2": {
+                            "mode": "compose",
+                            "stage": "subject",
+                            "to": "other@example.com",
+                            "subject": "",
+                            "body": "",
+                            "source": "direct",
+                        },
+                    }
+                }
+
+            def get_state(self, workspace_id: str) -> dict:
+                return self.state
+
+        class FakeStore:
+            def __init__(self) -> None:
+                self.saved_state = None
+
+            def save_state(self, workspace_id: str, state: dict) -> None:
+                self.saved_state = dict(state)
+
+        original_kernel = app_module.kernel
+        original_store = app_module.store
+        fake_kernel = FakeKernel()
+        fake_store = FakeStore()
+        try:
+            app_module.kernel = fake_kernel
+            app_module.store = fake_store
+            app_module._apply_pending_nancy_email_state(
+                workspace_id="default",
+                session_id="sess_1",
+                routed_args={"clear_pending_nancy_email": True},
+                response={"structuredContent": {"email_review": {"to": ["time2makecents@gmail.com"]}}},
+            )
+        finally:
+            app_module.kernel = original_kernel
+            app_module.store = original_store
+
+        pending_map = fake_kernel.state.get("pending_nancy_email_by_session")
+        self.assertIsInstance(pending_map, dict)
+        self.assertNotIn("sess_1", pending_map)
+        self.assertIn("sess_2", pending_map)
+        self.assertEqual(fake_store.saved_state, fake_kernel.state)
+
     def test_nl_create_workspace_executes_tool_and_persists_workspace(self) -> None:
         runtime_dir = Path.cwd() / "office_app" / "runtime" / "_session_routing_test_nl_workspace_create"
         workspaces_dir = runtime_dir / "workspaces"

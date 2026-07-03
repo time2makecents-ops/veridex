@@ -1,6 +1,6 @@
 # Veridex TODO
 
-Last updated: 2026-07-01
+Last updated: 2026-07-03
 
 ## Current Focus
 
@@ -9,6 +9,8 @@ Last updated: 2026-07-01
 - Preserve the current stripped-down UI until backend behavior is reliable.
 - Make normal chat feel conversational while keeping explicit system commands deterministic.
 - Keep startup and smoke testing simple enough to diagnose without guessing.
+- Current branch: `feat/routing-followup-reliability`.
+- Current active slice: Nancy guided pending-email compose state and contact-card Email entry, building on the routing follow-up reliability work.
 
 ## Immediate Priorities
 
@@ -17,17 +19,19 @@ Last updated: 2026-07-01
    - Explicit commands should still route deterministically.
    - Ambiguous requests should ask a clarifying question.
    - Recent chat context should only be used for clear follow-ups, not broad room/capability questions.
-   - Active slice: ambiguous short choice follow-ups now fail closed after unverified/no-info entity answers while anchored option-list follow-ups still rewrite safely.
+   - Routing follow-up reliability is in place for ambiguous short choice follow-ups after unverified/no-info entity answers while anchored option-list follow-ups still rewrite safely.
 
 2. Request orchestration cleanup
    - Search/tool execution flow is now extracted from `app.py` into a focused helper module.
    - Keep `/request` focused on request lifecycle and transcript recording.
    - Keep routing decisions in one testable layer.
+   - Full validation should be re-run after the next backend cleanup slice.
 
 3. Frontend chat cleanup follow-up
    - Initial `chat/page.tsx` split and workspace/session hook extraction are complete as of `f1919ed`.
    - Keep future cleanup narrow and behavior-preserving.
    - Workspace/session lifecycle logic has now been split into focused hooks; keep any further cleanup narrow and behavior-preserving.
+   - Nancy now has guided pending-email compose state in chat and a contact-card Email action entry point.
 
 4. Runtime/Git hygiene
    - Remove generated runtime state from tracked source control in a careful patch. (`office_app/runtime/` is already out of the Git index, and `office_app/backend/incident_log.csv` is now ignored and removed from the index without deleting the local file.)
@@ -35,16 +39,16 @@ Last updated: 2026-07-01
    - Keep `.env.local`, local certs, storage, logs, and runtime databases ignored.
 
 5. Documentation alignment
-   - `README.md` and `VERIDEX_THREAD_HANDOFF.md` now track the merged PR #1 baseline, the active routing follow-up reliability branch, and the onboarding camera fallback.
+   - `VERIDEX_THREAD_HANDOFF.md` now tracks branch `feat/routing-followup-reliability`, the Nancy guided email compose/contact-card email slice, and the latest validation baseline.
    - Treat older architecture docs as design intent unless recently updated.
    - Update handoff docs after major stabilization milestones.
 
 ## Suggested Future Steps
 
-1. Finish and review the routing follow-up reliability slice
-   - Keep the branch small and backend-focused.
-   - Confirm ambiguous short follow-ups fail closed without breaking anchored list, grounded search, session-search, or explicit search-confirmation follow-ups.
-   - Confirm onboarding remains usable without camera permission or camera capture.
+1. Finish and review the Nancy compose/contact-card slice
+   - Keep the branch `feat/routing-followup-reliability` focused on the current reliability and Nancy email-entry behavior.
+   - Review the guided pending-email compose state, contact-card Email action, and validation behavior together.
+   - Re-run full validation after backend cleanup is complete.
    - Open the next PR as a focused stabilization review instead of another large baseline.
 
 2. Run a deeper behavior pass before more refactors

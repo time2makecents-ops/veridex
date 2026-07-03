@@ -6,6 +6,7 @@ import {
   DEFAULT_ROOM_ID,
   type ChatScope,
   type ChatStructuredResponse,
+  type ContactRecord,
   type DeleteSessionStructuredResponse,
   type GmailMessageDetail,
   type Message,
@@ -289,6 +290,11 @@ export function integrationConfirmationMessage(text: string, room: string, sessi
     room,
     sessionId,
   });
+}
+
+export function contactEmailRequest(contact: ContactRecord): string {
+  const email = String(contact.email || "").trim();
+  return `Nancy, email ${email}`;
 }
 
 export function fileSortLabel(file: FileRecord): string {

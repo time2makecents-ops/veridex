@@ -1086,6 +1086,18 @@ button {
   font-size: 0.88rem;
 }
 
+.contact-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.contact-card-action {
+  min-height: 32px;
+  padding: 6px 12px;
+  color: #f8fafc;
+}
+
 .gmail-card-subject {
   margin-top: 6px;
   color: #e2e8f0;

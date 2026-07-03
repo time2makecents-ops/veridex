@@ -3,7 +3,7 @@ Project: Veridex (formerly Office-App)
 Developer: JR
 Current branch: `feat/routing-followup-reliability`
 Current base commit: `f6bd164 Merge pull request #1 from time2makecents-ops/fix/stabilization-setup`
-Remote: not pushed
+Remote: tracks `origin/feat/routing-followup-reliability`
 Environment: FastAPI backend + Next.js frontend
 Purpose: Preserve system intent, architecture, and implementation state so development can continue in a new thread without design drift.
 
@@ -18,17 +18,21 @@ Use this when resuming on another computer.
 - PR #1 has been merged into `dev` at `f6bd164`.
 - Branch `feat/routing-followup-reliability` starts from the merged PR #1 baseline.
 - The merged stabilization baseline contains chat cleanup, request-tool extraction, runtime Git hygiene, room capability UI, governed room workflows, memo hardening, `/call` session-header propagation, and Conference Room internal meeting-state persistence through `MeetingStateStore`.
-- The active slice keeps `/request` follow-up routing fail-closed for ambiguous short choice follow-ups after unverified/no-info entity answers, while preserving anchored list, grounded search, session-search, and explicit search-confirmation follow-ups.
+- The branch now includes the routing follow-up reliability work plus the current Nancy email-entry slice.
+- The current active slice adds Nancy guided pending-email compose state in chat and a contact-card Email action entry point.
+- The routing follow-up reliability work keeps `/request` follow-up routing fail-closed for ambiguous short choice follow-ups after unverified/no-info entity answers, while preserving anchored list, grounded search, session-search, and explicit search-confirmation follow-ups.
 - The onboarding page now lets users continue to PIN setup without a face photo when camera permission, preview, or capture fails. Backend and frontend proxy onboarding were verified with missing `face_photo_data`.
 - `office_app/backend/incident_log.csv` is intentionally removed from the Git index and ignored, but the local runtime file should remain on disk.
 
-Fresh validation for the active routing follow-up slice:
+Latest validation baseline before the remaining backend cleanup:
 
 - `git diff --check` passed
-- `python -m unittest discover -s office_app/server -p "test_*.py"` passed with 371 tests
-- `npm.cmd test` passed with 19 frontend tests
+- `python -m unittest discover -s office_app/server -p "test_*.py"` passed with 441 tests
+- frontend `vitest` passed with 41 tests
 - `npm.cmd run build` passed
 - `C:\Office-App\office_app\smoke_test.ps1` passed
+
+Re-run full validation after the backend cleanup slice is complete.
 
 ## Start
 
@@ -109,6 +113,12 @@ Reliability checkpoint:
 - `/call` now forwards `X-Session-Id` into tool arguments when `session_id` is not already present, so room switches through tool calls persist into the next `/request`.
 - A user-style pass with isolated test data covered room switching, memo list/read, Sales/Marketing research routing, file upload/list/get/download, session/workspace lifecycle, calendar confirmation preparation, and Conference Room meeting-state persistence.
 
+Nancy email compose checkpoint:
+
+- Nancy now supports guided pending-email compose state in chat instead of treating email preparation as a one-shot routing-only flow.
+- Contact cards now expose an Email action that starts the Nancy email-entry path from the selected contact.
+- The current branch for this work is `feat/routing-followup-reliability`.
+
 Next optional cleanup:
 
 - Continue only if more refinement is worth the token/time cost.
@@ -116,6 +126,7 @@ Next optional cleanup:
 - `/request` tool-route execution is now split into `request_tool_execution.py`, so search/tool orchestration no longer lives inline in `app.py`.
 - Minimal frontend helper coverage now runs through `npm.cmd test` with `vitest`.
 - `office_app/backend/incident_log.csv` is now intended to stay local runtime state and is removed from the Git index without deleting the local file.
+- Re-run the full backend, frontend, build, and smoke validation set after backend cleanup is complete.
 - Avoid broad refactors unless a failing behavior or specific feature requires them.
 
 ## Last verified behavior

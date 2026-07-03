@@ -1433,6 +1433,7 @@ class RequestPipeline:
             workspace_id,
             request_text,
             recent_turns=recent_turns,
+            session_id=session_id,
         )
         if nancy_email_compose_route is not None:
             return {
@@ -2309,6 +2310,12 @@ class RequestPipeline:
             re.IGNORECASE,
         )
         if not match:
+            match = re.search(
+                r"\b(?:email|message)\s+(?:[^@\s.,]+\s+(?:at\s+)?)?(?P<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b",
+                text,
+                re.IGNORECASE,
+            )
+        if not match:
             return None
         subject_match = re.search(r"\bsubject(?:\s+line)?\s*(?:is|:)?\s*(?P<subject>.+?)(?=\s+\bbody\s*(?:is|:)?\s*|$)", text, re.IGNORECASE)
         body_match = re.search(r"\bbody\s*(?:is|:)?\s*(?P<body>.+)$", text, re.IGNORECASE)
@@ -2352,6 +2359,43 @@ class RequestPipeline:
                 }
         return None
 
+    def _pending_nancy_email(self, workspace_id: str, session_id: Optional[str]) -> Optional[Dict[str, str]]:
+        active_session = str(session_id or "").strip()
+        if not active_session or not hasattr(self.kernel, "get_state"):
+            return None
+        try:
+            state = self.kernel.get_state(workspace_id)
+        except Exception:
+            return None
+        pending_map = state.get("pending_nancy_email_by_session") if isinstance(state, dict) else None
+        if not isinstance(pending_map, dict):
+            return None
+        pending = pending_map.get(active_session)
+        if not isinstance(pending, dict):
+            return None
+        return {str(key): str(value or "") for key, value in pending.items()}
+
+    def _nancy_email_compose_state(
+        self,
+        *,
+        stage: str,
+        to: str = "",
+        subject: Optional[str] = None,
+        body: Optional[str] = None,
+        source: str = "direct",
+        mode: str = "compose",
+        base: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, str]:
+        existing = dict(base or {})
+        return {
+            "mode": str(existing.get("mode") or mode or "compose"),
+            "stage": str(stage or "").strip(),
+            "to": str(to or existing.get("to") or "").strip(),
+            "subject": str(existing.get("subject") if subject is None else subject or ""),
+            "body": str(existing.get("body") if body is None else body or ""),
+            "source": str(existing.get("source") or source or ""),
+        }
+
     def _nancy_subject_from_followup(self, request_text: str) -> str:
         text = re.sub(r"\s+", " ", str(request_text or "").strip())
         text = re.sub(r"^(?:the\s+)?subject(?:\s+line)?\s*(?:should\s+read|should\s+be|is|:)?\s*", "", text, flags=re.IGNORECASE).strip()
@@ -2386,6 +2430,7 @@ class RequestPipeline:
         request_text: str,
         *,
         recent_turns: List[Dict[str, Any]],
+        session_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         ctx = self.current_context(workspace_id)
         normalized_request = re.sub(r"\s+", " ", str(request_text or "").strip())
@@ -2393,6 +2438,80 @@ class RequestPipeline:
         if not direct_match and str(ctx.get("active_room") or "").strip() != "my_office":
             return None
         compose_text = str(direct_match.group("body") or "").strip() if direct_match else normalized_request
+        pending = self._pending_nancy_email(workspace_id, session_id)
+        if pending is not None:
+            stage = str(pending.get("stage") or "").strip()
+            to = str(pending.get("to") or "").strip()
+            subject = str(pending.get("subject") or "").strip()
+            if re.match(r"^(?:cancel|never mind|nevermind|stop|abort)\.?$", compose_text, re.IGNORECASE):
+                return {
+                    "route_kind": "clarify",
+                    "capability": "nancy.email.cancelled",
+                    "tool": "office.capability_info",
+                    "arguments": {
+                        "response_text": "Okay. I cancelled the email draft.",
+                        "clear_pending_nancy_email": True,
+                    },
+                    "reason": "Cancelled pending Nancy email compose state.",
+                }
+            if stage == "recipient":
+                recipient_match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", compose_text, re.IGNORECASE)
+                if recipient_match:
+                    to = str(recipient_match.group(0) or "").strip()
+                    return {
+                        "route_kind": "clarify",
+                        "capability": "nancy.email.subject_required",
+                        "tool": "office.capability_info",
+                        "arguments": {
+                            "response_text": f"What subject should I use for the email to {to}?",
+                            "to": to,
+                            "nancy_email_compose": self._nancy_email_compose_state(
+                                stage="subject",
+                                to=to,
+                                subject="",
+                                body="",
+                                base=pending,
+                            ),
+                        },
+                        "reason": "Matched a recipient follow-up for pending Nancy email compose.",
+                    }
+            if stage == "subject" and to:
+                next_subject = self._nancy_subject_from_followup(compose_text)
+                if next_subject:
+                    return {
+                        "route_kind": "clarify",
+                        "capability": "nancy.email.body_required",
+                        "tool": "office.capability_info",
+                        "arguments": {
+                            "response_text": f"What should the body say?\nTo: {to}\nSubject: {next_subject}",
+                            "to": to,
+                            "subject": next_subject,
+                            "nancy_email_compose": self._nancy_email_compose_state(
+                                stage="body",
+                                to=to,
+                                subject=next_subject,
+                                body="",
+                                base=pending,
+                            ),
+                        },
+                        "reason": "Matched a subject follow-up for pending Nancy email compose.",
+                    }
+            if stage in {"body", "reply_body"} and to and subject:
+                body = self._nancy_body_from_followup(compose_text)
+                if body:
+                    return {
+                        "route_kind": "tool",
+                        "capability": "integration.gmail.send",
+                        "tool": "office.gmail_send",
+                        "arguments": {
+                            "to": [to],
+                            "subject": subject,
+                            "body": body,
+                            "assistant_persona": "Nancy",
+                            "clear_pending_nancy_email": True,
+                        },
+                        "reason": "Matched a body follow-up for pending Nancy email compose.",
+                    }
         if re.match(r"^(?:please\s+)?(?:help me\s+)?(?:compose|write|draft)\s+(?:an?\s+)?(?:email|gmail|message)\.?$", compose_text, re.IGNORECASE):
             return {
                 "route_kind": "clarify",
@@ -2400,6 +2519,7 @@ class RequestPipeline:
                 "tool": "office.capability_info",
                 "arguments": {
                     "response_text": "Who should I send it to?",
+                    "nancy_email_compose": self._nancy_email_compose_state(stage="recipient", source="guided"),
                 },
                 "reason": "Nancy guided email compose request needs a recipient.",
             }
@@ -2424,6 +2544,7 @@ class RequestPipeline:
                     "arguments": {
                         "response_text": f"What subject should I use for the email to {to}?",
                         "to": to,
+                        "nancy_email_compose": self._nancy_email_compose_state(stage="subject", to=to, source="direct"),
                     },
                     "reason": "Nancy email request included a recipient but no subject.",
                 }
@@ -2435,6 +2556,12 @@ class RequestPipeline:
                     "response_text": f"What should the body say?\nTo: {to}\nSubject: {subject}",
                     "to": to,
                     "subject": subject,
+                    "nancy_email_compose": self._nancy_email_compose_state(
+                        stage="body",
+                        to=to,
+                        subject=subject,
+                        source="direct",
+                    ),
                 },
                 "reason": "Nancy email request included recipient and subject but no body.",
             }
@@ -2457,6 +2584,13 @@ class RequestPipeline:
                     "to": to,
                     "subject": subject,
                     "body": body,
+                    "nancy_email_compose": self._nancy_email_compose_state(
+                        stage="review",
+                        to=to,
+                        subject=subject,
+                        body=body,
+                        source="guided",
+                    ),
                 },
                 "reason": "Matched a Nancy guided email message follow-up.",
             }
@@ -2472,6 +2606,12 @@ class RequestPipeline:
                     "response_text": f"What should the body say?\nTo: {to}\nSubject: {subject}",
                     "to": to,
                     "subject": subject,
+                    "nancy_email_compose": self._nancy_email_compose_state(
+                        stage="body",
+                        to=to,
+                        subject=subject,
+                        source="guided",
+                    ),
                 },
                 "reason": "Matched a Nancy email subject follow-up.",
             }
