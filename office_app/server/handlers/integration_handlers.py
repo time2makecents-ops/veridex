@@ -1,11 +1,40 @@
 from __future__ import annotations
 
+import html
+import re
 from typing import Any, Dict
 
 from fastapi import HTTPException
 
 
 def build_integration_handlers(*, integration_service, user_service) -> Dict[str, Any]:
+    def clean_gmail_body_text(value: Any) -> str:
+        text = re.sub(r"\r\n?", "\n", str(value or "")).strip()
+        if not text:
+            return ""
+        html_match = re.search(r"(?is)<(?:html|body|div|span|blockquote|br|p|table|a)\b", text)
+        if html_match:
+            plain_before_html = text[:html_match.start()].strip()
+            if plain_before_html:
+                text = plain_before_html
+            else:
+                text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+                text = re.sub(r"(?i)</(?:div|p|blockquote|li|tr|h[1-6])>", "\n", text)
+                text = re.sub(r"(?is)<[^>]+>", "", text)
+                text = html.unescape(text)
+        text = re.split(r"(?im)^\s*On .+? wrote:\s*$", text, maxsplit=1)[0].strip()
+        text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith(">"))
+        text = text.replace("\xa0", " ")
+        text = re.sub(r"[ \t]+\n", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
+
+    def clean_gmail_message(message: Dict[str, Any]) -> Dict[str, Any]:
+        cleaned = dict(message)
+        if "body_text" in cleaned:
+            cleaned["body_text"] = clean_gmail_body_text(cleaned.get("body_text"))
+        return cleaned
+
     def user_id_for(args: Dict[str, Any]) -> str:
         session_id = str(args.get("session_id") or "").strip()
         if not session_id:
@@ -47,20 +76,14 @@ def build_integration_handlers(*, integration_service, user_service) -> Dict[str
         messages = integration_service.gmail_search(user_id, query, int(args.get("max_results") or 10))
         if session_id and hasattr(integration_service, "remember_gmail_results"):
             integration_service.remember_gmail_results(user_id, session_id, messages)
-        lines = [f"Found {len(messages)} Gmail message(s)."]
         for index, message in enumerate(messages, start=1):
             message["index"] = index
-            sender = str(message.get("from") or "Unknown sender").strip()
-            subject = str(message.get("subject") or "(no subject)").strip()
-            date = str(message.get("date") or "").strip()
-            snippet = str(message.get("snippet") or "").strip()
-            line = f"{index}. {sender}\n   Subject: {subject}"
-            if date:
-                line += f"\n   Date: {date}"
-            if snippet:
-                line += f"\n   Preview: {snippet}"
-            lines.append(line)
-        return {"structuredContent": {"messages": messages, "gmail_messages": messages}, "content": [{"type": "text", "text": "\n\n".join(lines)}]}
+        text = (
+            f"Found {len(messages)} Gmail message(s). Select an email card from the email cards to open the thread."
+            if messages
+            else "Found 0 Gmail message(s)."
+        )
+        return {"structuredContent": {"messages": messages, "gmail_messages": messages}, "content": [{"type": "text", "text": text}]}
 
     def gmail_read(args: Dict[str, Any]) -> Dict[str, Any]:
         message_id = str(args.get("message_id") or "").strip()
@@ -75,7 +98,7 @@ def build_integration_handlers(*, integration_service, user_service) -> Dict[str
             message_id = str((selected or {}).get("id") or "").strip()
         if not message_id:
             raise HTTPException(status_code=400, detail="Gmail message_id is required.")
-        message = integration_service.gmail_read(user_id_for(args), message_id)
+        message = clean_gmail_message(integration_service.gmail_read(user_id_for(args), message_id))
         lines = [
             "Loaded Gmail message.",
             f"From: {message.get('from') or 'Unknown sender'}",
@@ -84,9 +107,6 @@ def build_integration_handlers(*, integration_service, user_service) -> Dict[str
         ]
         if message.get("date"):
             lines.append(f"Date: {message.get('date')}")
-        body = str(message.get("body_text") or message.get("snippet") or "").strip()
-        if body:
-            lines.extend(["", body])
         lines.extend(["", "Would you like to reply?"])
         return {"structuredContent": {"message": message, "gmail_message": message}, "content": [{"type": "text", "text": "\n".join(lines)}]}
 
@@ -103,20 +123,18 @@ def build_integration_handlers(*, integration_service, user_service) -> Dict[str
             thread_id = str((selected or {}).get("threadId") or "").strip()
         if not thread_id:
             raise HTTPException(status_code=400, detail="Gmail thread_id is required.")
-        messages = integration_service.gmail_thread_read(user_id_for(args), thread_id)
+        messages = [clean_gmail_message(message) for message in integration_service.gmail_thread_read(user_id_for(args), thread_id)]
         lines = [f"Loaded Gmail thread with {len(messages)} message(s)."]
-        for index, message in enumerate(messages, start=1):
+        if messages:
+            latest = messages[-1]
             lines.extend([
                 "",
-                f"{index}. From: {message.get('from') or 'Unknown sender'}",
-                f"   To: {message.get('to') or ''}",
-                f"   Subject: {message.get('subject') or '(no subject)'}",
+                f"From: {latest.get('from') or 'Unknown sender'}",
+                f"To: {latest.get('to') or ''}",
+                f"Subject: {latest.get('subject') or '(no subject)'}",
             ])
-            if message.get("date"):
-                lines.append(f"   Date: {message.get('date')}")
-            body = str(message.get("body_text") or message.get("snippet") or "").strip()
-            if body:
-                lines.extend(["", body])
+            if latest.get("date"):
+                lines.append(f"Date: {latest.get('date')}")
         lines.extend(["", "Would you like to reply?"])
         return {
             "structuredContent": {
@@ -210,14 +228,12 @@ def build_integration_handlers(*, integration_service, user_service) -> Dict[str
     def contact_list(args: Dict[str, Any]) -> Dict[str, Any]:
         query = str(args.get("query") or "").strip()
         contacts = integration_service.search_contacts(user_id_for(args), query or "@", int(args.get("max_results") or 20))
-        lines = [f"Found {len(contacts)} contact(s)."]
-        for index, contact in enumerate(contacts, start=1):
-            label = str(contact.get("display_name") or contact.get("email") or "").strip()
-            email = str(contact.get("email") or "").strip()
-            aliases = ", ".join(str(item) for item in contact.get("aliases") or [])
-            suffix = f" ({aliases})" if aliases else ""
-            lines.append(f"{index}. {label} <{email}>{suffix}")
-        return {"structuredContent": {"speaker": "Nancy", "contacts": contacts}, "content": [{"type": "text", "text": "\n".join(lines)}]}
+        text = (
+            f"Found {len(contacts)} contact(s). Select from the contact cards when composing with Nancy."
+            if contacts
+            else "Found 0 contact(s)."
+        )
+        return {"structuredContent": {"speaker": "Nancy", "contacts": contacts}, "content": [{"type": "text", "text": text}]}
 
     def calendar_list(args: Dict[str, Any]) -> Dict[str, Any]:
         events = integration_service.calendar_list(user_id_for(args), args.get("time_min"), args.get("time_max"))

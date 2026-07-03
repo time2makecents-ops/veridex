@@ -41,7 +41,7 @@ class FakeIntegrationService:
                 return {
                     **message,
                     "to": "JR <jr@example.com>",
-                    "body_text": "Full message body.",
+                    "body_text": message.get("body_text") or "Full message body.",
                 }
         return {}
 
@@ -50,7 +50,7 @@ class FakeIntegrationService:
             {
                 **message,
                 "to": "JR <jr@example.com>",
-                "body_text": f"Thread body for {message.get('id')}.",
+                "body_text": message.get("body_text") or f"Thread body for {message.get('id')}.",
             }
             for message in self.messages
             if message.get("threadId") == thread_id
@@ -151,7 +151,7 @@ class IntegrationHandlerTests(unittest.TestCase):
         self.assertEqual(response["structuredContent"]["confirmation_id"], "confirm_fake")
         self.assertIn("prepared the Gmail send confirmation", response["content"][0]["text"])
 
-    def test_gmail_search_content_lists_real_sender_subject_and_snippet(self) -> None:
+    def test_gmail_search_content_uses_cards_instead_of_duplicate_text_list(self) -> None:
         service = FakeIntegrationService(connected=True)
         service.messages = [
             {
@@ -173,12 +173,13 @@ class IntegrationHandlerTests(unittest.TestCase):
         response = handlers["office.gmail_search"]({"session_id": "sess_a", "query": "in:inbox"})
         text = response["content"][0]["text"]
         self.assertIn("Found 2 Gmail message(s).", text)
-        self.assertIn("Alex <alex@example.com>", text)
-        self.assertIn("Project update", text)
-        self.assertIn("Please review", text)
+        self.assertIn("email cards", text)
+        self.assertNotIn("Alex <alex@example.com>", text)
+        self.assertNotIn("Project update", text)
+        self.assertNotIn("Please review", text)
         self.assertEqual(response["structuredContent"]["gmail_messages"][0]["id"], "msg_1")
 
-    def test_gmail_read_content_formats_readable_message_and_reply_prompt(self) -> None:
+    def test_gmail_read_content_keeps_reply_metadata_without_body_copy(self) -> None:
         service = FakeIntegrationService(connected=True)
         service.messages = [
             {
@@ -187,17 +188,25 @@ class IntegrationHandlerTests(unittest.TestCase):
                 "subject": "Project update",
                 "date": "Thu, 2 Jul 2026 08:00:00 -0700",
                 "snippet": "The latest status is ready.",
+                "body_text": (
+                    "Current answer.\n\n"
+                    "On Thu, Jul 2, 2026 at 1:19 AM James <jr@example.com> wrote:\n"
+                    "> Previous answer.\n\n"
+                    "<div dir=\"ltr\">Current answer.</div>"
+                ),
             }
         ]
         handlers = self.handlers_for(service)
         response = handlers["office.gmail_read"]({"session_id": "sess_a", "message_id": "msg_1"})
         text = response["content"][0]["text"]
         self.assertIn("From: Alex <alex@example.com>", text)
-        self.assertIn("Full message body.", text)
+        self.assertIn("Subject: Project update", text)
+        self.assertNotIn("Current answer.", text)
         self.assertIn("Would you like to reply", text)
         self.assertEqual(response["structuredContent"]["gmail_message"]["id"], "msg_1")
+        self.assertEqual(response["structuredContent"]["gmail_message"]["body_text"], "Current answer.")
 
-    def test_gmail_thread_read_formats_thread_messages(self) -> None:
+    def test_gmail_thread_read_content_keeps_reply_metadata_without_body_copies(self) -> None:
         service = FakeIntegrationService(connected=True)
         service.messages = [
             {
@@ -215,14 +224,25 @@ class IntegrationHandlerTests(unittest.TestCase):
                 "subject": "Re: Project update",
                 "date": "Thu, 2 Jul 2026 08:05:00 -0700",
                 "snippet": "Thanks.",
+                "body_text": (
+                    "Thanks.\n\n"
+                    "On Thu, Jul 2, 2026 at 8:00 AM Alex <alex@example.com> wrote:\n"
+                    "> The latest status is ready.\n\n"
+                    "<div class=\"gmail_quote\">duplicated quoted html</div>"
+                ),
             },
         ]
         handlers = self.handlers_for(service)
         response = handlers["office.gmail_thread_read"]({"session_id": "sess_a", "thread_id": "thread_1"})
         text = response["content"][0]["text"]
         self.assertIn("Loaded Gmail thread with 2 message(s).", text)
+        self.assertIn("From: JR <jr@example.com>", text)
+        self.assertIn("Subject: Re: Project update", text)
+        self.assertNotIn("Thread body", text)
+        self.assertNotIn("duplicated quoted html", text)
         self.assertEqual(len(response["structuredContent"]["gmail_thread"]), 2)
         self.assertEqual(response["structuredContent"]["gmail_thread"][0]["id"], "msg_1")
+        self.assertEqual(response["structuredContent"]["gmail_thread"][1]["body_text"], "Thanks.")
 
     def test_gmail_send_returns_email_review_for_frontend(self) -> None:
         service = FakeIntegrationService(connected=True)
@@ -268,6 +288,31 @@ class IntegrationHandlerTests(unittest.TestCase):
         )
         self.assertEqual(response["structuredContent"]["contact"]["email"], "time2makecents@gmail.com")
         self.assertIn("Saved contact", response["content"][0]["text"])
+
+    def test_contact_list_content_uses_structured_cards_without_duplicate_text(self) -> None:
+        service = FakeIntegrationService(connected=True)
+        service.contacts = [
+            {
+                "email": "time2makecents@gmail.com",
+                "display_name": "James Willis",
+                "aliases": ["James", "Time2"],
+                "source": "gmail",
+            },
+            {
+                "email": "alex@example.com",
+                "display_name": "Alex Rivera",
+                "aliases": ["Alex"],
+                "source": "manual",
+            },
+        ]
+        handlers = self.handlers_for(service)
+        response = handlers["office.contact_list"]({"session_id": "sess_a"})
+        text = response["content"][0]["text"]
+        self.assertIn("Found 2 contact(s).", text)
+        self.assertIn("contact cards", text)
+        self.assertNotIn("time2makecents@gmail.com", text)
+        self.assertNotIn("James Willis", text)
+        self.assertEqual(response["structuredContent"]["contacts"][0]["email"], "time2makecents@gmail.com")
 
 
 if __name__ == "__main__":

@@ -822,6 +822,14 @@ class RequestPipeline:
         "show this thread history",
         "show this session history",
     )
+    SESSION_NAMED_THREAD_RE = re.compile(
+        r"\b(?:thread|threads|conversation|conversations|chat)\s+(?:with|from|about)\s+(?P<query>.+?)\??$",
+        re.IGNORECASE,
+    )
+    SESSION_THREAD_LIST_RE = re.compile(
+        r"\b(?:show|list|display|view|find|what|which)\b.*\b(?:chat\s+threads?|threads|conversations)\b",
+        re.IGNORECASE,
+    )
     SESSION_OBJECTS_HINTS = (
         "what objects are saved in the session",
         "what are the objects saved in the session",
@@ -1526,6 +1534,15 @@ class RequestPipeline:
                 "workspace_id": workspace_id,
                 "request": request_text,
                 **room_memory_route,
+            }
+
+        file_list_route = self.route_file_list_request(workspace_id, request_text)
+        if file_list_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **file_list_route,
             }
 
         session_thread_route = self.route_session_thread_request(workspace_id, request_text)
@@ -4073,10 +4090,45 @@ class RequestPipeline:
             "reason": "Matched a new session request.",
         }
 
+    def _session_named_thread_query(self, request_text: str) -> str:
+        match = self.SESSION_NAMED_THREAD_RE.search(str(request_text or "").strip())
+        if not match:
+            return ""
+        query = re.sub(r"\s+", " ", str(match.group("query") or "").strip(" .,:;?!"))
+        query = re.sub(r"\b(?:please|thanks|thank you)\b.*$", "", query, flags=re.IGNORECASE).strip(" .,:;?!")
+        return query
+
+    def _is_session_thread_list_request(self, request_text: str) -> bool:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip())
+        if not text:
+            return False
+        if self._session_named_thread_query(text):
+            return False
+        return self.SESSION_THREAD_LIST_RE.search(text) is not None
+
     def route_session_thread_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         text = re.sub(r"\s+", " ", str(request_text or "").strip().lower())
         if not text:
             return None
+        named_thread_query = self._session_named_thread_query(request_text)
+        if named_thread_query:
+            return {
+                "capability": "session.search",
+                "tool": "office.sessions_search",
+                "arguments": {
+                    "query": named_thread_query,
+                    "include_current": True,
+                    "detail": True,
+                },
+                "reason": "Matched a request to search session threads for a named room, persona, or topic.",
+            }
+        if self._is_session_thread_list_request(request_text):
+            return {
+                "capability": "session.list",
+                "tool": "office.sessions_list",
+                "arguments": {},
+                "reason": "Matched a request to list chat threads.",
+            }
         if not any(hint in text for hint in self.SESSION_THREAD_HINTS):
             return None
         return {
@@ -4086,6 +4138,28 @@ class RequestPipeline:
                 "limit": 24,
             },
             "reason": "Matched a request to show the current session thread.",
+        }
+
+    def route_file_list_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip().lower())
+        if not text:
+            return None
+        if self.FILE_ID_RE.search(request_text) or self.FILE_NAME_RE.search(request_text):
+            return None
+        if re.search(r"\b(?:upload|attach|download|export|read|ocr|extract|transcribe)\b", text):
+            return None
+        if not re.search(r"\b(?:saved\s+)?files?\b", text):
+            return None
+        if not (
+            re.search(r"\b(?:show|list|view|open|load|display|what|which)\b", text)
+            or re.search(r"\bfiles?\b.*\b(?:do i have|are there|are saved|available)\b", text)
+        ):
+            return None
+        return {
+            "capability": "file.list",
+            "tool": "office.file_list",
+            "arguments": {},
+            "reason": "Matched a request to list saved workspace files.",
         }
 
     def route_workspace_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:

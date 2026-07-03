@@ -1,7 +1,7 @@
 import type { RefObject } from "react";
 
 import { shouldShowMessageText } from "./helpers";
-import type { ChatScope, EmailReview, GmailMessageDetail, GmailMessageSummary, Message } from "./types";
+import type { ChatScope, ContactRecord, EmailReview, GmailMessageDetail, GmailMessageSummary, Message } from "./types";
 
 type ChatTranscriptProps = {
   activePersona: string;
@@ -45,6 +45,19 @@ function GmailDetailCard({ message }: { message: GmailMessageDetail }) {
       <div className="gmail-card-subject">{message.subject || "(no subject)"}</div>
       {message.date ? <div className="gmail-card-date">{message.date}</div> : null}
       {message.body_text ? <pre className="gmail-card-body">{message.body_text}</pre> : null}
+    </article>
+  );
+}
+
+function ContactCard({ contact }: { contact: ContactRecord }) {
+  const label = contact.display_name || contact.email || "Unnamed contact";
+  const aliases = Array.isArray(contact.aliases) ? contact.aliases.filter(Boolean).join(", ") : "";
+  return (
+    <article className="contact-card">
+      <div className="contact-card-name">{label}</div>
+      <div className="contact-card-email">{contact.email}</div>
+      {aliases ? <div className="contact-card-meta">Aliases: {aliases}</div> : null}
+      {contact.source ? <div className="contact-card-meta">Source: {contact.source}</div> : null}
     </article>
   );
 }
@@ -129,6 +142,13 @@ export function ChatTranscript({
                 <div className="gmail-card-list">
                   {message.gmailThread.map((gmailMessage) => (
                     <GmailDetailCard key={gmailMessage.id} message={gmailMessage} />
+                  ))}
+                </div>
+              ) : null}
+              {message.contacts?.length ? (
+                <div className="contact-card-list">
+                  {message.contacts.map((contact) => (
+                    <ContactCard key={contact.email || contact.display_name} contact={contact} />
                   ))}
                 </div>
               ) : null}

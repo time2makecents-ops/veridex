@@ -1006,13 +1006,15 @@ button {
   word-break: break-word;
 }
 
-.gmail-card-list {
+.gmail-card-list,
+.contact-card-list {
   display: grid;
   gap: 8px;
   margin-top: 10px;
 }
 
 .gmail-card,
+.contact-card,
 .email-review-card {
   border: 1px solid rgba(148, 163, 184, 0.28);
   border-radius: 8px;
@@ -1060,13 +1062,28 @@ button {
 
 .gmail-card-from,
 .gmail-card-subject,
+.contact-card-name,
+.contact-card-email,
 .email-review-row strong {
   overflow-wrap: anywhere;
 }
 
-.gmail-card-from {
+.gmail-card-from,
+.contact-card-name {
   color: #f8fafc;
   font-weight: 700;
+}
+
+.contact-card-email {
+  margin-top: 4px;
+  color: #e2e8f0;
+  font-weight: 650;
+}
+
+.contact-card-meta {
+  margin-top: 4px;
+  color: #cbd5e1;
+  font-size: 0.88rem;
 }
 
 .gmail-card-subject {

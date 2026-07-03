@@ -7,6 +7,7 @@ import {
   type ChatScope,
   type ChatStructuredResponse,
   type DeleteSessionStructuredResponse,
+  type GmailMessageDetail,
   type Message,
   type ProviderBadge,
   type RoomCapabilityProfile,
@@ -197,6 +198,52 @@ export function confirmationLabelForAction(actionKind: string | undefined): stri
   return actionKind === "gmail.send" ? "Confirm Gmail Send" : undefined;
 }
 
+function decodeBasicHtmlEntities(value: string): string {
+  return value
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
+
+export function cleanGmailBodyText(value: string | undefined): string {
+  let text = String(value || "").replace(/\r\n?/g, "\n").trim();
+  if (!text) {
+    return "";
+  }
+  const htmlMatch = text.match(/<(?:html|body|div|span|blockquote|br|p|table|a)\b/i);
+  if (htmlMatch?.index !== undefined) {
+    const plainBeforeHtml = text.slice(0, htmlMatch.index).trim();
+    if (plainBeforeHtml) {
+      text = plainBeforeHtml;
+    } else {
+      text = text
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<\/(?:div|p|blockquote|li|tr|h[1-6])>/gi, "\n")
+        .replace(/<[^>]+>/g, "");
+      text = decodeBasicHtmlEntities(text);
+    }
+  }
+  text = text.split(/^\s*On .+? wrote:\s*$/im, 1)[0].trim();
+  text = text
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith(">"))
+    .join("\n");
+  return text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function cleanGmailDetail(message: GmailMessageDetail | undefined): GmailMessageDetail | undefined {
+  if (!message) {
+    return undefined;
+  }
+  return {
+    ...message,
+    body_text: cleanGmailBodyText(message.body_text),
+  };
+}
+
 export function createMessage(message: Omit<Message, "id">): Message {
   return {
     id: crypto.randomUUID(),
@@ -220,14 +267,15 @@ export function assistantMessageForResponse(
     confirmationId: typeof response?.confirmation_id === "string" ? response.confirmation_id : undefined,
     confirmationLabel: confirmationLabelForAction(response?.action_kind),
     gmailMessages: Array.isArray(response?.gmail_messages) ? response.gmail_messages : undefined,
-    gmailMessage: response?.gmail_message,
-    gmailThread: Array.isArray(response?.gmail_thread) ? response.gmail_thread : undefined,
+    gmailMessage: cleanGmailDetail(response?.gmail_message),
+    gmailThread: Array.isArray(response?.gmail_thread) ? response.gmail_thread.map((message) => cleanGmailDetail(message) || message) : undefined,
+    contacts: Array.isArray(response?.contacts) ? response.contacts : undefined,
     emailReview: response?.email_review,
   });
 }
 
 export function shouldShowMessageText(message: Message): boolean {
-  if (message.gmailMessages?.length || message.gmailMessage || message.gmailThread?.length || message.emailReview) {
+  if (message.gmailMessages?.length || message.gmailMessage || message.gmailThread?.length || message.contacts?.length || message.emailReview) {
     return false;
   }
   return Boolean(message.text);

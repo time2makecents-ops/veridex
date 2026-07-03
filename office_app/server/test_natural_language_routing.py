@@ -3008,6 +3008,65 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "session.list")
         self.assertEqual(routed["tool"], "office.sessions_list")
 
+    def test_records_archive_chat_threads_question_routes_to_session_list(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="records_archive", active_persona="Archivist"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "can you show me any of my chat threads?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "session.list")
+        self.assertEqual(routed["tool"], "office.sessions_list")
+
+    def test_records_archive_named_thread_question_routes_to_session_search(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="records_archive", active_persona="Archivist"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "can you show me my thread with Navigator?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "session.search")
+        self.assertEqual(routed["tool"], "office.sessions_search")
+        self.assertEqual(routed["arguments"]["query"], "Navigator")
+        self.assertTrue(routed["arguments"]["include_current"])
+        self.assertTrue(routed["arguments"]["detail"])
+
+    def test_records_archive_named_thread_with_room_routes_to_session_search(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="records_archive", active_persona="Archivist"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "can you show me my thread with Nancy in my office?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "session.search")
+        self.assertEqual(routed["tool"], "office.sessions_search")
+        self.assertEqual(routed["arguments"]["query"], "Nancy in my office")
+        self.assertTrue(routed["arguments"]["include_current"])
+        self.assertTrue(routed["arguments"]["detail"])
+
+    def test_records_archive_saved_files_question_routes_to_file_list(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="records_archive", active_persona="Archivist"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "what saved files do I have?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "file.list")
+        self.assertEqual(routed["tool"], "office.file_list")
+        self.assertEqual(routed["arguments"], {})
+
     def test_go_to_session_number_routes_to_session_activate(self) -> None:
         routed = self.pipeline.route_user_request("default", "go to session 3")
         self.assertEqual(routed["route_kind"], "tool")

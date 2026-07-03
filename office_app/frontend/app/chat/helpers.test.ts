@@ -150,6 +150,55 @@ describe("confirmation helpers", () => {
     expect(message.gmailThread?.[0].body_text).toBe("Thread body");
   });
 
+  it("cleans raw Gmail HTML and quoted chains before rendering cards", () => {
+    const message = assistantMessageForResponse(
+      {
+        gmail_message: {
+          id: "msg_1",
+          from: "Alex <alex@example.com>",
+          body_text:
+            "Got it.\n\nOn Thu, Jul 2, 2026 at 1:19 AM JR <jr@example.com> wrote:\n> Previous note.\n\n<div dir=\"ltr\">Got it.</div>",
+        },
+        gmail_thread: [
+          {
+            id: "msg_2",
+            from: "JR <jr@example.com>",
+            body_text: "<div dir=\"ltr\">Thanks.<br>JR</div>",
+          },
+        ],
+      },
+      "Loaded Gmail thread.",
+      "Nancy",
+      "my_office",
+      "sess_1",
+    );
+
+    expect(message.gmailMessage?.body_text).toBe("Got it.");
+    expect(message.gmailThread?.[0].body_text).toBe("Thanks.\nJR");
+  });
+
+  it("carries contact cards and hides duplicate contact-list text", () => {
+    const message = assistantMessageForResponse(
+      {
+        contacts: [
+          {
+            email: "time2makecents@gmail.com",
+            display_name: "James Willis",
+            aliases: ["James", "Time2"],
+            source: "gmail",
+          },
+        ],
+      },
+      "Found 1 contact(s). Select a contact card to use it.",
+      "Nancy",
+      "my_office",
+      "sess_1",
+    );
+
+    expect(message.contacts?.[0].email).toBe("time2makecents@gmail.com");
+    expect(shouldShowMessageText(message)).toBe(false);
+  });
+
   it("hides duplicate plain text when structured Gmail cards are present", () => {
     expect(
       shouldShowMessageText({

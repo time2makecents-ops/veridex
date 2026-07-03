@@ -16,6 +16,7 @@ export type Message = {
   gmailMessages?: GmailMessageSummary[];
   gmailMessage?: GmailMessageDetail;
   gmailThread?: GmailMessageDetail[];
+  contacts?: ContactRecord[];
   emailReview?: EmailReview;
 };
 
@@ -38,6 +39,13 @@ export type EmailReview = {
   to: string[];
   subject: string;
   body: string;
+};
+
+export type ContactRecord = {
+  email: string;
+  display_name?: string;
+  aliases?: string[];
+  source?: string;
 };
 
 export type ProviderBadge = {
@@ -69,6 +77,7 @@ export type ChatStructuredResponse = {
   gmail_messages?: GmailMessageSummary[];
   gmail_message?: GmailMessageDetail;
   gmail_thread?: GmailMessageDetail[];
+  contacts?: ContactRecord[];
   email_review?: EmailReview;
 };
 
