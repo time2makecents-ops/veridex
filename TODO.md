@@ -46,7 +46,7 @@ Last updated: 2026-07-06
 
 ## Suggested Future Steps
 
-1. Finish and review the durable work-context continuity slice
+1. Review the durable work-context continuity checkpoint
    - Review `WorkContextService`, `office.work_context_*` tools, active-work routing, Nancy email context capture, memo context capture, and the chat active-work strip together.
    - Confirm active work survives reloads, room switches, session switches, workspace switches, and app restarts.
    - Confirm replacing the current manual work focus does not accumulate stale active items; `set current work to ...` should replace the singular current focus while `track active work: ...` can still append.
@@ -61,7 +61,7 @@ Last updated: 2026-07-06
    - Confirm non-Gmail integration confirmations, especially calendar create/update/cancel, stay actionable after reload and navigation instead of surviving only in the integration pending-action store.
    - Connected-account live audits now prove Gmail-send and Calendar-create confirmations can be created without executing the external action, persist into active work context, survive state reads and room switching, and be explicitly dismissed for cleanup.
    - Keep the branch focused on continuity stabilization before adding broader task/project management behavior.
-   - Decide whether to commit this as one large stabilization checkpoint or split it before opening review.
+   - Decide whether to keep this as a single stabilization review checkpoint or split it before opening review.
 
 2. Run a deeper behavior pass before more refactors
    - Exercise session switching, workspace switching, room switching, file upload/download, document reader, and integration confirmation.
