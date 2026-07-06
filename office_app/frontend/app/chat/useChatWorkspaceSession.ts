@@ -39,7 +39,16 @@ import {
   workspaceLabelById,
   workspaceMetadataValues,
 } from "./helpers";
-import { DEFAULT_PERSONA, DEFAULT_ROOM_ID, type ChatScope, type LobbyState, type Message } from "./types";
+import {
+  DEFAULT_PERSONA,
+  DEFAULT_ROOM_ID,
+  type ChatScope,
+  type LobbyState,
+  type Message,
+  type NancyEmailComposeState,
+  type SessionPromptMode,
+  type WorkContextRecord,
+} from "./types";
 
 type UseChatWorkspaceSessionArgs = {
   activePersona: string;
@@ -57,7 +66,13 @@ type UseChatWorkspaceSessionArgs = {
   setBackendBanner: (message: string) => void;
   setChatScope: (scope: ChatScope) => void;
   setError: (message: string) => void;
+  setPendingNancyCompose: (compose: NancyEmailComposeState | undefined) => void;
+  setPendingBreakRoomJoke: (pending: LobbyState["pending_break_room_joke"] | undefined) => void;
+  setPendingRoomNavigation: (pending: LobbyState["pending_room_navigation"] | undefined) => void;
+  setPendingSessionList: (pending: LobbyState["pending_session_list"] | undefined) => void;
+  setPendingWorkspaceSwitch: (pending: LobbyState["pending_workspace_switch"] | undefined) => void;
   setRoomMenuOpen: (open: boolean) => void;
+  setActiveWorkContexts: (contexts: WorkContextRecord[]) => void;
   setSessionId: (value: string) => void;
   setSessionMenuOpen: (open: boolean) => void;
   setWorkspaceId: (value: string) => void;
@@ -76,7 +91,13 @@ export function useChatWorkspaceSession({
   setBackendBanner,
   setChatScope,
   setError,
+  setPendingNancyCompose,
+  setPendingBreakRoomJoke,
+  setPendingRoomNavigation,
+  setPendingSessionList,
+  setPendingWorkspaceSwitch,
   setRoomMenuOpen,
+  setActiveWorkContexts,
   setSessionId,
   setSessionMenuOpen,
   setWorkspaceId,
@@ -104,6 +125,7 @@ export function useChatWorkspaceSession({
   const [sessionTitleDraft, setSessionTitleDraft] = useState("");
   const [sessionDescriptionDraft, setSessionDescriptionDraft] = useState("");
   const [sessionPromptTargetId, setSessionPromptTargetId] = useState("");
+  const [sessionPromptMode, setSessionPromptMode] = useState<SessionPromptMode>("create");
   const hiddenSessionIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -159,6 +181,21 @@ export function useChatWorkspaceSession({
 
   function clearSessionPrompt() {
     setSessionPromptTargetId("");
+    setSessionPromptMode("create");
+  }
+
+  function syncPendingSessionPrompt(nextSessionId: string, workspaceState: LobbyState | undefined) {
+    if (workspaceState?.pending_session_rename) {
+      setSessionPromptMode("rename");
+      setSessionPromptTargetId(nextSessionId);
+      return;
+    }
+    if (workspaceState?.pending_session_create) {
+      setSessionPromptMode("create");
+      setSessionPromptTargetId(nextSessionId);
+      return;
+    }
+    clearSessionPrompt();
   }
 
   function showSessionActionNotice(notice: string, options: { banner?: boolean } = {}) {
@@ -253,6 +290,13 @@ export function useChatWorkspaceSession({
     }
     const nextWorkspace = String(structured.workspace_id || workspaceId);
     const nextRoomPersona = roomPersonaValues(structured);
+    setActiveWorkContexts(Array.isArray(structured.active_work_context) ? structured.active_work_context : []);
+    setPendingNancyCompose(structured.pending_nancy_email_compose);
+    setPendingBreakRoomJoke(structured.pending_break_room_joke);
+    setPendingRoomNavigation(structured.pending_room_navigation);
+    setPendingSessionList(structured.pending_session_list);
+    setPendingWorkspaceSwitch(structured.pending_workspace_switch);
+    syncPendingSessionPrompt(chosenSessionId, structured);
     applySessionWorkspace(chosenSessionId, nextWorkspace, workspaceLabelById(workspaces, nextWorkspace), {
       persistSession: true,
     });
@@ -303,6 +347,13 @@ export function useChatWorkspaceSession({
       const nextSessionId = String(activated.session_id || sessionId);
       const workspaceState = activated as { workspace_state?: LobbyState };
       const nextRoomPersona = roomPersonaValues(workspaceState.workspace_state);
+      setActiveWorkContexts(Array.isArray(workspaceState.workspace_state?.active_work_context) ? workspaceState.workspace_state.active_work_context : []);
+      setPendingNancyCompose(workspaceState.workspace_state?.pending_nancy_email_compose);
+      setPendingBreakRoomJoke(workspaceState.workspace_state?.pending_break_room_joke);
+      setPendingRoomNavigation(workspaceState.workspace_state?.pending_room_navigation);
+      setPendingSessionList(workspaceState.workspace_state?.pending_session_list);
+      setPendingWorkspaceSwitch(workspaceState.workspace_state?.pending_workspace_switch);
+      syncPendingSessionPrompt(nextSessionId, workspaceState.workspace_state);
       applySessionWorkspace(nextSessionId, nextWorkspaceId, workspaceLabelById(workspaces, nextWorkspaceId), {
         persistSession: true,
         forceRoomScope: true,
@@ -325,6 +376,14 @@ export function useChatWorkspaceSession({
       const nextWorkspaceId = String(created.workspace_id || "");
       const activated = await activateWorkspace(nextWorkspaceId);
       const nextSessionId = String(activated.session_id || sessionId);
+      const workspaceState = activated as { workspace_state?: LobbyState };
+      setActiveWorkContexts(Array.isArray(workspaceState.workspace_state?.active_work_context) ? workspaceState.workspace_state.active_work_context : []);
+      setPendingNancyCompose(workspaceState.workspace_state?.pending_nancy_email_compose);
+      setPendingBreakRoomJoke(workspaceState.workspace_state?.pending_break_room_joke);
+      setPendingRoomNavigation(workspaceState.workspace_state?.pending_room_navigation);
+      setPendingSessionList(workspaceState.workspace_state?.pending_session_list);
+      setPendingWorkspaceSwitch(workspaceState.workspace_state?.pending_workspace_switch);
+      syncPendingSessionPrompt(nextSessionId, workspaceState.workspace_state);
       applySessionWorkspace(nextSessionId, nextWorkspaceId, String(created.label || title), {
         persistSession: true,
         forceRoomScope: true,
@@ -390,6 +449,13 @@ export function useChatWorkspaceSession({
       const nextWorkspaceId = String(structured?.workspace_id || response.workspace_id || workspaceId);
       const nextSessionId = String(structured?.session_id || response.session_id || sessionId);
       const nextRoomPersona = roomPersonaValues(structured?.workspace_state);
+      setActiveWorkContexts(Array.isArray(structured?.workspace_state?.active_work_context) ? structured.workspace_state.active_work_context : []);
+      setPendingNancyCompose(structured?.workspace_state?.pending_nancy_email_compose);
+      setPendingBreakRoomJoke(structured?.workspace_state?.pending_break_room_joke);
+      setPendingRoomNavigation(structured?.workspace_state?.pending_room_navigation);
+      setPendingSessionList(structured?.workspace_state?.pending_session_list);
+      setPendingWorkspaceSwitch(structured?.workspace_state?.pending_workspace_switch);
+      syncPendingSessionPrompt(nextSessionId, structured?.workspace_state);
       const archivedLabel = String(structured?.archived_workspace?.label || targetLabel || targetWorkspaceId);
       const switchedWorkspace = Boolean(structured?.switched_workspace);
       const selectionDeleted = workspaceSelectionId === targetWorkspaceId;
@@ -433,6 +499,14 @@ export function useChatWorkspaceSession({
       applySessionWorkspace(nextSessionId, nextWorkspaceId, workspaceLabelById(workspaces, nextWorkspaceId), {
         persistSession: true,
       });
+      const workspaceState = response as { workspace_state?: LobbyState };
+      setActiveWorkContexts(Array.isArray(workspaceState.workspace_state?.active_work_context) ? workspaceState.workspace_state.active_work_context : []);
+      setPendingNancyCompose(workspaceState.workspace_state?.pending_nancy_email_compose);
+      setPendingBreakRoomJoke(workspaceState.workspace_state?.pending_break_room_joke);
+      setPendingRoomNavigation(workspaceState.workspace_state?.pending_room_navigation);
+      setPendingSessionList(workspaceState.workspace_state?.pending_session_list);
+      setPendingWorkspaceSwitch(workspaceState.workspace_state?.pending_workspace_switch);
+      syncPendingSessionPrompt(nextSessionId, workspaceState.workspace_state);
       applySessionDraft(response);
       await refreshCurrentThread(nextSessionId);
       await refreshWorkspaces(nextWorkspaceId);
@@ -473,6 +547,13 @@ export function useChatWorkspaceSession({
       const nextSessionId = String(structured?.session_id || response.session_id || sessionId);
       const nextWorkspaceId = String(structured?.workspace_id || response.workspace_id || workspaceId);
       const activeRoomPersona = deleteSessionRoomPersona(structured, activeRoom, activePersona);
+      setActiveWorkContexts(Array.isArray(structured?.workspace_state?.active_work_context) ? structured.workspace_state.active_work_context : []);
+      setPendingNancyCompose(structured?.workspace_state?.pending_nancy_email_compose);
+      setPendingBreakRoomJoke(structured?.workspace_state?.pending_break_room_joke);
+      setPendingRoomNavigation(structured?.workspace_state?.pending_room_navigation);
+      setPendingSessionList(structured?.workspace_state?.pending_session_list);
+      setPendingWorkspaceSwitch(structured?.workspace_state?.pending_workspace_switch);
+      syncPendingSessionPrompt(nextSessionId, structured?.workspace_state);
       const deletedWasCurrent = targetSessionId === sessionId;
       const replacementTitle = String(structured?.active_session?.title || nextSessionId || "a fresh session");
 
@@ -495,6 +576,7 @@ export function useChatWorkspaceSession({
       }
 
       if (Boolean(structured?.created_replacement_session)) {
+        setSessionPromptMode("create");
         setSessionPromptTargetId(nextSessionId);
         applySessionDraft(structured?.active_session, "New Session", "Fresh session.");
       } else {
@@ -602,11 +684,13 @@ export function useChatWorkspaceSession({
     refreshWorkspaces,
     sessionActionNotice,
     sessionDescriptionDraft,
+    sessionPromptMode,
     sessionPromptTargetId,
     sessionTitleDraft,
     setHiddenSessionIds,
     setNewWorkspaceTitleDraft,
     setSessionDescriptionDraft,
+    setSessionPromptMode,
     setSessionPromptTargetId,
     setSessionTitleDraft,
     setWorkspaceDescriptionDraft,

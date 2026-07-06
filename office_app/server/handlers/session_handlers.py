@@ -5,6 +5,7 @@ from typing import Any, Dict
 
 from fastapi import HTTPException
 
+from office_app.server.artifact_request_helpers import pending_break_room_joke, pending_room_navigation, pending_session_list, pending_session_rename
 from office_app.server.errors import error_missing_required_field
 
 from .dependencies import HandlerDeps
@@ -101,6 +102,62 @@ def build_session_handlers(deps: HandlerDeps) -> Dict[str, Any]:
     def _format_session_line(speaker: str, text: str, *, compact: bool) -> str:
         body = _compact_excerpt(text) if compact else re.sub(r"\s+", " ", str(text or "").strip())
         return f"{speaker}: {body}"
+
+    def _state_with_active_work_context(
+        workspace_id: str,
+        state: Dict[str, Any],
+        *,
+        session_id: str = "",
+        source_state: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        enriched = dict(state or {})
+        if deps.work_context_service is not None:
+            enriched["active_work_context"] = deps.work_context_service.list_contexts(
+                workspace_id,
+                status="active",
+                limit=8,
+            )
+        raw_state = source_state if isinstance(source_state, dict) else state
+        if session_id and isinstance(raw_state, dict):
+            pending_map = raw_state.get("pending_nancy_email_by_session")
+            pending = pending_map.get(session_id) if isinstance(pending_map, dict) else None
+            if isinstance(pending, dict):
+                enriched["pending_nancy_email_compose"] = {
+                    str(key): str(value or "") for key, value in pending.items()
+                }
+            pending_session_create_map = raw_state.get("pending_session_create_by_session")
+            pending_session_create = pending_session_create_map.get(session_id) if isinstance(pending_session_create_map, dict) else None
+            if isinstance(pending_session_create, dict):
+                enriched["pending_session_create"] = {
+                    str(key): str(value or "") for key, value in pending_session_create.items()
+                }
+            pending_rename = pending_session_rename(raw_state, session_id)
+            if isinstance(pending_rename, dict):
+                enriched["pending_session_rename"] = {
+                    str(key): str(value or "") for key, value in pending_rename.items()
+                }
+            pending_list = pending_session_list(raw_state, session_id)
+            if isinstance(pending_list, dict):
+                enriched["pending_session_list"] = {
+                    str(key): str(value or "") for key, value in pending_list.items()
+                }
+            pending_workspace_switch_map = raw_state.get("pending_workspace_switch_by_session")
+            pending_workspace_switch = pending_workspace_switch_map.get(session_id) if isinstance(pending_workspace_switch_map, dict) else None
+            if isinstance(pending_workspace_switch, dict):
+                enriched["pending_workspace_switch"] = {
+                    str(key): str(value or "") for key, value in pending_workspace_switch.items()
+                }
+            pending_navigation = pending_room_navigation(raw_state)
+            if isinstance(pending_navigation, dict):
+                enriched["pending_room_navigation"] = {
+                    str(key): str(value or "") for key, value in pending_navigation.items()
+                }
+            pending_joke = pending_break_room_joke(raw_state, session_id)
+            if isinstance(pending_joke, dict):
+                enriched["pending_break_room_joke"] = {
+                    str(key): str(value or "") for key, value in pending_joke.items()
+                }
+        return enriched
 
     def _assistant_candidates(rows: list[Dict[str, Any]], lowered_query: str) -> list[tuple[int, int, str, str]]:
         candidates: list[tuple[int, int, str, str]] = []
@@ -491,7 +548,14 @@ def build_session_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             raise error_missing_required_field("session_id")
         session = deps.user_service.select_session_for_user(target_session_id)
         try:
-            workspace_state = deps.kernel.get_state(session["active_workspace_id"])
+            workspace_id = str(session["active_workspace_id"])
+            source_state = deps.kernel.get_state(workspace_id)
+            workspace_state = _state_with_active_work_context(
+                workspace_id,
+                source_state,
+                session_id=str(session["session_id"] or "").strip(),
+                source_state=source_state,
+            )
         except HTTPException:
             workspace_state = {}
         return {
@@ -586,6 +650,7 @@ def build_session_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             lines.append(f"Active session is now {active_title} ({active_session_id}).")
         if created_replacement_session and active_session_id == replacement_session_id:
             lines.append("What should I name the new session?")
+        source_workspace_state = result.get("workspace_state") or {}
         structured = {
             "deleted_session_id": target_session_id,
             "deleted_title": deleted_title,
@@ -595,7 +660,12 @@ def build_session_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "description": str(active_session.get("description") or ""),
             "replacement_session_id": replacement_session_id,
             "remaining_count": result.get("remaining_count", 0),
-            "workspace_state": result.get("workspace_state") or {},
+            "workspace_state": _state_with_active_work_context(
+                str(result.get("workspace_id") or "").strip(),
+                source_workspace_state,
+                session_id=active_session_id or current_session_id,
+                source_state=source_workspace_state,
+            ),
             "deleted_session": deleted_session,
             "active_session": active_session,
             "created_replacement_session": created_replacement_session,
@@ -616,7 +686,12 @@ def build_session_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             raise error_missing_required_field("workspace_id")
         current_user = deps.user_service.get_user_for_session(session_id)
         result = deps.user_service.activate_workspace(user_id=str(current_user["user_id"]), workspace_id=workspace_id)
-        workspace_state = result["workspace_state"]
+        workspace_state = _state_with_active_work_context(
+            workspace_id,
+            result["workspace_state"],
+            session_id=str(result["session"]["session_id"] or "").strip(),
+            source_state=result["workspace_state"],
+        )
         session = result["session"]
         return {
             "structuredContent": {

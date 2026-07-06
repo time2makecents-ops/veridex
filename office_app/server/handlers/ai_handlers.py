@@ -97,6 +97,9 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         history = str(context.get("conversation_history_text") or "").strip()
         if history:
             parts.append(history)
+        work_context = str(context.get("active_work_context_text") or "").strip()
+        if work_context:
+            parts.append(work_context)
         return "\n".join(parts)
 
     def _risk_detection_prompt_text(user_prompt: str) -> str:
@@ -213,6 +216,30 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             if content:
                 lines.append(f"- {content}")
         return "\n".join(lines)
+
+    def _active_work_context_text(rows: List[Dict[str, Any]]) -> str:
+        lines: List[str] = []
+        for row in rows[:8]:
+            if not isinstance(row, dict):
+                continue
+            title = str(row.get("title") or "Untitled work").strip()
+            summary = str(row.get("summary") or "").strip()
+            room = str(row.get("active_room") or "").strip()
+            persona = str(row.get("active_persona") or "").strip()
+            location = f" ({room}/{persona})" if room or persona else ""
+            detail = f" - {summary}" if summary else ""
+            lines.append(f"- {title}{detail}{location}")
+        return "\n".join(lines)
+
+    def _active_work_context_rows(*, workspace_id: str) -> List[Dict[str, Any]]:
+        service = deps.work_context_service
+        if service is None:
+            return []
+        try:
+            rows = service.list_contexts(workspace_id, status="active", limit=8)
+        except Exception:
+            return []
+        return [dict(row) for row in rows if isinstance(row, dict)]
 
     def _risk_caution_note(*, user_prompt: str, context: Dict[str, Any], response_text: str) -> str:
         if not response_text.strip():
@@ -642,6 +669,7 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                 "Do not invent unsupported factual details about a specific company, entity, or person. If verified grounding is missing, say so directly instead of guessing. "
                 "Apply active-room behavior memory as durable room-specific instructions when present. "
                 "Apply persona behavior memory as style guidance when present, but do not echo the source book or memory label unless the user explicitly asks about it. "
+                "Use active work context as durable cross-room continuity for current tasks, but do not expose internal context IDs unless the user asks for saved context details. "
                 "Use the provided session conversation history as the current chat thread. Use session facts as transient thread-local context for details stated earlier in this session, such as location or organization, but do not turn them into durable room memory unless the user explicitly asks you to remember them. When the user asks a follow-up, comparison, pronoun-based question, 'what about ...', or 'how about ...', resolve it against the immediately relevant prior turns instead of treating it as a blank new chat. For broad help or capability questions like 'what can you help me with here?', answer from the active room and persona instead of continuing the previous topic. Do not ask for details already present in recent context. If the user asks a reflective follow-up like 'how did you come to that conclusion?' or 'what makes you say that?', explain the immediately previous answer instead of asking the user for more context. "
                 "Do not claim you are searching, processing, working in the background, or that you will send results later. You can only answer with information available in this response. If a tool or missing detail is needed, say so directly. "
                 "Respond clearly, concisely, and stay within Veridex governance."
@@ -680,6 +708,8 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         context["persona_behavior_memory_text"] = _persona_behavior_memory_text(
             refs=list(context.get("persona_behavior_memory_refs") or []) + list(context.get("room_behavior_memory_refs") or []),
         )
+        context["active_work_context"] = _active_work_context_rows(workspace_id=workspace_id)
+        context["active_work_context_text"] = _active_work_context_text(context["active_work_context"])
 
         settings = args.get("settings")
         if not isinstance(settings, dict):

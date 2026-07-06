@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { callTool, loadTranscript } from "@/lib/api";
+import { callTool, listActiveWorkContexts, loadTranscript } from "@/lib/api";
 import { clearStoredSessionId, getSessionShortLabel, getStoredSessionId } from "@/lib/session";
 
 import { ChatComposer } from "./ChatComposer";
@@ -29,7 +29,11 @@ import {
   type ChatScope,
   type LobbyState,
   type Message,
+  type NancyEmailComposeState,
+  type PendingRoomNavigationState,
+  type PendingWorkspaceSwitchState,
   type ProviderBadge,
+  type WorkContextRecord,
 } from "./types";
 import { useChatFiles } from "./useChatFiles";
 import { useChatMenus } from "./useChatMenus";
@@ -52,6 +56,14 @@ export default function ChatPage() {
   const [nancyMode, setNancyMode] = useState(false);
   const [confirmingIntegrationId, setConfirmingIntegrationId] = useState("");
   const [confirmedIntegrationIds, setConfirmedIntegrationIds] = useState<string[]>([]);
+  const [completingWorkContextId, setCompletingWorkContextId] = useState("");
+  const [completedWorkContextIds, setCompletedWorkContextIds] = useState<string[]>([]);
+  const [activeWorkContexts, setActiveWorkContexts] = useState<WorkContextRecord[]>([]);
+  const [pendingNancyCompose, setPendingNancyCompose] = useState<NancyEmailComposeState | undefined>(undefined);
+  const [pendingBreakRoomJoke, setPendingBreakRoomJoke] = useState<LobbyState["pending_break_room_joke"] | undefined>(undefined);
+  const [pendingRoomNavigation, setPendingRoomNavigation] = useState<PendingRoomNavigationState | undefined>(undefined);
+  const [pendingSessionList, setPendingSessionList] = useState<LobbyState["pending_session_list"] | undefined>(undefined);
+  const [pendingWorkspaceSwitch, setPendingWorkspaceSwitch] = useState<PendingWorkspaceSwitchState | undefined>(undefined);
   const logRef = useRef<HTMLDivElement>(null);
   const draftRef = useRef<HTMLTextAreaElement>(null);
 
@@ -95,8 +107,14 @@ export default function ChatPage() {
   } = useChatRoomState({
     sessionId,
     setBackendBanner,
+    setActiveWorkContexts,
     setChatScope,
     setError,
+    setPendingNancyCompose,
+    setPendingBreakRoomJoke,
+    setPendingRoomNavigation,
+    setPendingSessionList,
+    setPendingWorkspaceSwitch,
     setMessages,
     setRoomMenuOpen,
   });
@@ -173,10 +191,12 @@ export default function ChatPage() {
     refreshWorkspaces,
     sessionActionNotice,
     sessionDescriptionDraft,
+    sessionPromptMode,
     sessionPromptTargetId,
     sessionTitleDraft,
     setNewWorkspaceTitleDraft,
     setSessionDescriptionDraft,
+    setSessionPromptMode,
     setSessionPromptTargetId,
     setSessionTitleDraft,
     setWorkspaceDescriptionDraft,
@@ -201,8 +221,14 @@ export default function ChatPage() {
     refreshFiles,
     sessionId,
     setBackendBanner,
+    setActiveWorkContexts,
     setChatScope,
     setError,
+    setPendingNancyCompose,
+    setPendingBreakRoomJoke,
+    setPendingRoomNavigation,
+    setPendingSessionList,
+    setPendingWorkspaceSwitch,
     setRoomMenuOpen,
     setSessionId,
     setSessionMenuOpen,
@@ -211,7 +237,20 @@ export default function ChatPage() {
     workspaceId,
   });
 
-  const { confirmIntegrationAction, handleDraftKeyDown, handleSubmit, openGmailThread, startEmailToContact } = useChatComposerActions({
+  const refreshActiveWorkContexts = useCallback(async () => {
+    if (!sessionId) {
+      setActiveWorkContexts([]);
+      return;
+    }
+    try {
+      const rows = await listActiveWorkContexts(8, sessionId);
+      setActiveWorkContexts(rows);
+    } catch {
+      setActiveWorkContexts([]);
+    }
+  }, [sessionId]);
+
+  const { cancelIntegrationAction, completeWorkContext, confirmIntegrationAction, handleDraftKeyDown, handleSubmit, openGmailThread, sendText, startEmailToContact } = useChatComposerActions({
     activePersona,
     activeRoom,
     appendMessage,
@@ -222,16 +261,28 @@ export default function ChatPage() {
     draftRef,
     loading,
     nancyMode,
+    onWorkContextChanged: () => {
+      void refreshActiveWorkContexts();
+    },
     refreshCurrentThread,
     refreshSessions,
     refreshWorkspaces,
     sessionId,
     setConfirmedIntegrationIds,
     setConfirmingIntegrationId,
+    setCompletedWorkContextIds,
+    setCompletingWorkContextId,
     setDraft,
     setError,
     setLoading,
+    setPendingNancyCompose,
+    setPendingBreakRoomJoke,
+    setPendingRoomNavigation,
+    setPendingSessionList,
+    setPendingWorkspaceSwitch,
     setProviderBadge,
+    setSessionPromptMode,
+    setSessionPromptTargetId,
     workspaces,
   });
 
@@ -257,7 +308,7 @@ export default function ChatPage() {
     const loadState = async () => {
       try {
         const [stateResponse, transcriptEntries] = await Promise.all([
-          callTool("office.state_get", {}),
+          callTool("office.state_get", { session_id: sessionId }),
           loadTranscript(120, sessionId),
         ]);
         const structured = stateResponse.structuredContent as LobbyState | undefined;
@@ -267,6 +318,22 @@ export default function ChatPage() {
         const nextWorkspace = String(structured.workspace_id || "");
         const nextRoomPersona = roomPersonaValues(structured);
         setWorkspaceId(nextWorkspace);
+        setActiveWorkContexts(Array.isArray(structured.active_work_context) ? structured.active_work_context : []);
+        setPendingNancyCompose(structured.pending_nancy_email_compose);
+        setPendingBreakRoomJoke(structured.pending_break_room_joke);
+        setPendingRoomNavigation(structured.pending_room_navigation);
+        setPendingSessionList(structured.pending_session_list);
+        setPendingWorkspaceSwitch(structured.pending_workspace_switch);
+        if (structured.pending_session_rename) {
+          setSessionPromptMode("rename");
+          setSessionPromptTargetId(sessionId);
+        } else if (structured.pending_session_create) {
+          setSessionPromptMode("create");
+          setSessionPromptTargetId(sessionId);
+        } else {
+          setSessionPromptMode("create");
+          setSessionPromptTargetId("");
+        }
         applyActiveRoom(nextRoomPersona.room, nextRoomPersona.persona);
         applyHydratedMessages(nextRoomPersona.room, nextRoomPersona.persona, transcriptEntries, sessionId);
         void refreshWorkspaces(nextWorkspace);
@@ -288,6 +355,10 @@ export default function ChatPage() {
     };
   }, [router, sessionId]);
 
+  useEffect(() => {
+    void refreshActiveWorkContexts();
+  }, [activeRoom, refreshActiveWorkContexts, workspaceId]);
+
   const sessionLabel = useMemo(() => getSessionShortLabel(sessionId), [sessionId]);
   const currentWorkspace = useMemo(() => workspaceById(workspaces, workspaceId), [workspaceId, workspaces]);
   const currentWorkspaceLabel = activeWorkspaceLabel || currentWorkspace?.label || workspaceId || "Unassigned";
@@ -297,6 +368,10 @@ export default function ChatPage() {
   const visibleMessages = useMemo(
     () => visibleMessagesForScope(messages, sessionId, chatScope, activeRoom),
     [activeRoom, chatScope, messages, sessionId],
+  );
+  const visibleActiveWorkContexts = useMemo(
+    () => activeWorkContexts.filter((context) => !completedWorkContextIds.includes(String(context.context_id || ""))),
+    [activeWorkContexts, completedWorkContextIds],
   );
 
   function appendMessage(message: Message) {
@@ -388,6 +463,7 @@ export default function ChatPage() {
             />
           ) : null}
           <SessionNamePrompt
+            sessionPromptMode={sessionPromptMode}
             sessionDescriptionDraft={sessionDescriptionDraft}
             sessionPromptTargetId={sessionPromptTargetId}
             sessionTitleDraft={sessionTitleDraft}
@@ -445,20 +521,40 @@ export default function ChatPage() {
         <ChatTranscript
           activePersona={activePersona}
           activeRoom={activeRoom}
+          activeWorkContexts={visibleActiveWorkContexts}
           backendBanner={backendBanner}
           chatScope={chatScope}
+          completedWorkContextIds={completedWorkContextIds}
+          completingWorkContextId={completingWorkContextId}
           confirmedIntegrationIds={confirmedIntegrationIds}
           confirmingIntegrationId={confirmingIntegrationId}
           error={error}
           loading={loading}
           logRef={logRef}
           messages={visibleMessages}
+          nancyMode={nancyMode}
+          pendingNancyCompose={pendingNancyCompose}
+          pendingBreakRoomJoke={pendingBreakRoomJoke}
+          pendingRoomNavigation={pendingRoomNavigation}
+          pendingSessionList={pendingSessionList}
+          pendingWorkspaceSwitch={pendingWorkspaceSwitch}
           roomStatus={roomStatus}
           sessionId={sessionId}
           onChatScopeChange={setChatScope}
-          onConfirmIntegration={(confirmationId, room, targetSessionId) => void confirmIntegrationAction(confirmationId, room, targetSessionId)}
+          onConfirmIntegration={(confirmationId, room, targetSessionId, assistantPersona) => void confirmIntegrationAction(confirmationId, room, targetSessionId, assistantPersona)}
+          onCancelIntegration={(confirmationId, room, targetSessionId, assistantPersona) => void cancelIntegrationAction(confirmationId, room, targetSessionId, assistantPersona)}
           onEmailContact={(contact, room, targetSessionId) => void startEmailToContact(contact, room, targetSessionId)}
+          onEnableNancyMode={() => setNancyMode(true)}
+          onRevealBreakRoomPunchline={() => void sendText("punchline")}
+          onDismissBreakRoomJoke={() => void sendText("cancel")}
+          onKeepCurrentRoom={() => void sendText("no")}
+          onKeepSessionListPending={() => void sendText("no")}
+          onKeepCurrentWorkspace={() => void sendText("no")}
           onOpenGmailThread={(message, room, targetSessionId) => void openGmailThread(message, room, targetSessionId)}
+          onCompleteWorkContext={(contextId, activeIndex, room, targetSessionId) => void completeWorkContext(contextId, activeIndex, room, targetSessionId)}
+          onSwitchRoomNow={() => void sendText("yes")}
+          onShowSessionListNow={() => void sendText("yes")}
+          onSwitchWorkspaceNow={() => void sendText("yes")}
         />
         <ChatComposer
           activePersona={activePersona}

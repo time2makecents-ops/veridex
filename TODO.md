@@ -1,6 +1,6 @@
 # Veridex TODO
 
-Last updated: 2026-07-03
+Last updated: 2026-07-05
 
 ## Current Focus
 
@@ -10,7 +10,7 @@ Last updated: 2026-07-03
 - Make normal chat feel conversational while keeping explicit system commands deterministic.
 - Keep startup and smoke testing simple enough to diagnose without guessing.
 - Current branch: `feat/routing-followup-reliability`.
-- Current active slice: Nancy guided pending-email compose state and contact-card Email entry, building on the routing follow-up reliability work.
+- Current active slice: durable cross-room work context continuity. Active work is now persisted per workspace, surfaced in chat, injected into AI context, and carried through state, room, session, and workspace transitions.
 
 ## Immediate Priorities
 
@@ -32,6 +32,7 @@ Last updated: 2026-07-03
    - Keep future cleanup narrow and behavior-preserving.
    - Workspace/session lifecycle logic has now been split into focused hooks; keep any further cleanup narrow and behavior-preserving.
    - Nancy now has guided pending-email compose state in chat and a contact-card Email action entry point.
+   - Chat now shows an active-work strip backed by durable workspace work context. It hydrates from `office.state_get`, refreshes after relevant chat/tool actions, and updates immediately on room/session/workspace navigation responses.
 
 4. Runtime/Git hygiene
    - Remove generated runtime state from tracked source control in a careful patch. (`office_app/runtime/` is already out of the Git index, and `office_app/backend/incident_log.csv` is now ignored and removed from the index without deleting the local file.)
@@ -39,20 +40,33 @@ Last updated: 2026-07-03
    - Keep `.env.local`, local certs, storage, logs, and runtime databases ignored.
 
 5. Documentation alignment
-   - `VERIDEX_THREAD_HANDOFF.md` now tracks branch `feat/routing-followup-reliability`, the Nancy guided email compose/contact-card email slice, and the latest validation baseline.
+   - `VERIDEX_THREAD_HANDOFF.md` now tracks branch `feat/routing-followup-reliability`, the durable cross-room work context slice, and the latest validation baseline.
    - Treat older architecture docs as design intent unless recently updated.
    - Update handoff docs after major stabilization milestones.
 
 ## Suggested Future Steps
 
-1. Finish and review the Nancy compose/contact-card slice
-   - Keep the branch `feat/routing-followup-reliability` focused on the current reliability and Nancy email-entry behavior.
-   - Review the guided pending-email compose state, contact-card Email action, and validation behavior together.
-   - Re-run full validation after backend cleanup is complete.
-   - Open the next PR as a focused stabilization review instead of another large baseline.
+1. Finish and review the durable work-context continuity slice
+   - Review `WorkContextService`, `office.work_context_*` tools, active-work routing, Nancy email context capture, memo context capture, and the chat active-work strip together.
+   - Confirm active work survives reloads, room switches, session switches, workspace switches, and app restarts.
+   - Confirm replacing the current manual work focus does not accumulate stale active items; `set current work to ...` should replace the singular current focus while `track active work: ...` can still append.
+   - Confirm Nancy Gmail send confirmations remain actionable after reload and room/session/workspace navigation, not just visible as passive reminders.
+   - Confirm pending Nancy compose state itself reappears after reload and navigation with the correct next-step guidance, including off-office routing hints when Nancy mode is required.
+   - Confirm replacement-session naming prompts survive reload and session/workspace navigation when the backend still has a pending session-name request.
+   - Confirm pending session-rename prompts survive reload and session/workspace navigation, and reuse the session-name modal in explicit rename mode instead of relying on remembered conversational context.
+   - Confirm pending session-list confirmations survive reload and room/session/workspace navigation with explicit `List Sessions` / `Not Now` recovery actions instead of relying on remembered yes/no context.
+   - Confirm pending workspace-switch confirmations survive reload and navigation with explicit `Switch Now` / `Stay Here` recovery actions instead of relying on the user remembering a yes/no follow-up.
+   - Confirm pending room-navigation confirmations survive reload and navigation with explicit `Move Now` / `Stay Here` recovery actions instead of relying on remembered yes/no context.
+   - Confirm cancel/negative responses clear pending continuity UI immediately in the active chat surface, not only after a later reload or hydration pass.
+   - Confirm non-Gmail integration confirmations, especially calendar create/update/cancel, stay actionable after reload and navigation instead of surviving only in the integration pending-action store.
+   - Connected-account live audits now prove Gmail-send and Calendar-create confirmations can be created without executing the external action, persist into active work context, survive state reads and room switching, and be explicitly dismissed for cleanup.
+   - Keep the branch focused on continuity stabilization before adding broader task/project management behavior.
+   - Decide whether to commit this as one large stabilization checkpoint or split it before opening review.
 
 2. Run a deeper behavior pass before more refactors
    - Exercise session switching, workspace switching, room switching, file upload/download, document reader, and integration confirmation.
+   - Run `office_app\work_context_smoke.ps1` after continuity changes to verify active work survives state hydration, room switching, session activation, workspace activation, and completion.
+   - Run `office_app\work_context_smoke.ps1 -RestartBackend` when persistence changes to verify active work survives a managed restart.
    - Capture any regressions as focused issues before editing more code.
    - Prefer fixing observed behavior over speculative cleanup.
 
@@ -84,6 +98,10 @@ Last updated: 2026-07-03
    - Run `npm.cmd run build` and the smoke test after each slice.
 
 8. Extend department workflow coverage
+   - Durable work context now persists active cross-room work in `work_context.json` per workspace and exposes `office.work_context_save`, `office.work_context_list`, and `office.work_context_complete`.
+   - Active work context is included in `office.state_get`, `office.room_set`, `office.session_activate`, and `office.workspace_activate` so room/session/workspace transitions carry the same continuity state.
+   - Nancy email compose/send-confirmation state and memo dispatch now record work context so ongoing cross-room work remains visible until completed.
+   - AI generation receives active work context as model context so room assistants can stay aware of durable work without relying only on recent chat.
    - Conference Room now supports agenda artifact creation plus create/update/cancel calendar preparation from explicit requests.
    - Conference Room now persists internal meeting state through `MeetingStateStore` for start meeting, agenda items, decisions, action items, parking-lot items, and show meeting state without implying Google Calendar writes.
    - Conference Room now has an in-app Meeting panel for editing the active meeting title and ordered meeting items, deleting items, saving deterministic meeting brief artifacts, and saving optional AI-polished brief artifacts separately.
@@ -160,6 +178,18 @@ Deep smoke test:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Office-App\office_app\smoke_test.ps1 -Deep
+```
+
+Work context continuity smoke:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Office-App\office_app\work_context_smoke.ps1
+```
+
+Managed-restart persistence smoke:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Office-App\office_app\work_context_smoke.ps1 -RestartBackend
 ```
 
 ## Deferred UI Work

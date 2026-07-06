@@ -5,12 +5,69 @@ import re
 import uuid
 from typing import Any, Dict
 
+from office_app.server.artifact_request_helpers import pending_break_room_joke, pending_room_navigation, pending_session_list, pending_session_rename
 from office_app.server.errors import error_missing_required_field
 
 from .dependencies import HandlerDeps
 
 
 def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
+    def _state_with_active_work_context(
+        workspace_id: str,
+        state: Dict[str, Any],
+        *,
+        session_id: str = "",
+        source_state: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        enriched = dict(state or {})
+        if deps.work_context_service is not None:
+            enriched["active_work_context"] = deps.work_context_service.list_contexts(
+                workspace_id,
+                status="active",
+                limit=8,
+            )
+        raw_state = source_state if isinstance(source_state, dict) else state
+        if session_id and isinstance(raw_state, dict):
+            pending_map = raw_state.get("pending_nancy_email_by_session")
+            pending = pending_map.get(session_id) if isinstance(pending_map, dict) else None
+            if isinstance(pending, dict):
+                enriched["pending_nancy_email_compose"] = {
+                    str(key): str(value or "") for key, value in pending.items()
+                }
+            pending_session_create_map = raw_state.get("pending_session_create_by_session")
+            pending_session_create = pending_session_create_map.get(session_id) if isinstance(pending_session_create_map, dict) else None
+            if isinstance(pending_session_create, dict):
+                enriched["pending_session_create"] = {
+                    str(key): str(value or "") for key, value in pending_session_create.items()
+                }
+            pending_rename = pending_session_rename(raw_state, session_id)
+            if isinstance(pending_rename, dict):
+                enriched["pending_session_rename"] = {
+                    str(key): str(value or "") for key, value in pending_rename.items()
+                }
+            pending_list = pending_session_list(raw_state, session_id)
+            if isinstance(pending_list, dict):
+                enriched["pending_session_list"] = {
+                    str(key): str(value or "") for key, value in pending_list.items()
+                }
+            pending_workspace_switch_map = raw_state.get("pending_workspace_switch_by_session")
+            pending_workspace_switch = pending_workspace_switch_map.get(session_id) if isinstance(pending_workspace_switch_map, dict) else None
+            if isinstance(pending_workspace_switch, dict):
+                enriched["pending_workspace_switch"] = {
+                    str(key): str(value or "") for key, value in pending_workspace_switch.items()
+                }
+            pending_navigation = pending_room_navigation(raw_state)
+            if isinstance(pending_navigation, dict):
+                enriched["pending_room_navigation"] = {
+                    str(key): str(value or "") for key, value in pending_navigation.items()
+                }
+            pending_joke = pending_break_room_joke(raw_state, session_id)
+            if isinstance(pending_joke, dict):
+                enriched["pending_break_room_joke"] = {
+                    str(key): str(value or "") for key, value in pending_joke.items()
+                }
+        return enriched
+
     def handle_workspaces_list(args: Dict[str, Any]) -> Dict[str, Any]:
         session_id = str(args.get("session_id") or "").strip()
         if session_id:
@@ -93,7 +150,12 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             raise error_missing_required_field("workspace_id")
         user = deps.user_service.get_user_for_session(session_id)
         result = deps.user_service.activate_workspace(user_id=str(user["user_id"]), workspace_id=workspace_id)
-        workspace_state = result["workspace_state"]
+        workspace_state = _state_with_active_work_context(
+            workspace_id,
+            result["workspace_state"],
+            session_id=str(result["session"]["session_id"] or "").strip(),
+            source_state=result["workspace_state"],
+        )
         session = result["session"]
         return {
             "structuredContent": {
@@ -126,7 +188,12 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                 "workspace_id": result.get("workspace_id"),
                 "session_id": result.get("session_id"),
                 "archived_workspace": archived_workspace,
-                "workspace_state": result.get("workspace_state"),
+                "workspace_state": _state_with_active_work_context(
+                    str(result.get("workspace_id") or workspace_id).strip() or workspace_id,
+                    result.get("workspace_state") or {},
+                    session_id=str(result.get("session_id") or "").strip(),
+                    source_state=result.get("workspace_state") or {},
+                ),
                 "switched_workspace": switched_workspace,
             },
             "content": [{"type": "text", "text": response_text}],
@@ -153,7 +220,25 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
 
     def handle_office_state_get(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
-        return deps.pipeline.snapshot_response(workspace_id)
+        session_id = str(args.get("session_id") or "").strip()
+        response = deps.pipeline.snapshot_response(workspace_id)
+        structured = response.get("structuredContent")
+        source_state = {}
+        if deps.kernel is not None:
+            try:
+                source_state = deps.kernel.get_state(workspace_id)
+            except Exception:
+                source_state = {}
+        if isinstance(structured, dict):
+            structured.update(
+                _state_with_active_work_context(
+                    workspace_id,
+                    structured,
+                    session_id=session_id,
+                    source_state=source_state,
+                )
+            )
+        return response
 
     def handle_office_transcript_get(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
@@ -221,7 +306,18 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             state_sha256=deps.stable_state_sha(state),
         )
 
-        return deps.pipeline.enter_room_response(workspace_id, result)
+        response = deps.pipeline.enter_room_response(workspace_id, result)
+        structured = response.get("structuredContent")
+        if isinstance(structured, dict):
+            structured.update(
+                _state_with_active_work_context(
+                    workspace_id,
+                    structured,
+                    session_id=str(session_id or "").strip(),
+                    source_state=state,
+                )
+            )
+        return response
 
     def handle_office_nancy_route(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]

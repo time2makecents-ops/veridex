@@ -2,8 +2,39 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+
+def pending_break_room_joke(state: Dict[str, Any], session_id: str) -> Dict[str, Any] | None:
+    if not session_id:
+        return None
+    pending_map = state.get("pending_break_room_jokes")
+    if not isinstance(pending_map, dict):
+        return None
+    pending = pending_map.get(session_id)
+    return pending if isinstance(pending, dict) else None
+
+
 def pending_room_navigation(state: Dict[str, Any]) -> Dict[str, Any] | None:
     pending = state.get("pending_room_navigation")
+    return pending if isinstance(pending, dict) else None
+
+
+def pending_session_rename(state: Dict[str, Any], session_id: str) -> Dict[str, Any] | None:
+    if not session_id:
+        return None
+    pending_map = state.get("pending_session_rename_by_session")
+    if not isinstance(pending_map, dict):
+        return None
+    pending = pending_map.get(session_id)
+    return pending if isinstance(pending, dict) else None
+
+
+def pending_session_list(state: Dict[str, Any], session_id: str) -> Dict[str, Any] | None:
+    if not session_id:
+        return None
+    pending_map = state.get("pending_session_list_by_session")
+    if not isinstance(pending_map, dict):
+        return None
+    pending = pending_map.get(session_id)
     return pending if isinstance(pending, dict) else None
 
 

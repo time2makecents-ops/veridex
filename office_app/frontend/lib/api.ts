@@ -123,6 +123,33 @@ export type MemoRecord = {
   [key: string]: unknown;
 };
 
+export type WorkContextRecord = {
+  context_id: string;
+  session_id?: string;
+  title?: string;
+  summary?: string;
+  status?: string;
+  active_room?: string;
+  active_persona?: string;
+  updated_at?: string;
+  refs?: {
+    kind?: string;
+    confirmation_id?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+};
+
+export type NancyEmailComposeState = {
+  mode?: string;
+  stage?: string;
+  to?: string;
+  subject?: string;
+  body?: string;
+  source?: string;
+  [key: string]: unknown;
+};
+
 export type UserRecord = {
   user_id: string;
   name?: string;
@@ -442,6 +469,16 @@ export async function listMemos(limit = 25): Promise<MemoRecord[]> {
   const response = await callTool("office.memos_list", { limit });
   const structured = response.structuredContent as { memos?: unknown } | undefined;
   return Array.isArray(structured?.memos) ? (structured.memos as MemoRecord[]) : [];
+}
+
+export async function listActiveWorkContexts(limit = 8, sessionId?: string): Promise<WorkContextRecord[]> {
+  const response = await callTool("office.work_context_list", {
+    status: "active",
+    limit,
+    ...(sessionId ? { session_id: sessionId } : {}),
+  });
+  const structured = response.structuredContent as { contexts?: unknown } | undefined;
+  return Array.isArray(structured?.contexts) ? (structured.contexts as WorkContextRecord[]) : [];
 }
 
 export async function getMemo(memoId: string): Promise<MemoRecord> {

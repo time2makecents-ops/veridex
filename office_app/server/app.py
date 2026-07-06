@@ -22,7 +22,8 @@ from office_app.server.receptionist_context_service import ReceptionistContextSe
 from office_app.server.memo_service import MemoService
 from office_app.server.nancy_service import NancyService
 from office_app.server.ocr_service import OcrService
-from office_app.server.artifact_request_helpers import pending_room_navigation
+from office_app.server.work_context_service import WorkContextService
+from office_app.server.artifact_request_helpers import pending_break_room_joke, pending_room_navigation
 from office_app.server.request_pipeline import RequestPipeline
 from office_app.server.request_tool_execution import execute_tool_route
 from office_app.server.request_transcript import record_assistant_turn, record_user_turn
@@ -42,6 +43,7 @@ from office_app.server.handlers.meeting_handlers import build_meeting_handlers
 from office_app.server.handlers.memo_handlers import build_memo_handlers
 from office_app.server.handlers.room_capability_handlers import build_room_capability_handlers
 from office_app.server.handlers.session_handlers import build_session_handlers
+from office_app.server.handlers.work_context_handlers import build_work_context_handlers
 from office_app.server.handlers.workspace_handlers import build_workspace_handlers
 from office_app.server.tool_context import ToolContext
 from office_app.server.tool_definitions import VERIDEX_TOOL_DEFINITIONS, ToolDefinition
@@ -91,6 +93,7 @@ def stable_state_sha(state: Dict[str, Any]) -> str:
 store = WorkspaceStore(WORKSPACES_DIR, utc_now_fn=utc_now)
 kernel = WorkspaceKernel(store=store, utc_now_fn=utc_now)
 memo_service = MemoService(store=store, legacy_memos_dir=LEGACY_MEMOS_DIR, utc_now_fn=utc_now)
+work_context_service = WorkContextService(store=store, utc_now_fn=utc_now)
 archive_service = ArchiveService(workspaces_dir=WORKSPACES_DIR, utc_now_fn=utc_now)
 user_service = UserService(kernel=kernel, runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
 integration_service = IntegrationService(runtime_dir=RUNTIME_DIR)
@@ -109,6 +112,23 @@ nancy_service = NancyService(
     utc_now_fn=utc_now,
 )
 debug_notes_store = DebugNotesStore(runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
+
+NANCY_GOVERNED_TOOL_NAMES = {
+    "office.gmail_search",
+    "office.gmail_read",
+    "office.gmail_thread_read",
+    "office.gmail_draft",
+    "office.gmail_send",
+    "office.contact_resolve_email",
+    "office.contact_save",
+    "office.contact_list",
+    "office.calendar_list",
+    "office.calendar_create",
+    "office.calendar_update",
+    "office.calendar_cancel",
+    "office.integration_confirm",
+    "office.integration_cancel",
+}
 
 
 def build_tool_context(tool_name: str, args: Dict[str, Any], definition: ToolDefinition) -> ToolContext:
@@ -132,6 +152,11 @@ def build_tool_context(tool_name: str, args: Dict[str, Any], definition: ToolDef
         except HTTPException:
             active_room = None
             active_persona = None
+
+    assistant_persona = str(args.get("assistant_persona") or "").strip()
+    if assistant_persona == "Nancy" and tool_name in NANCY_GOVERNED_TOOL_NAMES:
+        active_room = "my_office"
+        active_persona = "Nancy"
 
     return ToolContext(
         tool_name=tool_name,
@@ -554,6 +579,7 @@ def handle_natural_language_request(
                     "workspace_id": workspace_id,
                     "session_id": session_id,
                     "response_text": response_text,
+                    "clear_pending_session_prompt": True,
                     "routing": {
                         "route_kind": "clarify",
                         "capability": "session.rename.name_required",
@@ -650,7 +676,7 @@ def handle_natural_language_request(
                 user_profile=user_profile,
             )
             return enriched
-        if _is_confirmation_no(request_text) or _is_cancel_text(request_text):
+        if _is_confirmation_no(request_text) or _is_cancel_text(request_text) or _is_stay_here_text(request_text):
             current_state = _clear_pending_session_list(current_state, session_id)
             store.save_state(workspace_id, current_state)
             response_text = "Okay. I won't list the sessions."
@@ -659,6 +685,7 @@ def handle_natural_language_request(
                     "workspace_id": workspace_id,
                     "session_id": session_id,
                     "response_text": response_text,
+                    "clear_pending_session_list": True,
                     "routing": {
                         "route_kind": "clarify",
                         "capability": "session.list.confirmation",
@@ -714,6 +741,7 @@ def handle_natural_language_request(
                         "tool": "office.workspace_activate",
                         "reason": "Confirmed pending workspace switch.",
                     }
+                    structured["clear_pending_workspace_switch"] = True
                     response_text = (
                         f"Switched to workspace \"{target_label}\" ({target_workspace_id}) "
                         f"and started a new session ({next_session_id})."
@@ -730,7 +758,7 @@ def handle_natural_language_request(
                 user_profile=user_profile,
             )
             return enriched
-        if _is_confirmation_no(request_text) or _is_cancel_text(request_text):
+        if _is_confirmation_no(request_text) or _is_cancel_text(request_text) or _is_stay_here_text(request_text):
             current_state = _clear_pending_workspace_switch(current_state, session_id)
             store.save_state(workspace_id, current_state)
             response_text = f"Okay. I created workspace \"{target_label}\" ({target_workspace_id}) and will keep you here."
@@ -739,6 +767,7 @@ def handle_natural_language_request(
                     "workspace_id": workspace_id,
                     "session_id": session_id,
                     "response_text": response_text,
+                    "clear_pending_workspace_switch": True,
                     "routing": {
                         "route_kind": "clarify",
                         "capability": "workspace.switch.confirmation",
@@ -801,7 +830,7 @@ def handle_natural_language_request(
                     }
             return attach_request_context(response, workspace_id=workspace_id, session_id=session_id)
 
-        if _is_confirmation_no(request_text):
+        if _is_confirmation_no(request_text) or _is_stay_here_text(request_text):
             current_state.pop("pending_room_navigation", None)
             store.save_state(workspace_id, current_state)
             response_text = f"Okay. Staying in {current_state.get('active_room', 'lobby')}."
@@ -810,6 +839,7 @@ def handle_natural_language_request(
                     "workspace_id": workspace_id,
                     "session_id": session_id,
                     "response_text": response_text,
+                    "clear_pending_room_navigation": True,
                     "routing": {
                         "route_kind": "model",
                         "capability": "ai.respond",
@@ -851,6 +881,7 @@ def handle_natural_language_request(
                     "workspace_id": workspace_id,
                     "session_id": session_id,
                     "response_text": response_text,
+                    "clear_pending_session_prompt": True,
                     "routing": {
                         "route_kind": "clarify",
                         "capability": "session.create.name_required",
@@ -1076,6 +1107,10 @@ def handle_natural_language_request(
                 "model": generated.get("model"),
                 "fallback_used": generated.get("fallback_used"),
                 "attempts": generated.get("attempts"),
+                "pending_break_room_joke": {
+                    "setup": str(joke.get("setup") or "").strip(),
+                    "punchline": str(joke.get("punchline") or "").strip(),
+                },
                 "routing": {
                     "route_kind": "break_room_joke",
                     "capability": routed["capability"],
@@ -1140,6 +1175,25 @@ def handle_natural_language_request(
             },
             "content": [{"type": "text", "text": response_text}],
         }
+        if str(routed_args.get("clear_pending_break_room_joke") or "").strip().lower() in {"1", "true", "yes"}:
+            response["structuredContent"]["clear_pending_break_room_joke"] = True
+        if str(routed.get("capability") or "") == "session.rename.name_required":
+            pending_rename = _pending_session_rename(current_state, session_id)
+            if isinstance(pending_rename, dict):
+                response["structuredContent"]["pending_session_rename"] = {
+                    str(key): str(value or "") for key, value in pending_rename.items()
+                }
+        if str(routed.get("capability") or "") == "session.list.confirmation":
+            pending_list = _pending_session_list(current_state, session_id)
+            if isinstance(pending_list, dict):
+                response["structuredContent"]["pending_session_list"] = {
+                    str(key): str(value or "") for key, value in pending_list.items()
+                }
+        pending_joke = pending_break_room_joke(current_state, session_id)
+        if isinstance(pending_joke, dict):
+            response["structuredContent"]["pending_break_room_joke"] = {
+                str(key): str(value or "") for key, value in pending_joke.items()
+            }
         _apply_pending_nancy_email_state(
             workspace_id=workspace_id,
             session_id=session_id,
@@ -1314,6 +1368,16 @@ def create_integration_action(payload: IntegrationActionRequest, x_session_id: O
     if not profile:
         raise HTTPException(status_code=401, detail="Invalid session")
     pending = integration_service.create_pending_action(user_id=str(profile["user_id"]), action_kind=payload.action_kind, payload=payload.payload)
+    session_id = str(x_session_id or "").strip()
+    workspace_id = str(user_service.resolve_workspace_for_session(session_id) or "").strip()
+    if workspace_id and session_id and str(payload.action_kind or "").strip() != "gmail.send":
+        state = kernel.get_state(workspace_id)
+        _record_integration_confirmation_work_context(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            state=state,
+            structured=pending,
+        )
     return {"structuredContent": pending, "content": [{"type": "text", "text": "External action is pending confirmation."}]}
 
 
@@ -1323,7 +1387,46 @@ def confirm_integration_action(confirmation_id: str, x_session_id: Optional[str]
     if not profile:
         raise HTTPException(status_code=401, detail="Invalid session")
     result = integration_service.confirm_action(user_id=str(profile["user_id"]), confirmation_id=confirmation_id)
+    session_id = str(x_session_id or "").strip()
+    workspace_id = str(user_service.resolve_workspace_for_session(session_id) or "").strip()
+    action_kind = str(result.get("action_kind") or "").strip()
+    if workspace_id and session_id and work_context_service is not None and action_kind and action_kind != "gmail.send":
+        work_context_service.complete_context(
+            workspace_id=workspace_id,
+            source_type="integration_confirmation",
+            source_id=confirmation_id,
+            summary=f"{action_kind} was confirmed and completed.",
+        )
     return {"structuredContent": {"result": result}, "content": [{"type": "text", "text": "External action completed."}]}
+
+
+@app.post("/integrations/actions/{confirmation_id}/cancel")
+def cancel_integration_action(confirmation_id: str, x_session_id: Optional[str] = Header(default=None, alias="X-Session-Id")) -> Dict[str, Any]:
+    profile = _session_user_profile(x_session_id)
+    if not profile:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    result = integration_service.cancel_action(user_id=str(profile["user_id"]), confirmation_id=confirmation_id)
+    session_id = str(x_session_id or "").strip()
+    workspace_id = str(user_service.resolve_workspace_for_session(session_id) or "").strip()
+    action_kind = str(result.get("action_kind") or "").strip()
+    structured: Dict[str, Any] = {"result": result}
+    if workspace_id and session_id and work_context_service is not None and action_kind:
+        if action_kind == "gmail.send":
+            work_context_service.complete_context(
+                workspace_id=workspace_id,
+                source_type="nancy_email",
+                source_id=f"{session_id}:nancy_email",
+                summary="Nancy Gmail send confirmation was dismissed.",
+            )
+            structured["clear_pending_nancy_email"] = True
+        else:
+            work_context_service.complete_context(
+                workspace_id=workspace_id,
+                source_type="integration_confirmation",
+                source_id=confirmation_id,
+                summary=f"{action_kind} confirmation was dismissed.",
+            )
+    return {"structuredContent": structured, "content": [{"type": "text", "text": "External action dismissed."}]}
 
 
 @app.get("/admin/users")
@@ -1640,12 +1743,17 @@ def _is_confirmation_yes(text: str) -> bool:
 
 def _is_confirmation_no(text: str) -> bool:
     normalized = str(text or "").strip().lower()
-    return normalized in {"0", "false", "no", "n", "off"}
+    return normalized in {"0", "false", "no", "n", "off", "not now", "not yet"}
 
 
 def _is_cancel_text(text: str) -> bool:
     normalized = str(text or "").strip().lower()
     return normalized in {"cancel", "never mind", "nevermind", "stop", "abort"}
+
+
+def _is_stay_here_text(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    return normalized in {"stay here", "stay", "keep me here", "remain here"}
 
 
 def _pending_session_create(state: Dict[str, Any], session_id: str) -> Optional[Dict[str, Any]]:
@@ -1777,6 +1885,169 @@ def _clear_pending_nancy_email(state: Dict[str, Any], session_id: str) -> Dict[s
     return state
 
 
+def _nancy_email_work_context_summary(compose: Dict[str, Any]) -> str:
+    stage = str(compose.get("stage") or "").strip().lower()
+    to_addr = str(compose.get("to") or "").strip()
+    if stage == "recipient":
+        return "Nancy is waiting for the email recipient."
+    if stage == "subject":
+        target = f" to {to_addr}" if to_addr else ""
+        return f"Nancy is waiting for the email subject{target}."
+    if stage == "body":
+        target = f" to {to_addr}" if to_addr else ""
+        return f"Nancy is waiting for the email body{target}."
+    if stage == "review":
+        target = f" to {to_addr}" if to_addr else ""
+        return f"Nancy has an email draft ready for review{target}."
+    return "Nancy has an active email compose task."
+
+
+def _record_nancy_email_work_context(
+    *,
+    workspace_id: str,
+    session_id: str,
+    state: Dict[str, Any],
+    compose: Dict[str, Any],
+) -> None:
+    service = globals().get("work_context_service")
+    if service is None:
+        return
+    to_addr = str(compose.get("to") or "").strip()
+    title = f"Email to {to_addr}" if to_addr else "Nancy email draft"
+    service.upsert_context(
+        workspace_id=workspace_id,
+        source_type="nancy_email",
+        source_id=f"{session_id}:nancy_email",
+        title=title,
+        summary=_nancy_email_work_context_summary(compose),
+        session_id=session_id,
+        active_room=str(state.get("active_room") or "").strip(),
+        active_persona=str(state.get("active_persona") or "").strip(),
+        refs={
+            "kind": "nancy_email_compose",
+            "mode": str(compose.get("mode") or "compose"),
+            "stage": str(compose.get("stage") or "").strip(),
+            "to": to_addr,
+            "subject": str(compose.get("subject") or ""),
+            "source": str(compose.get("source") or ""),
+        },
+    )
+
+
+def _complete_nancy_email_work_context(*, workspace_id: str, session_id: str) -> None:
+    service = globals().get("work_context_service")
+    if service is None:
+        return
+    service.complete_context(
+        workspace_id=workspace_id,
+        source_type="nancy_email",
+        source_id=f"{session_id}:nancy_email",
+        summary="Nancy email compose task was cleared.",
+    )
+
+
+def _is_gmail_send_confirmation_response(structured: Any) -> bool:
+    if not isinstance(structured, dict):
+        return False
+    return (
+        str(structured.get("action_kind") or "").strip() == "gmail.send"
+        and bool(str(structured.get("confirmation_id") or "").strip())
+    )
+
+
+def _is_integration_confirmation_response(structured: Any) -> bool:
+    if not isinstance(structured, dict):
+        return False
+    return bool(str(structured.get("action_kind") or "").strip()) and bool(str(structured.get("confirmation_id") or "").strip())
+
+
+def _record_nancy_email_confirmation_work_context(
+    *,
+    workspace_id: str,
+    session_id: str,
+    state: Dict[str, Any],
+    structured: Dict[str, Any],
+) -> None:
+    service = globals().get("work_context_service")
+    if service is None:
+        return
+    pending = _pending_nancy_email(state, session_id) or {}
+    review = structured.get("email_review") if isinstance(structured.get("email_review"), dict) else {}
+    to_value = pending.get("to") or review.get("to") or ""
+    if isinstance(to_value, list):
+        to_addr = ", ".join(str(item).strip() for item in to_value if str(item).strip())
+    else:
+        to_addr = str(to_value or "").strip()
+    subject = str(pending.get("subject") or review.get("subject") or "").strip()
+    title = f"Email to {to_addr}" if to_addr else "Nancy email send confirmation"
+    service.upsert_context(
+        workspace_id=workspace_id,
+        source_type="nancy_email",
+        source_id=f"{session_id}:nancy_email",
+        title=title,
+        summary="Nancy prepared a Gmail send and is waiting for Gmail send confirmation.",
+        status="active",
+        session_id=session_id,
+        active_room=str(state.get("active_room") or "").strip(),
+        active_persona=str(state.get("active_persona") or "").strip(),
+        refs={
+            "kind": "nancy_email_confirmation",
+            "confirmation_id": str(structured.get("confirmation_id") or "").strip(),
+            "to": to_addr,
+            "subject": subject,
+            "stage": "confirmation",
+        },
+    )
+
+
+def _record_integration_confirmation_work_context(
+    *,
+    workspace_id: str,
+    session_id: str,
+    state: Dict[str, Any],
+    structured: Dict[str, Any],
+) -> None:
+    service = globals().get("work_context_service")
+    if service is None:
+        return
+    action_kind = str(structured.get("action_kind") or "").strip()
+    confirmation_id = str(structured.get("confirmation_id") or "").strip()
+    if not action_kind or not confirmation_id or action_kind == "gmail.send":
+        return
+    payload = structured.get("payload") if isinstance(structured.get("payload"), dict) else {}
+    event_summary = str(payload.get("summary") or payload.get("title") or "").strip()
+    event_id = str(payload.get("event_id") or "").strip()
+    action_label = action_kind.rsplit(".", 1)[-1].replace("_", " ").strip() or "calendar action"
+    title = f"Calendar {action_label} confirmation"
+    if event_summary:
+        title = f"Calendar {action_label}: {event_summary}"
+    elif event_id:
+        title = f"Calendar {action_label}: {event_id}"
+    summary = f"Calendar {action_label} is waiting for Google confirmation."
+    if event_summary:
+        summary = f'Calendar {action_label} for "{event_summary}" is waiting for Google confirmation.'
+    elif event_id:
+        summary = f"Calendar {action_label} for {event_id} is waiting for Google confirmation."
+    service.upsert_context(
+        workspace_id=workspace_id,
+        source_type="integration_confirmation",
+        source_id=confirmation_id,
+        title=title,
+        summary=summary,
+        status="active",
+        session_id=session_id,
+        active_room=str(state.get("active_room") or "").strip(),
+        active_persona=str(state.get("active_persona") or "").strip(),
+        refs={
+            "kind": "integration_confirmation",
+            "confirmation_id": confirmation_id,
+            "action_kind": action_kind,
+            "event_summary": event_summary,
+            "event_id": event_id,
+        },
+    )
+
+
 def _apply_pending_nancy_email_state(
     *,
     workspace_id: str,
@@ -1793,15 +2064,39 @@ def _apply_pending_nancy_email_state(
     clear_requested = bool(routed_args.get("clear_pending_nancy_email"))
     if isinstance(structured, dict) and structured.get("clear_pending_nancy_email"):
         clear_requested = True
-    if compose is None and not clear_requested:
+    integration_confirmation = _is_integration_confirmation_response(structured)
+    if compose is None and not clear_requested and not integration_confirmation:
         return response
     state = kernel.get_state(workspace_id)
+    gmail_send_confirmation = _is_gmail_send_confirmation_response(structured)
     if clear_requested:
+        if gmail_send_confirmation and isinstance(structured, dict):
+            _record_nancy_email_confirmation_work_context(
+                workspace_id=workspace_id,
+                session_id=session_id,
+                state=state,
+                structured=structured,
+            )
+        else:
+            _complete_nancy_email_work_context(workspace_id=workspace_id, session_id=session_id)
         state = _clear_pending_nancy_email(state, session_id)
     if isinstance(compose, dict):
         state = _set_pending_nancy_email(state, session_id, compose)
+        _record_nancy_email_work_context(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            state=state,
+            compose=compose,
+        )
         if isinstance(structured, dict):
             structured["nancy_email_compose"] = compose
+    if integration_confirmation and isinstance(structured, dict) and not gmail_send_confirmation:
+        _record_integration_confirmation_work_context(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            state=state,
+            structured=structured,
+        )
     if clear_requested and isinstance(structured, dict):
         structured["clear_pending_nancy_email"] = True
     store.save_state(workspace_id, state)
@@ -2049,6 +2344,9 @@ def refresh_handler_bindings() -> None:
     global handle_mailroom_dispatch
     global handle_memos_list
     global handle_memo_get
+    global handle_work_context_save
+    global handle_work_context_list
+    global handle_work_context_complete
     global handle_artifact_create
     global handle_artifact_get
     global handle_artifact_list
@@ -2093,6 +2391,7 @@ def refresh_handler_bindings() -> None:
     global handle_calendar_update
     global handle_calendar_cancel
     global handle_integration_confirm
+    global handle_integration_cancel
     global handle_meeting_state_start
     global handle_meeting_state_add_agenda
     global handle_meeting_state_record_decision
@@ -2110,6 +2409,7 @@ def refresh_handler_bindings() -> None:
         pipeline=pipeline,
         archive_service=archive_service,
         memo_service=memo_service,
+        work_context_service=work_context_service,
         nancy_service=nancy_service,
         receptionist_context_service=receptionist_context_service,
         workspace_file_service=workspace_file_service,
@@ -2129,6 +2429,7 @@ def refresh_handler_bindings() -> None:
 
     workspace_handlers = build_workspace_handlers(handler_deps)
     memo_handlers = build_memo_handlers(handler_deps)
+    work_context_handlers = build_work_context_handlers(handler_deps)
     session_handlers = build_session_handlers(handler_deps)
     artifact_handlers = build_artifact_handlers(handler_deps)
     file_handlers = build_file_handlers(handler_deps)
@@ -2136,7 +2437,11 @@ def refresh_handler_bindings() -> None:
     image_handlers = build_image_handlers(handler_deps)
     room_capability_handlers = build_room_capability_handlers(handler_deps)
     meeting_handlers = build_meeting_handlers(handler_deps)
-    integration_handlers = build_integration_handlers(integration_service=integration_service, user_service=user_service)
+    integration_handlers = build_integration_handlers(
+        integration_service=integration_service,
+        user_service=user_service,
+        work_context_service=work_context_service,
+    )
 
     handle_workspaces_list = workspace_handlers["office.workspaces_list"]
     handle_workspace_new = workspace_handlers["office.workspace_new"]
@@ -2162,6 +2467,9 @@ def refresh_handler_bindings() -> None:
     handle_mailroom_dispatch = memo_handlers["mailroom.dispatch"]
     handle_memos_list = memo_handlers["office.memos_list"]
     handle_memo_get = memo_handlers["office.memo_get"]
+    handle_work_context_save = work_context_handlers["office.work_context_save"]
+    handle_work_context_list = work_context_handlers["office.work_context_list"]
+    handle_work_context_complete = work_context_handlers["office.work_context_complete"]
 
     handle_artifact_create = artifact_handlers["office.artifact_create"]
     handle_artifact_get = artifact_handlers["office.artifact_get"]
@@ -2209,6 +2517,7 @@ def refresh_handler_bindings() -> None:
     handle_calendar_update = integration_handlers["office.calendar_update"]
     handle_calendar_cancel = integration_handlers["office.calendar_cancel"]
     handle_integration_confirm = integration_handlers["office.integration_confirm"]
+    handle_integration_cancel = integration_handlers["office.integration_cancel"]
     handle_meeting_state_start = meeting_handlers["office.meeting_state_start"]
     handle_meeting_state_add_agenda = meeting_handlers["office.meeting_state_add_agenda"]
     handle_meeting_state_record_decision = meeting_handlers["office.meeting_state_record_decision"]
@@ -2262,6 +2571,7 @@ def refresh_handler_bindings() -> None:
             "office.calendar_update": handle_calendar_update,
             "office.calendar_cancel": handle_calendar_cancel,
             "office.integration_confirm": handle_integration_confirm,
+            "office.integration_cancel": handle_integration_cancel,
             "office.meeting_state_start": handle_meeting_state_start,
             "office.meeting_state_add_agenda": handle_meeting_state_add_agenda,
             "office.meeting_state_record_decision": handle_meeting_state_record_decision,
@@ -2282,6 +2592,9 @@ def refresh_handler_bindings() -> None:
             "office.artifact_delete": handle_artifact_delete,
             "office.memos_list": handle_memos_list,
             "office.memo_get": handle_memo_get,
+            "office.work_context_save": handle_work_context_save,
+            "office.work_context_list": handle_work_context_list,
+            "office.work_context_complete": handle_work_context_complete,
             "office.archive_store_text": handle_archive_store_text,
             "office.archive_list": handle_archive_list,
             "office.archive_get": handle_archive_get,
@@ -2349,6 +2662,7 @@ register_tools(
         "office.calendar_update": handle_calendar_update,
         "office.calendar_cancel": handle_calendar_cancel,
         "office.integration_confirm": handle_integration_confirm,
+        "office.integration_cancel": handle_integration_cancel,
         "office.meeting_state_start": handle_meeting_state_start,
         "office.meeting_state_add_agenda": handle_meeting_state_add_agenda,
         "office.meeting_state_record_decision": handle_meeting_state_record_decision,

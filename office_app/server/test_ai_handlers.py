@@ -207,6 +207,16 @@ class FakeArchiveService:
         }
 
 
+class FakeWorkContextService:
+    def __init__(self, rows: List[Dict[str, Any]]) -> None:
+        self.rows = rows
+        self.calls: List[Dict[str, Any]] = []
+
+    def list_contexts(self, workspace_id: str, *, status: str = "active", limit: int = 10) -> List[Dict[str, Any]]:
+        self.calls.append({"workspace_id": workspace_id, "status": status, "limit": limit})
+        return list(self.rows[:limit])
+
+
 class PartialThenFailingModelRouter:
     def __init__(self) -> None:
         self.user_prompts: List[str] = []
@@ -266,6 +276,7 @@ class AiHandlerTests(unittest.TestCase):
         receptionist_summary: str = "",
         receptionist_recent_turns: Optional[List[str]] = None,
         receptionist_room_memory_refs: Optional[List[Dict[str, Any]]] = None,
+        work_context_rows: Optional[List[Dict[str, Any]]] = None,
     ) -> HandlerDeps:
         workspace_service = FakeFileService(
             rows=workspace_rows,
@@ -295,6 +306,7 @@ class AiHandlerTests(unittest.TestCase):
             append_incident=lambda **kwargs: "inc",
             error_missing_required_field=lambda field: ValueError(field),
             resolve_workspace_id=lambda tool, args: str(args.get("workspace_id") or ""),
+            work_context_service=FakeWorkContextService(work_context_rows or []),
         )
 
     def test_ocr_extract_resolves_room_scoped_file_by_name(self) -> None:
@@ -466,6 +478,45 @@ class AiHandlerTests(unittest.TestCase):
             }
         )
         self.assertIn("Sales questions pertain to Oregon businesses.", router.contexts[0]["room_behavior_memory_text"])
+
+    def test_ai_generate_includes_active_work_context(self) -> None:
+        router = CapturingModelRouter()
+        deps = self._deps(
+            [],
+            work_context_rows=[
+                {
+                    "context_id": "ctx_nancy_email_sess_1",
+                    "title": "Email to James",
+                    "summary": "Nancy is waiting for the email body.",
+                    "status": "active",
+                    "source_type": "nancy_email",
+                    "active_room": "my_office",
+                    "active_persona": "Nancy",
+                    "updated_at": "2026-07-03T08:00:00Z",
+                }
+            ],
+        )
+        deps = HandlerDeps(
+            **{
+                **deps.__dict__,
+                "model_router": router,
+            }
+        )
+        handlers = build_ai_handlers(deps)
+
+        handlers["office.ai_generate"](
+            {
+                "workspace_id": "ws_1",
+                "user_prompt": "what should I do next?",
+                "session_id": "sess_1",
+            }
+        )
+
+        context = router.contexts[0]
+        self.assertEqual(deps.work_context_service.calls[0], {"workspace_id": "ws_1", "status": "active", "limit": 8})
+        self.assertEqual(context["active_work_context"][0]["title"], "Email to James")
+        self.assertIn("Email to James - Nancy is waiting for the email body.", context["active_work_context_text"])
+        self.assertIn("(my_office/Nancy)", context["active_work_context_text"])
 
     def test_ai_generate_separates_persona_style_memory_from_room_memory(self) -> None:
         router = CapturingModelRouter()

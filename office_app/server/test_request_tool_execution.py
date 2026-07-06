@@ -173,6 +173,7 @@ class RequestToolExecutionTests(unittest.TestCase):
         structured = result["structuredContent"]
         self.assertEqual(structured["workspace_id"], "ws_current")
         self.assertEqual(structured["created_workspace_id"], "ws_new")
+        self.assertEqual(structured["pending_workspace_switch"]["workspace_id"], "ws_new")
         self.assertEqual(structured["routing"]["capability"], "workspace.switch.confirmation")
         self.assertEqual(
             store.saved[0]["state"]["pending_workspace_switch_by_session"]["sess_test"]["workspace_id"],

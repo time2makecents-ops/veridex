@@ -1463,6 +1463,15 @@ class RequestPipeline:
                 **nancy_email_followup_route,
             }
 
+        work_context_route = self.route_work_context_request(workspace_id, request_text)
+        if work_context_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **work_context_route,
+            }
+
         memo_access_route = self.route_memo_access_request(workspace_id, request_text)
         if memo_access_route is not None:
             return {
@@ -2110,6 +2119,92 @@ class RequestPipeline:
             if any(term in text for term in ("rooms", "departments", "offices", "places you can go", "places i can go")):
                 return True
         return False
+
+    def route_work_context_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = str(request_text or "").strip().lower()
+        if not text:
+            return None
+        list_patterns = (
+            r"\bwhat\s+are\s+we\s+working\s+on\b",
+            r"\bwhat\s+am\s+i\s+working\s+on\b",
+            r"\bshow\s+(?:me\s+)?(?:the\s+)?active\s+work\b",
+            r"\blist\s+(?:the\s+)?active\s+work\b",
+            r"\bshow\s+(?:me\s+)?(?:the\s+)?work\s+context\b",
+            r"\blist\s+(?:the\s+)?work\s+context\b",
+            r"\bcurrent\s+work\s+context\b",
+            r"\bactive\s+work\s+context\b",
+        )
+        complete_patterns = (
+            r"\bclear\s+(?:the\s+)?active\s+work\s+context\b",
+            r"\bclear\s+(?:all\s+)?active\s+work\b",
+            r"\bcomplete\s+(?:the\s+)?active\s+work\s+context\b",
+            r"\bmark\s+(?:the\s+)?active\s+work\s+(?:as\s+)?(?:done|complete|completed)\b",
+            r"\bmark\s+(?:everything\s+)?(?:we(?:'re| are)?\s+working\s+on|active\s+work)\s+(?:as\s+)?(?:done|complete|completed)\b",
+        )
+        indexed_complete_match = re.search(
+            r"\b(?:complete|clear|finish|mark)\s+(?:active\s+)?work(?:\s+context)?\s+(?P<index>\d{1,2})\b",
+            text,
+        )
+        if indexed_complete_match is None:
+            indexed_complete_match = re.search(
+                r"\b(?:complete|clear|finish|mark)\s+(?P<index>\d{1,2})\s+(?:as\s+)?(?:done|complete|completed)\b",
+                text,
+            )
+        if indexed_complete_match is not None:
+            active_index = int(indexed_complete_match.group("index") or 0)
+            if active_index > 0:
+                return {
+                    "capability": "work_context.complete",
+                    "tool": "office.work_context_complete",
+                    "arguments": {
+                        "workspace_id": workspace_id,
+                        "active_index": active_index,
+                        "summary": "User completed selected work context.",
+                    },
+                    "reason": "Matched an indexed workspace work-context completion request.",
+                }
+        if any(re.search(pattern, text) for pattern in complete_patterns):
+            return {
+                "capability": "work_context.complete",
+                "tool": "office.work_context_complete",
+                "arguments": {
+                    "workspace_id": workspace_id,
+                    "all_active": True,
+                    "summary": "User cleared active work context.",
+                },
+                "reason": "Matched a workspace work-context completion request.",
+            }
+        save_match = re.match(
+            r"^(?:track|save|pin)\s+(?:this\s+)?active\s+work(?:\s+context)?\s*:\s*(?P<body>.+)$",
+            text,
+        )
+        replace_active_manual = False
+        if save_match is None:
+            save_match = re.match(r"^(?:set|update)\s+(?:the\s+)?current\s+work\s+to\s+(?P<body>.+)$", text)
+            replace_active_manual = save_match is not None
+        if save_match is not None:
+            body = re.sub(r"\s+", " ", str(save_match.group("body") or "").strip())
+            if body:
+                return {
+                    "capability": "work_context.save",
+                    "tool": "office.work_context_save",
+                    "arguments": {
+                        "workspace_id": workspace_id,
+                        "title": body,
+                        "summary": body,
+                        "replace_active_manual": replace_active_manual,
+                    },
+                    "reason": "Matched a workspace work-context save request.",
+                }
+        if not any(re.search(pattern, text) for pattern in list_patterns):
+            return None
+        status = "completed" if re.search(r"\b(completed|done|finished)\b", text) else "active"
+        return {
+            "capability": "work_context.list",
+            "tool": "office.work_context_list",
+            "arguments": {"workspace_id": workspace_id, "status": status, "limit": 10},
+            "reason": "Matched a workspace work-context list request.",
+        }
 
     def route_memo_access_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         text = re.sub(r"\s+", " ", str(request_text or "").strip())
@@ -3430,6 +3525,21 @@ class RequestPipeline:
 
         pending_joke = self.pending_break_room_joke(workspace_id=workspace_id, session_id=session_id)
         if pending_joke is not None:
+            if re.match(r"^(?:no|nope|nah|cancel|never mind|nevermind|stop|abort)\.?$", request_text.strip(), re.IGNORECASE):
+                return {
+                    "route_kind": "clarify",
+                    "workspace_id": workspace_id,
+                    "request": request_text,
+                    "capability": "break_room.joke.cancelled",
+                    "tool": "office.capability_info",
+                    "arguments": {
+                        "response_text": "Okay. I cleared the pending Break Room joke.",
+                        "active_room": active_room,
+                        "active_persona": active_persona,
+                        "clear_pending_break_room_joke": True,
+                    },
+                    "reason": "Cleared a pending Break Room joke without revealing the punchline.",
+                }
             response_text = self.break_room_punchline_response_text(pending_joke, request_text)
             return {
                 "route_kind": "clarify",

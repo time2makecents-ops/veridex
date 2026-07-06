@@ -3,13 +3,19 @@ import { useMemo, useRef, useState, type Dispatch, type SetStateAction } from "r
 import { callTool, loadTranscript, type TranscriptEntry } from "@/lib/api";
 
 import { backendDisconnectedMessage, lobbyOrientationText, mapTranscriptEntries, roomById, roomStatusText } from "./helpers";
-import { DEFAULT_PERSONA, DEFAULT_ROOM_ID, type ChatScope, type Message, type RoomCapabilityProfile } from "./types";
+import { DEFAULT_PERSONA, DEFAULT_ROOM_ID, type ChatScope, type LobbyState, type Message, type NancyEmailComposeState, type RoomCapabilityProfile, type WorkContextRecord } from "./types";
 
 type UseChatRoomStateArgs = {
   sessionId: string;
   setBackendBanner: (message: string) => void;
+  setActiveWorkContexts: (contexts: WorkContextRecord[]) => void;
   setChatScope: (scope: ChatScope) => void;
   setError: (message: string) => void;
+  setPendingNancyCompose: (compose: NancyEmailComposeState | undefined) => void;
+  setPendingBreakRoomJoke: (pending: LobbyState["pending_break_room_joke"] | undefined) => void;
+  setPendingRoomNavigation: (pending: LobbyState["pending_room_navigation"] | undefined) => void;
+  setPendingSessionList: (pending: LobbyState["pending_session_list"] | undefined) => void;
+  setPendingWorkspaceSwitch: (pending: LobbyState["pending_workspace_switch"] | undefined) => void;
   setMessages: Dispatch<SetStateAction<Message[]>>;
   setRoomMenuOpen: (open: boolean) => void;
 };
@@ -22,8 +28,14 @@ export function pushRecentRoom(existing: string[], roomId: string): string[] {
 export function useChatRoomState({
   sessionId,
   setBackendBanner,
+  setActiveWorkContexts,
   setChatScope,
   setError,
+  setPendingNancyCompose,
+  setPendingBreakRoomJoke,
+  setPendingRoomNavigation,
+  setPendingSessionList,
+  setPendingWorkspaceSwitch,
   setMessages,
   setRoomMenuOpen,
 }: UseChatRoomStateArgs) {
@@ -103,9 +115,24 @@ export function useChatRoomState({
     setRoomMenuOpen(false);
     try {
       const response = await callTool("office.room_set", { room_id: roomId });
-      const structured = response.structuredContent as { active_room?: string; active_persona?: string } | undefined;
+      const structured = response.structuredContent as {
+        active_room?: string;
+        active_persona?: string;
+        active_work_context?: WorkContextRecord[];
+        pending_nancy_email_compose?: NancyEmailComposeState;
+        pending_break_room_joke?: LobbyState["pending_break_room_joke"];
+        pending_room_navigation?: LobbyState["pending_room_navigation"];
+        pending_session_list?: LobbyState["pending_session_list"];
+        pending_workspace_switch?: LobbyState["pending_workspace_switch"];
+      } | undefined;
       const nextRoom = String(structured?.active_room || roomId);
       const nextPersona = String(structured?.active_persona || roomById(nextRoom)?.persona || DEFAULT_PERSONA);
+      setActiveWorkContexts(Array.isArray(structured?.active_work_context) ? structured.active_work_context : []);
+      setPendingNancyCompose(structured?.pending_nancy_email_compose);
+      setPendingBreakRoomJoke(structured?.pending_break_room_joke);
+      setPendingRoomNavigation(structured?.pending_room_navigation);
+      setPendingSessionList(structured?.pending_session_list);
+      setPendingWorkspaceSwitch(structured?.pending_workspace_switch);
       const transcriptEntries = await loadTranscript(120, sessionId);
       applyActiveRoom(nextRoom, nextPersona);
       setChatScope("room");

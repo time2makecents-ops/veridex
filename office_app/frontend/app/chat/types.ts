@@ -2,6 +2,14 @@ export type LobbyState = {
   workspace_id: string;
   active_room: string;
   active_persona: string;
+  active_work_context?: WorkContextRecord[];
+  pending_nancy_email_compose?: NancyEmailComposeState;
+  pending_session_create?: PendingSessionCreateState;
+  pending_session_rename?: PendingSessionRenameState;
+  pending_session_list?: PendingSessionListState;
+  pending_workspace_switch?: PendingWorkspaceSwitchState;
+  pending_room_navigation?: PendingRoomNavigationState;
+  pending_break_room_joke?: PendingBreakRoomJokeState;
 };
 
 export type Message = {
@@ -18,6 +26,7 @@ export type Message = {
   gmailThread?: GmailMessageDetail[];
   contacts?: ContactRecord[];
   emailReview?: EmailReview;
+  workContexts?: WorkContextRecord[];
 };
 
 export type GmailMessageSummary = {
@@ -48,6 +57,65 @@ export type ContactRecord = {
   source?: string;
 };
 
+export type WorkContextRecord = {
+  context_id: string;
+  session_id?: string;
+  title?: string;
+  summary?: string;
+  status?: string;
+  active_room?: string;
+  active_persona?: string;
+  updated_at?: string;
+  refs?: {
+    kind?: string;
+    confirmation_id?: string;
+    [key: string]: unknown;
+  };
+};
+
+export type NancyEmailComposeState = {
+  mode?: string;
+  stage?: string;
+  to?: string;
+  subject?: string;
+  body?: string;
+  source?: string;
+};
+
+export type PendingSessionCreateState = {
+  request_text?: string;
+  ts?: string;
+};
+
+export type PendingSessionRenameState = {
+  request_text?: string;
+  ts?: string;
+};
+
+export type PendingSessionListState = {
+  request_text?: string;
+  ts?: string;
+};
+
+export type PendingWorkspaceSwitchState = {
+  workspace_id?: string;
+  label?: string;
+  ts?: string;
+};
+
+export type PendingRoomNavigationState = {
+  room_id?: string;
+  room_title?: string;
+  persona?: string;
+  request_text?: string;
+  ts?: string;
+};
+
+export type PendingBreakRoomJokeState = {
+  setup?: string;
+  punchline?: string;
+};
+
 export type ProviderBadge = {
   provider: string;
   fallbackUsed: boolean;
@@ -69,7 +137,7 @@ export type ChatStructuredResponse = {
   active_persona?: string;
   speaker?: string;
   navigator_activation?: { activated?: boolean };
-  routing?: { route_kind?: string };
+  routing?: { route_kind?: string; capability?: string; tool?: string; reason?: string };
   provider?: string;
   fallback_used?: boolean;
   confirmation_id?: string;
@@ -79,7 +147,22 @@ export type ChatStructuredResponse = {
   gmail_thread?: GmailMessageDetail[];
   contacts?: ContactRecord[];
   email_review?: EmailReview;
+  contexts?: WorkContextRecord[];
+  nancy_email_compose?: NancyEmailComposeState;
+  pending_session_rename?: PendingSessionRenameState;
+  pending_session_list?: PendingSessionListState;
+  clear_pending_session_prompt?: boolean;
+  clear_pending_session_list?: boolean;
+  clear_pending_nancy_email?: boolean;
+  clear_pending_room_navigation?: boolean;
+  pending_workspace_switch?: PendingWorkspaceSwitchState;
+  clear_pending_workspace_switch?: boolean;
+  pending_room_navigation?: PendingRoomNavigationState;
+  pending_break_room_joke?: PendingBreakRoomJokeState;
+  clear_pending_break_room_joke?: boolean;
 };
+
+export type SessionPromptMode = "create" | "rename";
 
 export type DeleteWorkspaceStructuredResponse = {
   workspace_id?: string;

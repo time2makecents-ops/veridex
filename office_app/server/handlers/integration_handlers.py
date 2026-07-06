@@ -7,7 +7,7 @@ from typing import Any, Dict
 from fastapi import HTTPException
 
 
-def build_integration_handlers(*, integration_service, user_service) -> Dict[str, Any]:
+def build_integration_handlers(*, integration_service, user_service, work_context_service=None) -> Dict[str, Any]:
     def clean_gmail_body_text(value: Any) -> str:
         text = re.sub(r"\r\n?", "\n", str(value or "")).strip()
         if not text:
@@ -269,8 +269,56 @@ def build_integration_handlers(*, integration_service, user_service) -> Dict[str
         confirmation_id = str(args.get("confirmation_id") or "").strip()
         if not confirmation_id:
             raise HTTPException(status_code=400, detail="Confirmation ID is required.")
+        session_id = str(args.get("session_id") or "").strip()
         result = integration_service.confirm_action(user_id=user_id_for(args), confirmation_id=confirmation_id)
+        action_kind = str(result.get("action_kind") or "").strip()
+        if work_context_service is not None and action_kind == "gmail.send" and session_id:
+            workspace_id = str(user_service.resolve_workspace_for_session(session_id) or "").strip()
+            if workspace_id:
+                work_context_service.complete_context(
+                    workspace_id=workspace_id,
+                    source_type="nancy_email",
+                    source_id=f"{session_id}:nancy_email",
+                    summary="Nancy Gmail send was confirmed and sent.",
+                )
+        if work_context_service is not None and action_kind != "gmail.send" and session_id:
+            workspace_id = str(user_service.resolve_workspace_for_session(session_id) or "").strip()
+            if workspace_id:
+                work_context_service.complete_context(
+                    workspace_id=workspace_id,
+                    source_type="integration_confirmation",
+                    source_id=confirmation_id,
+                    summary=f"{action_kind} was confirmed and completed.",
+                )
         return {"structuredContent": {"result": result}, "content": [{"type": "text", "text": "Google action completed."}]}
+
+    def cancel(args: Dict[str, Any]) -> Dict[str, Any]:
+        confirmation_id = str(args.get("confirmation_id") or "").strip()
+        if not confirmation_id:
+            raise HTTPException(status_code=400, detail="Confirmation ID is required.")
+        session_id = str(args.get("session_id") or "").strip()
+        result = integration_service.cancel_action(user_id=user_id_for(args), confirmation_id=confirmation_id)
+        action_kind = str(result.get("action_kind") or "").strip()
+        structured: Dict[str, Any] = {"result": result}
+        if work_context_service is not None and session_id:
+            workspace_id = str(user_service.resolve_workspace_for_session(session_id) or "").strip()
+            if workspace_id:
+                if action_kind == "gmail.send":
+                    work_context_service.complete_context(
+                        workspace_id=workspace_id,
+                        source_type="nancy_email",
+                        source_id=f"{session_id}:nancy_email",
+                        summary="Nancy Gmail send confirmation was dismissed.",
+                    )
+                    structured["clear_pending_nancy_email"] = True
+                else:
+                    work_context_service.complete_context(
+                        workspace_id=workspace_id,
+                        source_type="integration_confirmation",
+                        source_id=confirmation_id,
+                        summary=f"{action_kind} confirmation was dismissed.",
+                    )
+        return {"structuredContent": structured, "content": [{"type": "text", "text": "Google action dismissed."}]}
 
     return {
         "office.gmail_search": gmail_search,
@@ -286,4 +334,5 @@ def build_integration_handlers(*, integration_service, user_service) -> Dict[str
         "office.calendar_update": calendar_write("calendar.update"),
         "office.calendar_cancel": calendar_write("calendar.cancel"),
         "office.integration_confirm": confirm,
+        "office.integration_cancel": cancel,
     }

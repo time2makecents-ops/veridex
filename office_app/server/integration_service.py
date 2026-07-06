@@ -228,6 +228,20 @@ class IntegrationStore:
             conn.commit()
         return self._row(row) if row else None
 
+    def delete_pending_action(self, confirmation_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM integration_pending_actions WHERE confirmation_id = ? AND user_id = ?",
+                (confirmation_id, user_id),
+            ).fetchone()
+            if row is not None:
+                conn.execute(
+                    "DELETE FROM integration_pending_actions WHERE confirmation_id = ? AND user_id = ?",
+                    (confirmation_id, user_id),
+                )
+            conn.commit()
+        return self._row(row) if row else None
+
     def upsert_contact(self, record: Dict[str, Any]) -> None:
         columns = (
             "user_id", "email", "display_name", "aliases_json", "source",
@@ -472,20 +486,37 @@ class IntegrationService:
         payload = json.loads(record["payload_json"])
         action = str(record["action_kind"])
         if action == "gmail.send":
-            return self._send_gmail(user_id, payload)
+            result = self._send_gmail(user_id, payload)
+            return {"action_kind": action, "payload": payload, "result": result}
         if action == "calendar.create":
-            return self._calendar_request(user_id, "POST", "", payload)
+            result = self._calendar_request(user_id, "POST", "", payload)
+            return {"action_kind": action, "payload": payload, "result": result}
         if action == "calendar.update":
+            original_payload = dict(payload)
             event_id = str(payload.pop("event_id", "")).strip()
             if not event_id:
                 raise HTTPException(status_code=400, detail="Calendar event_id is required.")
-            return self._calendar_request(user_id, "PUT", event_id, payload)
+            result = self._calendar_request(user_id, "PUT", event_id, payload)
+            return {"action_kind": action, "payload": original_payload, "result": result}
         if action == "calendar.cancel":
             event_id = str(payload.get("event_id") or "").strip()
             if not event_id:
                 raise HTTPException(status_code=400, detail="Calendar event_id is required.")
-            return self._calendar_request(user_id, "DELETE", event_id, None)
+            result = self._calendar_request(user_id, "DELETE", event_id, None)
+            return {"action_kind": action, "payload": payload, "result": result}
         raise HTTPException(status_code=400, detail="Unsupported confirmation action.")
+
+    def cancel_action(self, *, user_id: str, confirmation_id: str) -> Dict[str, Any]:
+        record = self.store.delete_pending_action(confirmation_id, user_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="Confirmation request not found.")
+        payload = json.loads(str(record.get("payload_json") or "{}"))
+        return {
+            "action_kind": str(record.get("action_kind") or ""),
+            "payload": payload,
+            "confirmation_id": confirmation_id,
+            "canceled": True,
+        }
 
     def gmail_search(self, user_id: str, query: str, max_results: int = 10) -> list[Dict[str, Any]]:
         params = urlencode({"q": query, "maxResults": max(1, min(max_results, 25))})

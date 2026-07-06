@@ -18,21 +18,27 @@ Use this when resuming on another computer.
 - PR #1 has been merged into `dev` at `f6bd164`.
 - Branch `feat/routing-followup-reliability` starts from the merged PR #1 baseline.
 - The merged stabilization baseline contains chat cleanup, request-tool extraction, runtime Git hygiene, room capability UI, governed room workflows, memo hardening, `/call` session-header propagation, and Conference Room internal meeting-state persistence through `MeetingStateStore`.
-- The branch now includes the routing follow-up reliability work plus the current Nancy email-entry slice.
-- The current active slice adds Nancy guided pending-email compose state in chat and a contact-card Email action entry point.
+- The branch now includes the routing follow-up reliability work, the Nancy email-entry slice, and the durable cross-room work context continuity slice.
+- The current active slice adds workspace-persisted active work context with backend tools, AI-context injection, transition hydration, and a chat active-work strip.
 - The routing follow-up reliability work keeps `/request` follow-up routing fail-closed for ambiguous short choice follow-ups after unverified/no-info entity answers, while preserving anchored list, grounded search, session-search, and explicit search-confirmation follow-ups.
 - The onboarding page now lets users continue to PIN setup without a face photo when camera permission, preview, or capture fails. Backend and frontend proxy onboarding were verified with missing `face_photo_data`.
 - `office_app/backend/incident_log.csv` is intentionally removed from the Git index and ignored, but the local runtime file should remain on disk.
 
-Latest validation baseline before the remaining backend cleanup:
+Latest validation baseline for the durable work-context continuity slice:
 
 - `git diff --check` passed
-- `python -m unittest discover -s office_app/server -p "test_*.py"` passed with 441 tests
-- frontend `vitest` passed with 41 tests
+- `python -m unittest discover -s office_app/server -p "test_*.py"` passed with 479 tests
+- frontend targeted `vitest` helper pass completed with 30 tests
 - `npm.cmd run build` passed
 - `C:\Office-App\office_app\smoke_test.ps1` passed
+- live `office.state_get` smoke confirmed active work context hydration
+- live `office.workspace_activate` smoke confirmed activation responses carry active work context
+- live `office.room_set` smoke confirmed room switches carry active work context
+- live connected-account Gmail confirmation audit proved a pending Gmail send can be created, surfaced through active work, and dismissed without sending the email
+- live connected-account Calendar confirmation audit proved a pending Calendar create can be created, surfaced through active work, survive a room switch, and be dismissed without creating the event
+- `C:\Office-App\office_app\work_context_smoke.ps1` covers active work save, state hydration, optional managed-restart persistence, room switch hydration, session activation hydration, workspace activation hydration, completion, and active-list clearing
 
-Re-run full validation after the backend cleanup slice is complete.
+Re-run full validation after any additional backend or frontend continuity changes.
 
 ## Start
 
@@ -118,6 +124,32 @@ Nancy email compose checkpoint:
 - Nancy now supports guided pending-email compose state in chat instead of treating email preparation as a one-shot routing-only flow.
 - Contact cards now expose an Email action that starts the Nancy email-entry path from the selected contact.
 - The current branch for this work is `feat/routing-followup-reliability`.
+
+Durable work context continuity checkpoint:
+
+- `WorkContextService` persists workspace work context in `work_context.json`.
+- New tools are registered for `office.work_context_save`, `office.work_context_list`, and `office.work_context_complete`.
+- Natural language routing supports active-work list/save/complete requests such as `what are we working on`, `track active work: ...`, `clear active work context`, and `complete active work 2`.
+- `set current work to ...` now replaces the singular manual current-focus entry instead of appending another stale active item, while `track active work: ...` still appends when multiple active items are intentional.
+- Active work context is injected into AI model context so room assistants can see durable work without depending only on the latest transcript.
+- Nancy email compose and Gmail send-confirmation flows record active work context until completion.
+- Nancy Gmail send confirmations are now restorable from active work context in the chat UI, so reloads and room/session/workspace transitions keep a confirm-send action instead of only a passive reminder.
+- Pending Gmail and Calendar confirmations now also have an explicit dismissal path through `office.integration_cancel` and `/integrations/actions/{confirmation_id}/cancel`, so confirmation work can be cleared cleanly instead of being hidden with a generic `Done` action.
+- Pending Nancy compose state is now hydrated through `office.state_get`, `office.room_set`, `office.session_activate`, `office.workspace_activate`, and session/workspace switch responses so the chat UI can show a durable “Nancy draft in progress” panel with the right next-step guidance after reload or navigation.
+- Pending replacement-session naming state is now hydrated from backend session/workspace state as well, so the existing session-name modal can reappear after reload or session/workspace navigation instead of relying only on local React state.
+- Pending session-rename state is now hydrated from backend session/workspace state and can reopen the same session-name modal in explicit rename mode after reload, navigation, or a fresh rename clarification response.
+- Pending session-list confirmation state is now hydrated from backend session/workspace state and shown in the chat UI as explicit `List Sessions` / `Not Now` actions, so the session-list follow-up survives reload or navigation instead of depending on remembered yes/no context.
+- Pending workspace-switch confirmations are now hydrated from backend session/workspace state and shown in the chat UI as explicit `Switch Now` / `Stay Here` actions, so workspace-creation follow-ups survive reload or navigation instead of depending on remembered yes/no context.
+- Pending room-navigation confirmations are now hydrated from backend session/workspace state and shown in the chat UI as explicit `Move Now` / `Stay Here` actions, so conversational room moves survive reload or navigation instead of depending on remembered yes/no context.
+- Cancel and negative-confirmation responses now explicitly clear stale continuity UI state for pending session prompts, pending session-list confirmations, and pending room navigation instead of relying on a later reload to remove those surfaces.
+- Calendar create/update/cancel confirmations are now mirrored into durable work context and use the same active-work confirmation surface as Nancy Gmail sends, so non-Gmail integration confirmations remain actionable after reload, navigation, and restart.
+- Connected-account live audits now cover both Gmail-send and Calendar-create confirmation continuity through create, persistence, room/state hydration, and dismiss cleanup without executing the external action.
+- Gmail send confirmation completes the Nancy email work context after the confirmed send.
+- Memo dispatch records completed work context for cross-room internal work.
+- `office.state_get`, `office.room_set`, `office.session_activate`, and `office.workspace_activate` include active work context so frontend navigation can hydrate continuity from authoritative backend responses.
+- The chat UI now renders an active-work strip above the room/global controls and structured work-context cards with a `Done` action.
+- Frontend refreshes active work after relevant chat/tool actions and immediately consumes active-work state from room/session/workspace transitions.
+- `office_app\work_context_smoke.ps1` is the repeatable live check for the continuity contract, and `-RestartBackend` verifies persistence through the managed `veridex.ps1 restart` path.
 
 Next optional cleanup:
 

@@ -311,6 +311,32 @@ def build_memo_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             reply_is_refusal=reply_is_refusal,
             reply_closure_appended=reply_closure_appended,
         )
+        if deps.work_context_service is not None:
+            subject_text = str(memo_result["subject"] or "").strip()
+            to_room_text = str(memo_result["dest_room_title"] or memo_result["to_room"] or "").strip()
+            title = f"Memo to {to_room_text}" if to_room_text else "Cross-room memo"
+            if subject_text:
+                title = f"{title}: {subject_text}"
+            deps.work_context_service.upsert_context(
+                workspace_id=workspace_id,
+                source_type="memo",
+                source_id=str(memo_result["memo_id"] or "").strip(),
+                title=title,
+                summary="Memo was dispatched and the destination room reply was recorded.",
+                status="completed",
+                active_room=from_room_external,
+                active_persona=str(state.get("active_persona") or "").strip(),
+                refs={
+                    "kind": "mailroom_memo",
+                    "memo_id": memo_result["memo_id"],
+                    "from_room": from_room_external,
+                    "to_room": memo_result["to_room"],
+                    "to_persona": memo_result["to_persona"],
+                    "subject": memo_result["subject"],
+                    "reply_room": str(memo_result["to_room"] or "").strip(),
+                    "reply_persona": to_persona,
+                },
+            )
 
         deps.append_incident(
             severity="LOW",

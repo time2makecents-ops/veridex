@@ -92,6 +92,11 @@ def execute_tool_route(
                     "session_id": session_id,
                     "created_workspace_id": created_workspace_id,
                     "created_workspace_label": created_label,
+                    "pending_workspace_switch": {
+                        "workspace_id": created_workspace_id,
+                        "label": created_label,
+                        "ts": utc_now(),
+                    },
                     "response_text": response_text,
                     "routing": {
                         "route_kind": "clarify",

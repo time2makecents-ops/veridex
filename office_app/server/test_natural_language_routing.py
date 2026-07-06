@@ -93,6 +93,44 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "session.list")
         self.assertEqual(routed["tool"], "office.sessions_list")
 
+    def test_what_are_we_working_on_routes_to_work_context_list(self) -> None:
+        routed = self.pipeline.route_user_request("default", "what are we working on")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "work_context.list")
+        self.assertEqual(routed["tool"], "office.work_context_list")
+        self.assertEqual(routed["arguments"]["status"], "active")
+
+    def test_clear_active_work_context_routes_to_work_context_complete(self) -> None:
+        routed = self.pipeline.route_user_request("default", "clear active work context")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "work_context.complete")
+        self.assertEqual(routed["tool"], "office.work_context_complete")
+        self.assertTrue(routed["arguments"]["all_active"])
+
+    def test_complete_active_work_number_routes_to_work_context_complete_index(self) -> None:
+        routed = self.pipeline.route_user_request("default", "complete active work 2")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "work_context.complete")
+        self.assertEqual(routed["tool"], "office.work_context_complete")
+        self.assertEqual(routed["arguments"]["active_index"], 2)
+
+    def test_track_active_work_routes_to_work_context_save(self) -> None:
+        routed = self.pipeline.route_user_request("default", "track active work: finalize the launch plan with marketing")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "work_context.save")
+        self.assertEqual(routed["tool"], "office.work_context_save")
+        self.assertEqual(routed["arguments"]["title"], "finalize the launch plan with marketing")
+        self.assertEqual(routed["arguments"]["summary"], "finalize the launch plan with marketing")
+
+    def test_set_current_work_routes_to_replacing_work_context_save(self) -> None:
+        routed = self.pipeline.route_user_request("default", "set current work to finalize the launch plan with marketing")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "work_context.save")
+        self.assertEqual(routed["tool"], "office.work_context_save")
+        self.assertEqual(routed["arguments"]["title"], "finalize the launch plan with marketing")
+        self.assertEqual(routed["arguments"]["summary"], "finalize the launch plan with marketing")
+        self.assertTrue(routed["arguments"]["replace_active_manual"])
+
     def test_list_rooms_routes_to_room_directory(self) -> None:
         routed = self.pipeline.route_user_request("default", "list rooms")
         self.assertEqual(routed["route_kind"], "clarify")
@@ -1364,6 +1402,37 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "break_room.joke.punchline")
         self.assertIn("Because the team said the goals were too high.", routed["arguments"]["response_text"])
         self.assertTrue(routed["arguments"]["clear_pending_break_room_joke"])
+
+    def test_break_room_cancel_clears_pending_joke_without_revealing_punchline(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                active_room="break_room",
+                active_persona="Break Room Host",
+                pending_break_room_jokes={
+                    "sess_1": {
+                        "setup": "Why did the project manager bring a ladder to the meeting?",
+                        "punchline": "Because the team said the goals were too high.",
+                    }
+                },
+                transcript_rows=[
+                    {"role": "user", "text": "tell me a joke"},
+                    {
+                        "role": "assistant",
+                        "text": "Why did the project manager bring a ladder to the meeting?",
+                    },
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "cancel", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "break_room.joke.cancelled")
+        self.assertEqual(routed["arguments"]["response_text"], "Okay. I cleared the pending Break Room joke.")
+        self.assertTrue(routed["arguments"]["clear_pending_break_room_joke"])
+        self.assertNotIn("Because the team said the goals were too high.", routed["arguments"]["response_text"])
 
     def test_break_room_correct_joke_guess_is_acknowledged(self) -> None:
         pipeline = RequestPipeline(

@@ -115,6 +115,82 @@ class SessionRoutingTests(unittest.TestCase):
         cleared = app_module._clear_pending_nancy_email(updated, "sess_1")
         self.assertNotIn("pending_nancy_email_by_session", cleared)
 
+    def test_build_tool_context_uses_nancy_governance_for_nancy_external_tools(self) -> None:
+        class FakeKernel:
+            def get_state(self, workspace_id: str) -> dict:
+                return {
+                    "active_room": "lobby",
+                    "active_persona": "Receptionist",
+                }
+
+        class FakeUserService:
+            def get_user_for_session(self, session_id: str) -> dict:
+                return {"user_id": "user_1", "session_id": session_id}
+
+        original_kernel = app_module.kernel
+        original_user_service = app_module.user_service
+        try:
+            app_module.kernel = FakeKernel()
+            app_module.user_service = FakeUserService()
+            context = app_module.build_tool_context(
+                "office.gmail_send",
+                {
+                    "workspace_id": "ws_1",
+                    "session_id": "sess_1",
+                    "assistant_persona": "Nancy",
+                },
+                app_module.VERIDEX_TOOL_DEFINITIONS["office.gmail_send"],
+            )
+        finally:
+            app_module.kernel = original_kernel
+            app_module.user_service = original_user_service
+
+        self.assertEqual(context.active_room, "my_office")
+        self.assertEqual(context.active_persona, "Nancy")
+
+    def test_build_tool_context_keeps_physical_room_for_non_nancy_tools(self) -> None:
+        class FakeKernel:
+            def get_state(self, workspace_id: str) -> dict:
+                return {
+                    "active_room": "lobby",
+                    "active_persona": "Receptionist",
+                }
+
+        class FakeUserService:
+            def get_user_for_session(self, session_id: str) -> dict:
+                return {"user_id": "user_1", "session_id": session_id}
+
+        original_kernel = app_module.kernel
+        original_user_service = app_module.user_service
+        try:
+            app_module.kernel = FakeKernel()
+            app_module.user_service = FakeUserService()
+            context = app_module.build_tool_context(
+                "office.workspaces_list",
+                {
+                    "workspace_id": "ws_1",
+                    "session_id": "sess_1",
+                    "assistant_persona": "Nancy",
+                },
+                app_module.VERIDEX_TOOL_DEFINITIONS["office.workspaces_list"],
+            )
+        finally:
+            app_module.kernel = original_kernel
+            app_module.user_service = original_user_service
+
+        self.assertEqual(context.active_room, "lobby")
+        self.assertEqual(context.active_persona, "Receptionist")
+
+    def test_stay_here_text_is_treated_as_negative_confirmation(self) -> None:
+        self.assertTrue(app_module._is_stay_here_text("stay here"))
+        self.assertTrue(app_module._is_stay_here_text("Keep me here"))
+        self.assertFalse(app_module._is_stay_here_text("yes"))
+
+    def test_not_now_text_is_treated_as_negative_confirmation(self) -> None:
+        self.assertTrue(app_module._is_confirmation_no("not now"))
+        self.assertTrue(app_module._is_confirmation_no("not yet"))
+        self.assertFalse(app_module._is_confirmation_no("yes"))
+
     def test_pending_nancy_email_state_clears_through_route_state_helper(self) -> None:
         class FakeKernel:
             def __init__(self) -> None:
@@ -171,6 +247,242 @@ class SessionRoutingTests(unittest.TestCase):
         self.assertNotIn("sess_1", pending_map)
         self.assertIn("sess_2", pending_map)
         self.assertEqual(fake_store.saved_state, fake_kernel.state)
+
+    def test_gmail_send_confirmation_keeps_nancy_email_work_context_active(self) -> None:
+        class FakeKernel:
+            def __init__(self) -> None:
+                self.state = {
+                    "active_room": "sales_department",
+                    "active_persona": "Sales Director",
+                    "pending_nancy_email_by_session": {
+                        "sess_1": {
+                            "mode": "compose",
+                            "stage": "review",
+                            "to": "time2makecents@gmail.com",
+                            "subject": "Project update",
+                            "body": "Here is the update.",
+                            "source": "direct",
+                        }
+                    },
+                }
+
+            def get_state(self, workspace_id: str) -> dict:
+                return self.state
+
+        class FakeStore:
+            def save_state(self, workspace_id: str, state: dict) -> None:
+                self.saved_state = dict(state)
+
+        class FakeWorkContextService:
+            def __init__(self) -> None:
+                self.upserts = []
+                self.completed = []
+
+            def upsert_context(self, **kwargs) -> dict:
+                self.upserts.append(dict(kwargs))
+                return dict(kwargs)
+
+            def complete_context(self, **kwargs) -> dict:
+                self.completed.append(dict(kwargs))
+                return dict(kwargs)
+
+        original_kernel = app_module.kernel
+        original_store = app_module.store
+        original_work_context_service = app_module.work_context_service
+        fake_kernel = FakeKernel()
+        fake_store = FakeStore()
+        fake_work_context = FakeWorkContextService()
+        try:
+            app_module.kernel = fake_kernel
+            app_module.store = fake_store
+            app_module.work_context_service = fake_work_context
+            app_module._apply_pending_nancy_email_state(
+                workspace_id="default",
+                session_id="sess_1",
+                routed_args={"clear_pending_nancy_email": True},
+                response={
+                    "structuredContent": {
+                        "confirmation_id": "confirm_123",
+                        "action_kind": "gmail.send",
+                        "email_review": {"to": ["time2makecents@gmail.com"], "subject": "Project update"},
+                    }
+                },
+            )
+        finally:
+            app_module.kernel = original_kernel
+            app_module.store = original_store
+            app_module.work_context_service = original_work_context_service
+
+        self.assertNotIn("pending_nancy_email_by_session", fake_kernel.state)
+        self.assertEqual(fake_work_context.completed, [])
+        self.assertEqual(len(fake_work_context.upserts), 1)
+        upsert = fake_work_context.upserts[0]
+        self.assertEqual(upsert["status"], "active")
+        self.assertEqual(upsert["source_id"], "sess_1:nancy_email")
+        self.assertIn("waiting for Gmail send confirmation", upsert["summary"])
+        self.assertEqual(upsert["refs"]["confirmation_id"], "confirm_123")
+
+    def test_calendar_confirmation_keeps_generic_integration_work_context_active(self) -> None:
+        class FakeKernel:
+            def __init__(self) -> None:
+                self.state = {
+                    "active_room": "conference_room",
+                    "active_persona": "Facilitator",
+                }
+
+            def get_state(self, workspace_id: str) -> dict:
+                return self.state
+
+        class FakeStore:
+            def save_state(self, workspace_id: str, state: dict) -> None:
+                self.saved_state = dict(state)
+
+        class FakeWorkContextService:
+            def __init__(self) -> None:
+                self.upserts = []
+                self.completed = []
+
+            def upsert_context(self, **kwargs) -> dict:
+                self.upserts.append(dict(kwargs))
+                return dict(kwargs)
+
+            def complete_context(self, **kwargs) -> dict:
+                self.completed.append(dict(kwargs))
+                return dict(kwargs)
+
+        original_kernel = app_module.kernel
+        original_store = app_module.store
+        original_work_context_service = app_module.work_context_service
+        fake_kernel = FakeKernel()
+        fake_store = FakeStore()
+        fake_work_context = FakeWorkContextService()
+        try:
+            app_module.kernel = fake_kernel
+            app_module.store = fake_store
+            app_module.work_context_service = fake_work_context
+            app_module._apply_pending_nancy_email_state(
+                workspace_id="default",
+                session_id="sess_1",
+                routed_args={},
+                response={
+                    "structuredContent": {
+                        "confirmation_id": "confirm_calendar",
+                        "action_kind": "calendar.create",
+                        "payload": {"summary": "Vendor kickoff"},
+                    }
+                },
+            )
+        finally:
+            app_module.kernel = original_kernel
+            app_module.store = original_store
+            app_module.work_context_service = original_work_context_service
+
+        self.assertEqual(len(fake_work_context.upserts), 1)
+        upsert = fake_work_context.upserts[0]
+        self.assertEqual(upsert["source_type"], "integration_confirmation")
+        self.assertEqual(upsert["source_id"], "confirm_calendar")
+        self.assertEqual(upsert["title"], "Calendar create: Vendor kickoff")
+        self.assertEqual(upsert["refs"]["action_kind"], "calendar.create")
+
+    def test_direct_integration_endpoints_mirror_and_complete_calendar_confirmation_work_context(self) -> None:
+        class FakeIntegrationService:
+            def __init__(self) -> None:
+                self.created = []
+
+            def create_pending_action(self, *, user_id: str, action_kind: str, payload: dict) -> dict:
+                pending = {
+                    "confirmation_id": "confirm_direct_calendar",
+                    "provider": "google",
+                    "action_kind": action_kind,
+                    "payload": payload,
+                }
+                self.created.append(dict(pending))
+                return pending
+
+            def confirm_action(self, *, user_id: str, confirmation_id: str) -> dict:
+                return {
+                    "action_kind": "calendar.create",
+                    "payload": {"summary": "Direct endpoint planning"},
+                    "result": {"id": "evt_direct_1"},
+                }
+
+            def cancel_action(self, *, user_id: str, confirmation_id: str) -> dict:
+                return {
+                    "action_kind": "calendar.create",
+                    "payload": {"summary": "Direct endpoint planning"},
+                    "confirmation_id": confirmation_id,
+                    "canceled": True,
+                }
+
+        class FakeUserService:
+            def get_user_for_session(self, session_id: str) -> dict:
+                return {"user_id": "user_direct", "session_id": session_id}
+
+            def resolve_workspace_for_session(self, session_id: str) -> str:
+                return "workspace_direct"
+
+        class FakeKernel:
+            def get_state(self, workspace_id: str) -> dict:
+                return {
+                    "active_room": "conference_room",
+                    "active_persona": "Facilitator",
+                }
+
+        class FakeWorkContextService:
+            def __init__(self) -> None:
+                self.upserts = []
+                self.completed = []
+
+            def upsert_context(self, **kwargs) -> dict:
+                self.upserts.append(dict(kwargs))
+                return dict(kwargs)
+
+            def complete_context(self, **kwargs) -> dict:
+                self.completed.append(dict(kwargs))
+                return dict(kwargs)
+
+        original_integration_service = app_module.integration_service
+        original_user_service = app_module.user_service
+        original_kernel = app_module.kernel
+        original_work_context_service = app_module.work_context_service
+        try:
+            app_module.integration_service = FakeIntegrationService()
+            app_module.user_service = FakeUserService()
+            app_module.kernel = FakeKernel()
+            app_module.work_context_service = FakeWorkContextService()
+
+            created = app_module.create_integration_action(
+                app_module.IntegrationActionRequest(
+                    action_kind="calendar.create",
+                    payload={"summary": "Direct endpoint planning"},
+                ),
+                x_session_id="sess_direct",
+            )
+            self.assertEqual(created["structuredContent"]["confirmation_id"], "confirm_direct_calendar")
+            self.assertEqual(len(app_module.work_context_service.upserts), 1)
+            upsert = app_module.work_context_service.upserts[0]
+            self.assertEqual(upsert["source_type"], "integration_confirmation")
+            self.assertEqual(upsert["source_id"], "confirm_direct_calendar")
+
+            confirmed = app_module.confirm_integration_action("confirm_direct_calendar", x_session_id="sess_direct")
+            self.assertEqual(confirmed["structuredContent"]["result"]["action_kind"], "calendar.create")
+            self.assertEqual(len(app_module.work_context_service.completed), 1)
+            completed = app_module.work_context_service.completed[0]
+            self.assertEqual(completed["source_type"], "integration_confirmation")
+            self.assertEqual(completed["source_id"], "confirm_direct_calendar")
+
+            app_module.work_context_service.completed.clear()
+            canceled = app_module.cancel_integration_action("confirm_direct_calendar", x_session_id="sess_direct")
+            self.assertTrue(canceled["structuredContent"]["result"]["canceled"])
+            self.assertEqual(len(app_module.work_context_service.completed), 1)
+            completed = app_module.work_context_service.completed[0]
+            self.assertEqual(completed["source_type"], "integration_confirmation")
+            self.assertEqual(completed["source_id"], "confirm_direct_calendar")
+        finally:
+            app_module.integration_service = original_integration_service
+            app_module.user_service = original_user_service
+            app_module.kernel = original_kernel
+            app_module.work_context_service = original_work_context_service
 
     def test_nl_create_workspace_executes_tool_and_persists_workspace(self) -> None:
         runtime_dir = Path.cwd() / "office_app" / "runtime" / "_session_routing_test_nl_workspace_create"
@@ -1766,6 +2078,21 @@ class SessionRoutingTests(unittest.TestCase):
                 ]
             )
 
+            cancel_response = handle_natural_language_request(
+                NaturalLanguageRequest(text="no", session_id=old_session_id)
+            )
+            cancel_payload = cancel_response["structuredContent"]
+            self.assertEqual(cancel_payload["response_text"], "Okay. I did not create a new session.")
+            self.assertEqual(cancel_payload["clear_pending_session_prompt"], True)
+
+            state_after_cancel = temp_store.load_state(workspace_id)
+            pending_after_cancel = state_after_cancel.get("pending_session_create_by_session")
+            self.assertTrue(not isinstance(pending_after_cancel, dict) or old_session_id not in pending_after_cancel)
+
+            prompt_response = handle_natural_language_request(
+                NaturalLanguageRequest(text="start new session", session_id=old_session_id)
+            )
+
             response = handle_natural_language_request(
                 NaturalLanguageRequest(text="Restaurant strategy", session_id=old_session_id)
             )
@@ -2131,6 +2458,439 @@ class SessionRoutingTests(unittest.TestCase):
             info_payload = info_response["structuredContent"]
             self.assertEqual(info_payload["routing"]["capability"], "session.info")
             self.assertIn('This session is called "Newest test".', info_response["content"][0]["text"])
+        finally:
+            app_module.store = original["store"]
+            app_module.kernel = original["kernel"]
+            app_module.memo_service = original["memo_service"]
+            app_module.archive_service = original["archive_service"]
+            app_module.user_service = original["user_service"]
+            app_module.receptionist_context_service = original["receptionist_context_service"]
+            app_module.nancy_service = original["nancy_service"]
+            app_module.router = original["router"]
+            app_module.pipeline = original["pipeline"]
+            app_module.refresh_handler_bindings()
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_rename_session_without_title_persists_pending_rename_in_response(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_session_routing_test_rename_session_prompt"
+        workspaces_dir = runtime_dir / "workspaces"
+        legacy_memos_dir = runtime_dir / "memos"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+        legacy_memos_dir.mkdir(parents=True, exist_ok=True)
+
+        original = {
+            "store": app_module.store,
+            "kernel": app_module.kernel,
+            "memo_service": app_module.memo_service,
+            "archive_service": app_module.archive_service,
+            "user_service": app_module.user_service,
+            "receptionist_context_service": app_module.receptionist_context_service,
+            "nancy_service": app_module.nancy_service,
+            "router": app_module.router,
+            "pipeline": app_module.pipeline,
+        }
+
+        try:
+            temp_store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_kernel = WorkspaceKernel(store=temp_store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_archive = ArchiveService(workspaces_dir=workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_user = app_module.UserService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_receptionist_context = app_module.ReceptionistContextService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_memo = MemoService(store=temp_store, legacy_memos_dir=legacy_memos_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_nancy = NancyService(
+                kernel=temp_kernel,
+                archive_service=temp_archive,
+                store=temp_store,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            )
+            temp_router = CommandRouter()
+            temp_pipeline = RequestPipeline(
+                kernel=temp_kernel,
+                navigator_control=NAVIGATOR_CONTROL,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+                tool_names=[],
+                app_version="1.3.0",
+            )
+
+            app_module.store = temp_store
+            app_module.kernel = temp_kernel
+            app_module.memo_service = temp_memo
+            app_module.archive_service = temp_archive
+            app_module.user_service = temp_user
+            app_module.receptionist_context_service = temp_receptionist_context
+            app_module.nancy_service = temp_nancy
+            app_module.router = temp_router
+            app_module.pipeline = temp_pipeline
+            app_module.refresh_handler_bindings()
+
+            app_module.register_tools(
+                temp_router,
+                {
+                    "office.workspaces_list": app_module.handle_workspaces_list,
+                    "office.workspace_new": app_module.handle_workspace_new,
+                    "office.workspace_activate": app_module.handle_workspace_activate,
+                    "office.bootstrap": app_module.handle_office_bootstrap,
+                    "office.state_get": app_module.handle_office_state_get,
+                    "office.transcript_get": app_module.handle_office_transcript_get,
+                    "office.room_set": app_module.handle_office_room_set,
+                    "office.nancy_route": app_module.handle_office_nancy_route,
+                    "office.sessions_list": app_module.handle_sessions_list,
+                    "office.session_create": app_module.handle_session_create,
+                    "office.session_activate": app_module.handle_session_activate,
+                    "office.session_rename": app_module.handle_session_rename,
+                    "office.session_delete": app_module.handle_session_delete,
+                    "mailroom.dispatch": app_module.handle_mailroom_dispatch,
+                    "office.artifact_create": app_module.handle_artifact_create,
+                    "office.artifact_get": app_module.handle_artifact_get,
+                    "office.artifact_list": app_module.handle_artifact_list,
+                    "office.artifact_update": app_module.handle_artifact_update,
+                    "office.artifact_append": app_module.handle_artifact_append,
+                    "office.artifact_archive": app_module.handle_artifact_archive,
+                    "office.memos_list": app_module.handle_memos_list,
+                    "office.memo_get": app_module.handle_memo_get,
+                    "office.archive_store_text": app_module.handle_archive_store_text,
+                    "office.archive_list": app_module.handle_archive_list,
+                    "office.archive_get": app_module.handle_archive_get,
+                    "office.nancy_artifacts_list": app_module.handle_nancy_artifacts_list,
+                    "office.nancy_artifact_open": app_module.handle_nancy_artifact_open,
+                    "office.nancy_workspace_briefing": app_module.handle_nancy_workspace_briefing,
+                    "office.room_memory_remember": app_module.handle_room_memory_remember,
+                    "office.room_memory_list": app_module.handle_room_memory_list,
+                    "office.room_memory_forget": app_module.handle_room_memory_forget,
+                    "office.ai_generate": app_module.handle_ai_generate,
+                    "office.search_web": app_module.handle_search_web,
+                    "office.search_reviews": app_module.handle_search_reviews,
+                    "office.search_places": app_module.handle_search_places,
+                    "office.ocr_extract": app_module.handle_ocr_extract,
+                },
+            )
+            temp_pipeline.tool_names = temp_router.tool_names()
+
+            onboard_result = None
+            for _ in range(20):
+                pin_code = f"{uuid.uuid4().int % 10000:04d}"
+                try:
+                    onboard_result = lobby_onboard(LobbyOnboardRequest(name="Mira", pin_code=pin_code))
+                    break
+                except Exception:
+                    continue
+
+            self.assertIsNotNone(onboard_result)
+            session_id = str(onboard_result["structuredContent"]["session_id"])
+            workspace_id = str(onboard_result["structuredContent"]["workspace_id"])
+
+            response = handle_natural_language_request(
+                NaturalLanguageRequest(text="rename this session", session_id=session_id)
+            )
+            payload = response["structuredContent"]
+            self.assertEqual(payload["routing"]["route_kind"], "clarify")
+            self.assertEqual(payload["routing"]["capability"], "session.rename.name_required")
+            self.assertEqual(payload["response_text"], "What should I rename the session to?")
+            self.assertEqual(payload["pending_session_rename"]["request_text"], "rename this session")
+
+            state_after_prompt = temp_store.load_state(workspace_id)
+            pending_map = state_after_prompt.get("pending_session_rename_by_session")
+            self.assertIsInstance(pending_map, dict)
+            self.assertIn(session_id, pending_map)
+
+            cancel_response = handle_natural_language_request(
+                NaturalLanguageRequest(text="no", session_id=session_id)
+            )
+            cancel_payload = cancel_response["structuredContent"]
+            self.assertEqual(cancel_payload["response_text"], "Okay. I did not rename the session.")
+            self.assertEqual(cancel_payload["clear_pending_session_prompt"], True)
+
+            state_after_cancel = temp_store.load_state(workspace_id)
+            pending_after_cancel = state_after_cancel.get("pending_session_rename_by_session")
+            self.assertTrue(not isinstance(pending_after_cancel, dict) or session_id not in pending_after_cancel)
+        finally:
+            app_module.store = original["store"]
+            app_module.kernel = original["kernel"]
+            app_module.memo_service = original["memo_service"]
+            app_module.archive_service = original["archive_service"]
+            app_module.user_service = original["user_service"]
+            app_module.receptionist_context_service = original["receptionist_context_service"]
+            app_module.nancy_service = original["nancy_service"]
+            app_module.router = original["router"]
+            app_module.pipeline = original["pipeline"]
+            app_module.refresh_handler_bindings()
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_session_list_confirmation_persists_pending_list_in_response(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_session_routing_test_session_list_prompt"
+        workspaces_dir = runtime_dir / "workspaces"
+        legacy_memos_dir = runtime_dir / "memos"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+        legacy_memos_dir.mkdir(parents=True, exist_ok=True)
+
+        original = {
+            "store": app_module.store,
+            "kernel": app_module.kernel,
+            "memo_service": app_module.memo_service,
+            "archive_service": app_module.archive_service,
+            "user_service": app_module.user_service,
+            "receptionist_context_service": app_module.receptionist_context_service,
+            "nancy_service": app_module.nancy_service,
+            "router": app_module.router,
+            "pipeline": app_module.pipeline,
+        }
+
+        try:
+            temp_store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_kernel = WorkspaceKernel(store=temp_store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_archive = ArchiveService(workspaces_dir=workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_user = app_module.UserService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_receptionist_context = app_module.ReceptionistContextService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_memo = MemoService(store=temp_store, legacy_memos_dir=legacy_memos_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_nancy = NancyService(
+                kernel=temp_kernel,
+                archive_service=temp_archive,
+                store=temp_store,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            )
+            temp_router = CommandRouter()
+            temp_pipeline = RequestPipeline(
+                kernel=temp_kernel,
+                navigator_control=NAVIGATOR_CONTROL,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+                tool_names=[],
+                app_version="1.3.0",
+            )
+
+            app_module.store = temp_store
+            app_module.kernel = temp_kernel
+            app_module.memo_service = temp_memo
+            app_module.archive_service = temp_archive
+            app_module.user_service = temp_user
+            app_module.receptionist_context_service = temp_receptionist_context
+            app_module.nancy_service = temp_nancy
+            app_module.router = temp_router
+            app_module.pipeline = temp_pipeline
+            app_module.refresh_handler_bindings()
+
+            app_module.register_tools(
+                temp_router,
+                {
+                    "office.workspaces_list": app_module.handle_workspaces_list,
+                    "office.workspace_new": app_module.handle_workspace_new,
+                    "office.workspace_activate": app_module.handle_workspace_activate,
+                    "office.bootstrap": app_module.handle_office_bootstrap,
+                    "office.state_get": app_module.handle_office_state_get,
+                    "office.transcript_get": app_module.handle_office_transcript_get,
+                    "office.room_set": app_module.handle_office_room_set,
+                    "office.nancy_route": app_module.handle_office_nancy_route,
+                    "office.sessions_list": app_module.handle_sessions_list,
+                    "office.session_create": app_module.handle_session_create,
+                    "office.session_activate": app_module.handle_session_activate,
+                    "office.session_rename": app_module.handle_session_rename,
+                    "office.session_delete": app_module.handle_session_delete,
+                    "mailroom.dispatch": app_module.handle_mailroom_dispatch,
+                    "office.artifact_create": app_module.handle_artifact_create,
+                    "office.artifact_get": app_module.handle_artifact_get,
+                    "office.artifact_list": app_module.handle_artifact_list,
+                    "office.artifact_update": app_module.handle_artifact_update,
+                    "office.artifact_append": app_module.handle_artifact_append,
+                    "office.artifact_archive": app_module.handle_artifact_archive,
+                    "office.memos_list": app_module.handle_memos_list,
+                    "office.memo_get": app_module.handle_memo_get,
+                    "office.archive_store_text": app_module.handle_archive_store_text,
+                    "office.archive_list": app_module.handle_archive_list,
+                    "office.archive_get": app_module.handle_archive_get,
+                    "office.nancy_artifacts_list": app_module.handle_nancy_artifacts_list,
+                    "office.nancy_artifact_open": app_module.handle_nancy_artifact_open,
+                    "office.nancy_workspace_briefing": app_module.handle_nancy_workspace_briefing,
+                    "office.room_memory_remember": app_module.handle_room_memory_remember,
+                    "office.room_memory_list": app_module.handle_room_memory_list,
+                    "office.room_memory_forget": app_module.handle_room_memory_forget,
+                    "office.ai_generate": app_module.handle_ai_generate,
+                    "office.search_web": app_module.handle_search_web,
+                    "office.search_reviews": app_module.handle_search_reviews,
+                    "office.search_places": app_module.handle_search_places,
+                    "office.ocr_extract": app_module.handle_ocr_extract,
+                },
+            )
+            temp_pipeline.tool_names = temp_router.tool_names()
+
+            onboard_result = None
+            for _ in range(20):
+                pin_code = f"{uuid.uuid4().int % 10000:04d}"
+                try:
+                    onboard_result = lobby_onboard(LobbyOnboardRequest(name="Mira", pin_code=pin_code))
+                    break
+                except Exception:
+                    continue
+
+            self.assertIsNotNone(onboard_result)
+            session_id = str(onboard_result["structuredContent"]["session_id"])
+            workspace_id = str(onboard_result["structuredContent"]["workspace_id"])
+
+            response = handle_natural_language_request(
+                NaturalLanguageRequest(text="what sessions are in this workspace", session_id=session_id)
+            )
+            payload = response["structuredContent"]
+            self.assertEqual(payload["routing"]["route_kind"], "clarify")
+            self.assertEqual(payload["routing"]["capability"], "session.list.confirmation")
+            self.assertEqual(payload["response_text"], "Do you want me to list the sessions in this workspace?")
+            self.assertEqual(payload["pending_session_list"]["request_text"], "what sessions are in this workspace")
+
+            state_after_prompt = temp_store.load_state(workspace_id)
+            pending_map = state_after_prompt.get("pending_session_list_by_session")
+            self.assertIsInstance(pending_map, dict)
+            self.assertIn(session_id, pending_map)
+
+            cancel_response = handle_natural_language_request(
+                NaturalLanguageRequest(text="no", session_id=session_id)
+            )
+            cancel_payload = cancel_response["structuredContent"]
+            self.assertEqual(cancel_payload["response_text"], "Okay. I won't list the sessions.")
+            self.assertEqual(cancel_payload["clear_pending_session_list"], True)
+
+            state_after_cancel = temp_store.load_state(workspace_id)
+            pending_after_cancel = state_after_cancel.get("pending_session_list_by_session")
+            self.assertTrue(not isinstance(pending_after_cancel, dict) or session_id not in pending_after_cancel)
+        finally:
+            app_module.store = original["store"]
+            app_module.kernel = original["kernel"]
+            app_module.memo_service = original["memo_service"]
+            app_module.archive_service = original["archive_service"]
+            app_module.user_service = original["user_service"]
+            app_module.receptionist_context_service = original["receptionist_context_service"]
+            app_module.nancy_service = original["nancy_service"]
+            app_module.router = original["router"]
+            app_module.pipeline = original["pipeline"]
+            app_module.refresh_handler_bindings()
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def test_room_navigation_cancel_clears_pending_navigation_in_response(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_session_routing_test_room_navigation_cancel"
+        workspaces_dir = runtime_dir / "workspaces"
+        legacy_memos_dir = runtime_dir / "memos"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+        legacy_memos_dir.mkdir(parents=True, exist_ok=True)
+
+        original = {
+            "store": app_module.store,
+            "kernel": app_module.kernel,
+            "memo_service": app_module.memo_service,
+            "archive_service": app_module.archive_service,
+            "user_service": app_module.user_service,
+            "receptionist_context_service": app_module.receptionist_context_service,
+            "nancy_service": app_module.nancy_service,
+            "router": app_module.router,
+            "pipeline": app_module.pipeline,
+        }
+
+        try:
+            temp_store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_kernel = WorkspaceKernel(store=temp_store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_archive = ArchiveService(workspaces_dir=workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_user = app_module.UserService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_receptionist_context = app_module.ReceptionistContextService(kernel=temp_kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_memo = MemoService(store=temp_store, legacy_memos_dir=legacy_memos_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            temp_nancy = NancyService(
+                kernel=temp_kernel,
+                archive_service=temp_archive,
+                store=temp_store,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            )
+            temp_router = CommandRouter()
+            temp_pipeline = RequestPipeline(
+                kernel=temp_kernel,
+                navigator_control=NAVIGATOR_CONTROL,
+                utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+                tool_names=[],
+                app_version="1.3.0",
+            )
+
+            app_module.store = temp_store
+            app_module.kernel = temp_kernel
+            app_module.memo_service = temp_memo
+            app_module.archive_service = temp_archive
+            app_module.user_service = temp_user
+            app_module.receptionist_context_service = temp_receptionist_context
+            app_module.nancy_service = temp_nancy
+            app_module.router = temp_router
+            app_module.pipeline = temp_pipeline
+            app_module.refresh_handler_bindings()
+
+            app_module.register_tools(
+                temp_router,
+                {
+                    "office.workspaces_list": app_module.handle_workspaces_list,
+                    "office.workspace_new": app_module.handle_workspace_new,
+                    "office.workspace_activate": app_module.handle_workspace_activate,
+                    "office.bootstrap": app_module.handle_office_bootstrap,
+                    "office.state_get": app_module.handle_office_state_get,
+                    "office.transcript_get": app_module.handle_office_transcript_get,
+                    "office.room_set": app_module.handle_office_room_set,
+                    "office.nancy_route": app_module.handle_office_nancy_route,
+                    "office.sessions_list": app_module.handle_sessions_list,
+                    "office.session_create": app_module.handle_session_create,
+                    "office.session_activate": app_module.handle_session_activate,
+                    "office.session_rename": app_module.handle_session_rename,
+                    "office.session_delete": app_module.handle_session_delete,
+                    "mailroom.dispatch": app_module.handle_mailroom_dispatch,
+                    "office.artifact_create": app_module.handle_artifact_create,
+                    "office.artifact_get": app_module.handle_artifact_get,
+                    "office.artifact_list": app_module.handle_artifact_list,
+                    "office.artifact_update": app_module.handle_artifact_update,
+                    "office.artifact_append": app_module.handle_artifact_append,
+                    "office.artifact_archive": app_module.handle_artifact_archive,
+                    "office.memos_list": app_module.handle_memos_list,
+                    "office.memo_get": app_module.handle_memo_get,
+                    "office.archive_store_text": app_module.handle_archive_store_text,
+                    "office.archive_list": app_module.handle_archive_list,
+                    "office.archive_get": app_module.handle_archive_get,
+                    "office.nancy_artifacts_list": app_module.handle_nancy_artifacts_list,
+                    "office.nancy_artifact_open": app_module.handle_nancy_artifact_open,
+                    "office.nancy_workspace_briefing": app_module.handle_nancy_workspace_briefing,
+                    "office.room_memory_remember": app_module.handle_room_memory_remember,
+                    "office.room_memory_list": app_module.handle_room_memory_list,
+                    "office.room_memory_forget": app_module.handle_room_memory_forget,
+                    "office.ai_generate": app_module.handle_ai_generate,
+                    "office.search_web": app_module.handle_search_web,
+                    "office.search_reviews": app_module.handle_search_reviews,
+                    "office.search_places": app_module.handle_search_places,
+                    "office.ocr_extract": app_module.handle_ocr_extract,
+                },
+            )
+            temp_pipeline.tool_names = temp_router.tool_names()
+
+            onboard_result = None
+            for _ in range(20):
+                pin_code = f"{uuid.uuid4().int % 10000:04d}"
+                try:
+                    onboard_result = lobby_onboard(LobbyOnboardRequest(name="Mira", pin_code=pin_code))
+                    break
+                except Exception:
+                    continue
+
+            self.assertIsNotNone(onboard_result)
+            session_id = str(onboard_result["structuredContent"]["session_id"])
+            workspace_id = str(onboard_result["structuredContent"]["workspace_id"])
+
+            current_state = temp_kernel.get_state(workspace_id)
+            current_state["pending_room_navigation"] = {
+                "room_id": "marketing_room",
+                "room_title": "Marketing & Advertising",
+                "persona": "Marketing Director",
+                "request_text": "go to marketing department",
+                "ts": "2026-04-17T12:01:00Z",
+            }
+            temp_store.save_state(workspace_id, current_state)
+
+            response = handle_natural_language_request(
+                NaturalLanguageRequest(text="no", session_id=session_id)
+            )
+            payload = response["structuredContent"]
+            self.assertEqual(payload["response_text"], "Okay. Staying in lobby.")
+            self.assertEqual(payload["clear_pending_room_navigation"], True)
+
+            state_after_cancel = temp_store.load_state(workspace_id)
+            self.assertNotIn("pending_room_navigation", state_after_cancel)
         finally:
             app_module.store = original["store"]
             app_module.kernel = original["kernel"]

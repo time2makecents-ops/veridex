@@ -26,3 +26,4 @@ class HandlerDeps:
     resolve_workspace_id: Callable[[str, dict], str]
     image_generation_service: Any = None
     room_capability_registry: Any = None
+    work_context_service: Any = None

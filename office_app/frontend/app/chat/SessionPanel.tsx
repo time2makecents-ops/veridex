@@ -1,5 +1,6 @@
 import type { SessionRecord } from "@/lib/api";
 
+import type { SessionPromptMode } from "./types";
 import { roomById } from "./helpers";
 
 type SessionPanelProps = {
@@ -18,6 +19,7 @@ type SessionPanelProps = {
 };
 
 type SessionNamePromptProps = {
+  sessionPromptMode: SessionPromptMode;
   sessionDescriptionDraft: string;
   sessionPromptTargetId: string;
   sessionTitleDraft: string;
@@ -110,6 +112,7 @@ export function SessionPanel({
 }
 
 export function SessionNamePrompt({
+  sessionPromptMode,
   sessionDescriptionDraft,
   sessionPromptTargetId,
   sessionTitleDraft,
@@ -122,11 +125,19 @@ export function SessionNamePrompt({
     return null;
   }
 
+  const isRename = sessionPromptMode === "rename";
+  const heading = isRename ? "Rename session" : "Name new session";
+  const description = isRename
+    ? "Finish renaming this session before continuing."
+    : "The current workspace created a fresh session. Give it a title before continuing.";
+  const cancelLabel = isRename ? "Dismiss For Now" : "Keep New Session";
+  const saveLabel = isRename ? "Save Rename" : "Save Name";
+
   return (
-    <div className="session-name-overlay" role="dialog" aria-modal="true" aria-label="Name new session">
+    <div className="session-name-overlay" role="dialog" aria-modal="true" aria-label={heading}>
       <div className="session-name-modal">
-        <div className="dropdown-group-title">Name new session</div>
-        <div className="muted">The current workspace created a fresh session. Give it a title before continuing.</div>
+        <div className="dropdown-group-title">{heading}</div>
+        <div className="muted">{description}</div>
         <div className="toolbar-stack">
           <input
             className="session-input"
@@ -145,10 +156,10 @@ export function SessionNamePrompt({
           />
           <div className="toolbar-row">
             <button type="button" className="secondary" onClick={onCancelSessionNamePrompt}>
-              Keep New Session
+              {cancelLabel}
             </button>
             <button type="button" className="primary" onClick={onSaveSessionNamePrompt}>
-              Save Name
+              {saveLabel}
             </button>
           </div>
         </div>

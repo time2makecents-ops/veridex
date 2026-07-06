@@ -22,6 +22,9 @@
       "office.workspace_delete",
       "office.workspace_new",
       "office.workspace_update",
+      "office.work_context_complete",
+      "office.work_context_list",
+      "office.work_context_save",
       "office.workspaces_list"
     ],
     "files_artifacts": [
@@ -73,7 +76,8 @@
       "office.calendar_update",
       "office.gmail_draft",
       "office.gmail_send",
-      "office.integration_confirm"
+      "office.integration_confirm",
+      "office.integration_cancel"
     ],
     "meeting_state": [
       "office.meeting_state_add_action_item",

@@ -10,8 +10,14 @@ import {
   type DeleteSessionStructuredResponse,
   type GmailMessageDetail,
   type Message,
+  type NancyEmailComposeState,
+  type PendingBreakRoomJokeState,
+  type PendingRoomNavigationState,
+  type PendingSessionListState,
+  type PendingWorkspaceSwitchState,
   type ProviderBadge,
   type RoomCapabilityProfile,
+  type WorkContextRecord,
 } from "./types";
 
 export function roomById(roomId: string): RoomInfo | undefined {
@@ -272,11 +278,12 @@ export function assistantMessageForResponse(
     gmailThread: Array.isArray(response?.gmail_thread) ? response.gmail_thread.map((message) => cleanGmailDetail(message) || message) : undefined,
     contacts: Array.isArray(response?.contacts) ? response.contacts : undefined,
     emailReview: response?.email_review,
+    workContexts: Array.isArray(response?.contexts) ? response.contexts : undefined,
   });
 }
 
 export function shouldShowMessageText(message: Message): boolean {
-  if (message.gmailMessages?.length || message.gmailMessage || message.gmailThread?.length || message.contacts?.length || message.emailReview) {
+  if (message.gmailMessages?.length || message.gmailMessage || message.gmailThread?.length || message.contacts?.length || message.emailReview || message.workContexts?.length) {
     return false;
   }
   return Boolean(message.text);
@@ -295,6 +302,160 @@ export function integrationConfirmationMessage(text: string, room: string, sessi
 export function contactEmailRequest(contact: ContactRecord): string {
   const email = String(contact.email || "").trim();
   return `Nancy, email ${email}`;
+}
+
+export function workContextCompleteArgs(contextId: string, activeIndex: number, sessionId: string): Record<string, unknown> {
+  const trimmedContextId = String(contextId || "").trim();
+  return {
+    ...(trimmedContextId ? { context_id: trimmedContextId } : { active_index: activeIndex }),
+    session_id: sessionId,
+  };
+}
+
+export function activeWorkContextNoticeText(contexts: WorkContextRecord[]): string {
+  const active = contexts.find((context) => String(context.status || "").toLowerCase() === "active") || contexts[0];
+  if (!active) {
+    return "";
+  }
+  const title = String(active.title || "Untitled work").trim();
+  const summary = String(active.summary || "").trim();
+  const location = [active.active_room, active.active_persona].map((item) => String(item || "").trim()).filter(Boolean).join(" / ");
+  const detail = summary ? ` - ${summary}` : "";
+  const suffix = location ? ` (${location})` : "";
+  return `Active work: ${title}${detail}${suffix}`;
+}
+
+export function pendingNancyComposeNotice(compose: NancyEmailComposeState | undefined): string {
+  const stage = String(compose?.stage || "").trim().toLowerCase();
+  const to = String(compose?.to || "").trim();
+  const subject = String(compose?.subject || "").trim();
+  if (stage === "recipient") {
+    return "Nancy is waiting for the email recipient.";
+  }
+  if (stage === "subject") {
+    return to ? `Nancy is waiting for the subject for ${to}.` : "Nancy is waiting for the email subject.";
+  }
+  if (stage === "body" || stage === "reply_body") {
+    if (to && subject) {
+      return `Nancy is waiting for the body for ${to}. Subject: ${subject}`;
+    }
+    if (to) {
+      return `Nancy is waiting for the body for ${to}.`;
+    }
+    return "Nancy is waiting for the email body.";
+  }
+  if (stage === "review") {
+    return "Nancy has a draft ready. Say send when you want Gmail confirmation prepared.";
+  }
+  return "Nancy has an email task in progress.";
+}
+
+export function pendingWorkspaceSwitchNotice(pending: PendingWorkspaceSwitchState | undefined): string {
+  const label = String(pending?.label || pending?.workspace_id || "").trim();
+  const workspaceId = String(pending?.workspace_id || "").trim();
+  if (!label && !workspaceId) {
+    return "";
+  }
+  return `Workspace "${label || workspaceId}" is ready. Switch now and start a new session there, or stay here.`;
+}
+
+export function pendingSessionListNotice(pending: PendingSessionListState | undefined): string {
+  const requestText = String(pending?.request_text || "").trim();
+  if (!requestText) {
+    return "";
+  }
+  return "List the sessions in this workspace now, or keep working here.";
+}
+
+export function pendingRoomNavigationNotice(pending: PendingRoomNavigationState | undefined): string {
+  const roomTitle = String(pending?.room_title || pending?.room_id || "").trim();
+  const persona = String(pending?.persona || "").trim();
+  if (!roomTitle && !persona) {
+    return "";
+  }
+  if (roomTitle && persona) {
+    return `Move to ${roomTitle} (${persona}) now, or stay here.`;
+  }
+  return `Move to ${roomTitle || persona} now, or stay here.`;
+}
+
+export function pendingBreakRoomJokeNotice(pending: PendingBreakRoomJokeState | undefined): string {
+  const setup = String(pending?.setup || "").trim();
+  if (!setup) {
+    return "";
+  }
+  return `Break Room setup waiting: ${setup}`;
+}
+
+export function workContextConfirmationId(context: WorkContextRecord | undefined): string {
+  if (!context || typeof context !== "object") {
+    return "";
+  }
+  const refs = context.refs;
+  if (!refs || typeof refs !== "object") {
+    return "";
+  }
+  const kind = String(refs.kind || "").trim();
+  if (!["nancy_email_confirmation", "integration_confirmation"].includes(kind)) {
+    return "";
+  }
+  return String(refs.confirmation_id || "").trim();
+}
+
+export function workContextConfirmationLabel(context: WorkContextRecord | undefined): string {
+  const refs = context?.refs;
+  if (!refs || typeof refs !== "object") {
+    return "Confirm Action";
+  }
+  const kind = String(refs.kind || "").trim();
+  if (kind === "nancy_email_confirmation") {
+    return "Confirm Gmail Send";
+  }
+  const actionKind = String(refs.action_kind || "").trim();
+  if (actionKind === "calendar.create") {
+    return "Confirm Calendar Create";
+  }
+  if (actionKind === "calendar.update") {
+    return "Confirm Calendar Update";
+  }
+  if (actionKind === "calendar.cancel") {
+    return "Confirm Calendar Cancel";
+  }
+  return "Confirm Action";
+}
+
+export function workContextConfirmationAssistantPersona(context: WorkContextRecord | undefined): string {
+  const refs = context?.refs;
+  if (!refs || typeof refs !== "object") {
+    return "";
+  }
+  const kind = String(refs.kind || "").trim();
+  if (kind === "nancy_email_confirmation" || kind === "integration_confirmation") {
+    return "Nancy";
+  }
+  return "";
+}
+
+export function workContextCancellationLabel(context: WorkContextRecord | undefined): string {
+  const refs = context?.refs;
+  if (!refs || typeof refs !== "object") {
+    return "Dismiss";
+  }
+  const kind = String(refs.kind || "").trim();
+  if (kind === "nancy_email_confirmation") {
+    return "Dismiss Gmail Send";
+  }
+  const actionKind = String(refs.action_kind || "").trim();
+  if (actionKind === "calendar.create") {
+    return "Dismiss Calendar Create";
+  }
+  if (actionKind === "calendar.update") {
+    return "Dismiss Calendar Update";
+  }
+  if (actionKind === "calendar.cancel") {
+    return "Dismiss Calendar Cancel";
+  }
+  return "Dismiss";
 }
 
 export function fileSortLabel(file: FileRecord): string {

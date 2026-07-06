@@ -70,15 +70,63 @@ class FakeIntegrationService:
         self.contacts.append(contact)
         return contact
 
+    def confirm_action(self, *, user_id: str, confirmation_id: str) -> dict[str, object]:
+        return {
+            "action_kind": "gmail.send",
+            "payload": {"to": ["jane@example.com"], "subject": "Welcome", "body": "Thanks."},
+            "result": {"id": "gmail_msg_1"},
+        }
+
+    def cancel_action(self, *, user_id: str, confirmation_id: str) -> dict[str, object]:
+        return {
+            "action_kind": "gmail.send",
+            "payload": {"to": ["jane@example.com"], "subject": "Welcome", "body": "Thanks."},
+            "confirmation_id": confirmation_id,
+            "canceled": True,
+        }
+
+
+class FakeCalendarConfirmIntegrationService(FakeIntegrationService):
+    def confirm_action(self, *, user_id: str, confirmation_id: str) -> dict[str, object]:
+        return {
+            "action_kind": "calendar.create",
+            "payload": {"summary": "Planning"},
+            "result": {"id": "evt_1"},
+        }
+
+    def cancel_action(self, *, user_id: str, confirmation_id: str) -> dict[str, object]:
+        return {
+            "action_kind": "calendar.create",
+            "payload": {"summary": "Planning"},
+            "confirmation_id": confirmation_id,
+            "canceled": True,
+        }
+
 
 class FakeUserService:
     def get_user_for_session(self, session_id: str) -> dict[str, str]:
         return {"user_id": "user_a"}
 
+    def resolve_workspace_for_session(self, session_id: str) -> str:
+        return "workspace_a"
+
+
+class FakeWorkContextService:
+    def __init__(self) -> None:
+        self.completed: list[dict[str, object]] = []
+
+    def complete_context(self, **kwargs) -> dict[str, object]:
+        self.completed.append(dict(kwargs))
+        return dict(kwargs)
+
 
 class IntegrationHandlerTests(unittest.TestCase):
-    def handlers_for(self, service: FakeIntegrationService) -> dict[str, object]:
-        return build_integration_handlers(integration_service=service, user_service=FakeUserService())
+    def handlers_for(self, service: FakeIntegrationService, work_context_service: FakeWorkContextService | None = None) -> dict[str, object]:
+        return build_integration_handlers(
+            integration_service=service,
+            user_service=FakeUserService(),
+            work_context_service=work_context_service,
+        )
 
     def test_gmail_send_reports_disconnected_google_without_pending_confirmation(self) -> None:
         service = FakeIntegrationService(connected=False)
@@ -150,6 +198,85 @@ class IntegrationHandlerTests(unittest.TestCase):
         self.assertEqual(len(service.pending_actions), 1)
         self.assertEqual(response["structuredContent"]["confirmation_id"], "confirm_fake")
         self.assertIn("prepared the Gmail send confirmation", response["content"][0]["text"])
+
+    def test_gmail_confirmation_completes_nancy_email_work_context(self) -> None:
+        service = FakeIntegrationService(connected=True)
+        work_context = FakeWorkContextService()
+        handlers = self.handlers_for(service, work_context_service=work_context)
+
+        response = handlers["office.integration_confirm"](
+            {
+                "session_id": "sess_a",
+                "confirmation_id": "confirm_fake",
+            }
+        )
+
+        self.assertEqual(response["structuredContent"]["result"]["action_kind"], "gmail.send")
+        self.assertEqual(len(work_context.completed), 1)
+        completed = work_context.completed[0]
+        self.assertEqual(completed["workspace_id"], "workspace_a")
+        self.assertEqual(completed["source_type"], "nancy_email")
+        self.assertEqual(completed["source_id"], "sess_a:nancy_email")
+        self.assertIn("confirmed and sent", completed["summary"])
+
+    def test_calendar_confirmation_completes_generic_integration_work_context(self) -> None:
+        service = FakeCalendarConfirmIntegrationService(connected=True)
+        work_context = FakeWorkContextService()
+        handlers = self.handlers_for(service, work_context_service=work_context)
+
+        response = handlers["office.integration_confirm"](
+            {
+                "session_id": "sess_a",
+                "confirmation_id": "confirm_fake",
+            }
+        )
+
+        self.assertEqual(response["structuredContent"]["result"]["action_kind"], "calendar.create")
+        self.assertEqual(len(work_context.completed), 1)
+        completed = work_context.completed[0]
+        self.assertEqual(completed["workspace_id"], "workspace_a")
+        self.assertEqual(completed["source_type"], "integration_confirmation")
+        self.assertEqual(completed["source_id"], "confirm_fake")
+        self.assertIn("confirmed and completed", completed["summary"])
+
+    def test_gmail_cancel_completes_nancy_email_work_context_and_clears_compose(self) -> None:
+        service = FakeIntegrationService(connected=True)
+        work_context = FakeWorkContextService()
+        handlers = self.handlers_for(service, work_context_service=work_context)
+
+        response = handlers["office.integration_cancel"](
+            {
+                "session_id": "sess_a",
+                "confirmation_id": "confirm_fake",
+            }
+        )
+
+        self.assertTrue(response["structuredContent"]["result"]["canceled"])
+        self.assertTrue(response["structuredContent"]["clear_pending_nancy_email"])
+        self.assertEqual(len(work_context.completed), 1)
+        completed = work_context.completed[0]
+        self.assertEqual(completed["source_type"], "nancy_email")
+        self.assertEqual(completed["source_id"], "sess_a:nancy_email")
+        self.assertIn("dismissed", completed["summary"])
+
+    def test_calendar_cancel_completes_generic_integration_work_context(self) -> None:
+        service = FakeCalendarConfirmIntegrationService(connected=True)
+        work_context = FakeWorkContextService()
+        handlers = self.handlers_for(service, work_context_service=work_context)
+
+        response = handlers["office.integration_cancel"](
+            {
+                "session_id": "sess_a",
+                "confirmation_id": "confirm_fake",
+            }
+        )
+
+        self.assertTrue(response["structuredContent"]["result"]["canceled"])
+        self.assertEqual(len(work_context.completed), 1)
+        completed = work_context.completed[0]
+        self.assertEqual(completed["source_type"], "integration_confirmation")
+        self.assertEqual(completed["source_id"], "confirm_fake")
+        self.assertIn("dismissed", completed["summary"])
 
     def test_gmail_search_content_uses_cards_instead_of_duplicate_text_list(self) -> None:
         service = FakeIntegrationService(connected=True)

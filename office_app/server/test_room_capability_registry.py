@@ -59,6 +59,11 @@ class RoomCapabilityRegistryTests(unittest.TestCase):
         self.assertTrue(self.registry.is_tool_allowed("my_office", "office.gmail_read"))
         self.assertTrue(self.registry.is_tool_allowed("my_office", "office.gmail_thread_read"))
 
+    def test_google_write_prepare_group_allows_integration_cancel_from_my_office(self) -> None:
+        self.assertTrue(self.registry.is_tool_allowed("my_office", "office.gmail_send"))
+        self.assertTrue(self.registry.is_tool_allowed("my_office", "office.integration_confirm"))
+        self.assertTrue(self.registry.is_tool_allowed("my_office", "office.integration_cancel"))
+
     def test_policy_engine_enforces_room_capability_profile(self) -> None:
         engine = ToolPolicyEngine(room_capability_registry=self.registry)
         definition = VERIDEX_TOOL_DEFINITIONS["office.image_generate"]
