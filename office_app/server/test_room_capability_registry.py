@@ -70,6 +70,7 @@ class RoomCapabilityRegistryTests(unittest.TestCase):
                 self.assertTrue(self.registry.is_tool_allowed(room_id, "office.navigator_status_report"))
                 self.assertTrue(self.registry.is_tool_allowed(room_id, "office.navigator_recent_errors"))
                 self.assertTrue(self.registry.is_tool_allowed(room_id, "office.navigator_explain_error"))
+                self.assertTrue(self.registry.is_tool_allowed(room_id, "office.navigator_run_check"))
 
     def test_policy_engine_enforces_room_capability_profile(self) -> None:
         engine = ToolPolicyEngine(room_capability_registry=self.registry)

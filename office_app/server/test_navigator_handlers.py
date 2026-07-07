@@ -27,6 +27,15 @@ class DummyNavigatorDiagnostics:
             "category": "capability_policy",
         }
 
+    def run_check(self, workspace_id: str, *, check_name: str = "", session_id: str | None = None):
+        return {
+            "check_name": check_name,
+            "label": "Standard smoke test",
+            "status": "passed",
+            "exit_code": 0,
+            "summary": "Navigator check standard_smoke passed.",
+        }
+
 
 class NavigatorHandlerTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -52,6 +61,17 @@ class NavigatorHandlerTests(unittest.TestCase):
 
         self.assertEqual(response["structuredContent"]["speaker"], "Navigator")
         self.assertIn("Next step:", response["content"][0]["text"])
+
+    def test_run_check_returns_structured_navigator_result(self) -> None:
+        response = self.handlers["office.navigator_run_check"](
+            {"workspace_id": "ws1", "session_id": "sess1", "check_name": "standard_smoke"}
+        )
+
+        structured = response["structuredContent"]
+        self.assertEqual(structured["speaker"], "Navigator")
+        self.assertEqual(structured["workspace_id"], "ws1")
+        self.assertEqual(structured["check"]["status"], "passed")
+        self.assertIn("standard_smoke passed", response["content"][0]["text"])
 
 
 if __name__ == "__main__":

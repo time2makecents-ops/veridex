@@ -2356,6 +2356,7 @@ def refresh_handler_bindings() -> None:
     global handle_navigator_status_report
     global handle_navigator_recent_errors
     global handle_navigator_explain_error
+    global handle_navigator_run_check
     global handle_mailroom_dispatch
     global handle_memos_list
     global handle_memo_get
@@ -2483,6 +2484,7 @@ def refresh_handler_bindings() -> None:
     handle_navigator_status_report = navigator_handlers["office.navigator_status_report"]
     handle_navigator_recent_errors = navigator_handlers["office.navigator_recent_errors"]
     handle_navigator_explain_error = navigator_handlers["office.navigator_explain_error"]
+    handle_navigator_run_check = navigator_handlers["office.navigator_run_check"]
 
     handle_mailroom_dispatch = memo_handlers["mailroom.dispatch"]
     handle_memos_list = memo_handlers["office.memos_list"]
@@ -2575,6 +2577,7 @@ def refresh_handler_bindings() -> None:
             "office.navigator_status_report": handle_navigator_status_report,
             "office.navigator_recent_errors": handle_navigator_recent_errors,
             "office.navigator_explain_error": handle_navigator_explain_error,
+            "office.navigator_run_check": handle_navigator_run_check,
             "office.ai_generate": handle_ai_generate,
             "office.search_web": handle_search_web,
             "office.search_reviews": handle_search_reviews,
@@ -2669,6 +2672,7 @@ register_tools(
         "office.navigator_status_report": handle_navigator_status_report,
         "office.navigator_recent_errors": handle_navigator_recent_errors,
         "office.navigator_explain_error": handle_navigator_explain_error,
+        "office.navigator_run_check": handle_navigator_run_check,
         "office.ai_generate": handle_ai_generate,
         "office.search_web": handle_search_web,
     "office.search_reviews": handle_search_reviews,

@@ -10,7 +10,7 @@ Last updated: 2026-07-07
 - Make normal chat feel conversational while keeping explicit system commands deterministic.
 - Keep startup and smoke testing simple enough to diagnose without guessing.
 - Current branch: `feat/routing-followup-reliability`.
-- Current active slice: Navigator read-only diagnostics. Navigator can now report Veridex health, recent incidents/log tails, safe config readiness, active room/persona state, and explain common error categories without arbitrary shell access.
+- Current active slice: Navigator allowlisted diagnostics. Navigator can now report Veridex health, recent incidents/log tails, safe config readiness, active room/persona state, explain common error categories, and run explicit allowlisted checks without arbitrary shell access.
 
 ## Immediate Priorities
 
@@ -48,7 +48,8 @@ Last updated: 2026-07-07
 6. Navigator diagnostics
    - `office.navigator_status_report`, `office.navigator_recent_errors`, and `office.navigator_explain_error` are read-only governed tools.
    - Navigator diagnostics are available through the shared navigation capability group so they can be used from normal rooms.
-   - Future Navigator expansion should stay allowlisted: add safe test execution before any proactive or self-healing behavior.
+   - `office.navigator_run_check` is a governed allowlisted check runner for standard smoke, work-context smoke, backend tests, and frontend build.
+   - Future Navigator expansion should stay allowlisted: add proactive or self-healing behavior only after the safe check surface remains stable.
 
 ## Suggested Future Steps
 

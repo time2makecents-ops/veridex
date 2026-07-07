@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import csv
 import re
+import subprocess
+import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 
 HealthProvider = Callable[[], Dict[str, Any]]
@@ -11,6 +14,66 @@ ToolNamesProvider = Callable[[], List[str]]
 StateProvider = Callable[[str], Dict[str, Any]]
 EnvGetter = Callable[[str], str]
 UtcNow = Callable[[], str]
+CommandRunner = Callable[..., Any]
+
+
+@dataclass(frozen=True)
+class NavigatorCheckSpec:
+    name: str
+    label: str
+    argv: tuple[str, ...]
+    cwd: Path
+    timeout_seconds: int
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+FRONTEND_ROOT = PROJECT_ROOT / "office_app" / "frontend"
+
+
+NAVIGATOR_CHECKS: Dict[str, NavigatorCheckSpec] = {
+    "standard_smoke": NavigatorCheckSpec(
+        name="standard_smoke",
+        label="Standard smoke test",
+        argv=(
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(PROJECT_ROOT / "office_app" / "smoke_test.ps1"),
+        ),
+        cwd=PROJECT_ROOT,
+        timeout_seconds=120,
+    ),
+    "work_context_smoke": NavigatorCheckSpec(
+        name="work_context_smoke",
+        label="Work context smoke test",
+        argv=(
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(PROJECT_ROOT / "office_app" / "work_context_smoke.ps1"),
+        ),
+        cwd=PROJECT_ROOT,
+        timeout_seconds=180,
+    ),
+    "backend_tests": NavigatorCheckSpec(
+        name="backend_tests",
+        label="Backend unit tests",
+        argv=("python", "-m", "unittest", "discover", "-s", "office_app/server", "-p", "test_*.py"),
+        cwd=PROJECT_ROOT,
+        timeout_seconds=180,
+    ),
+    "frontend_build": NavigatorCheckSpec(
+        name="frontend_build",
+        label="Frontend production build",
+        argv=("npm.cmd", "run", "build"),
+        cwd=FRONTEND_ROOT,
+        timeout_seconds=180,
+    ),
+}
 
 
 SECRET_LINE_RE = re.compile(
@@ -30,6 +93,7 @@ class NavigatorDiagnosticsService:
         frontend_log_path: Path,
         env_getter: EnvGetter,
         utc_now: UtcNow,
+        command_runner: Optional[CommandRunner] = None,
     ) -> None:
         self.health_provider = health_provider
         self.tool_names_provider = tool_names_provider
@@ -39,6 +103,7 @@ class NavigatorDiagnosticsService:
         self.frontend_log_path = frontend_log_path
         self.env_getter = env_getter
         self.utc_now = utc_now
+        self.command_runner = command_runner or self._run_command
 
     @staticmethod
     def _redact(value: str) -> str:
@@ -51,6 +116,21 @@ class NavigatorDiagnosticsService:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             return []
+        return [self._redact(line) for line in lines[-limit:]]
+
+    @staticmethod
+    def _run_command(*, argv: Sequence[str], cwd: Path, timeout_seconds: int) -> Any:
+        return subprocess.run(
+            list(argv),
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            shell=False,
+        )
+
+    def _tail_text(self, text: str, *, limit: int = 40) -> List[str]:
+        lines = str(text or "").splitlines()
         return [self._redact(line) for line in lines[-limit:]]
 
     def _recent_incidents(self, *, limit: int = 10) -> List[Dict[str, Any]]:
@@ -113,6 +193,7 @@ class NavigatorDiagnosticsService:
             "office.navigator_status_report",
             "office.navigator_recent_errors",
             "office.navigator_explain_error",
+            "office.navigator_run_check",
         }
         return {
             "generated_utc": self.utc_now(),
@@ -175,4 +256,60 @@ class NavigatorDiagnosticsService:
             "summary": summary,
             "next_step": next_step,
             "error_text": self._redact(text),
+        }
+
+    def run_check(self, workspace_id: str, *, check_name: str = "", session_id: Optional[str] = None) -> Dict[str, Any]:
+        normalized = re.sub(r"[^a-z0-9_]+", "_", str(check_name or "").strip().lower()).strip("_")
+        spec = NAVIGATOR_CHECKS.get(normalized)
+        if spec is None:
+            return {
+                "generated_utc": self.utc_now(),
+                "workspace_id": workspace_id,
+                "session_id": session_id or "",
+                "check_name": str(check_name or ""),
+                "status": "rejected",
+                "exit_code": None,
+                "duration_seconds": 0.0,
+                "stdout_tail": [],
+                "stderr_tail": [],
+                "summary": f"Navigator check '{check_name}' is not allowlisted.",
+                "allowed_checks": sorted(NAVIGATOR_CHECKS),
+            }
+
+        started = time.monotonic()
+        try:
+            completed = self.command_runner(argv=spec.argv, cwd=spec.cwd, timeout_seconds=spec.timeout_seconds)
+            duration = round(time.monotonic() - started, 3)
+            exit_code = int(getattr(completed, "returncode", 1))
+            status = "passed" if exit_code == 0 else "failed"
+            stdout_tail = self._tail_text(str(getattr(completed, "stdout", "") or ""), limit=40)
+            stderr_tail = self._tail_text(str(getattr(completed, "stderr", "") or ""), limit=40)
+        except subprocess.TimeoutExpired as exc:
+            duration = round(time.monotonic() - started, 3)
+            exit_code = None
+            status = "timed_out"
+            stdout_tail = self._tail_text(str(exc.stdout or ""), limit=40)
+            stderr_tail = self._tail_text(str(exc.stderr or ""), limit=40)
+        except OSError as exc:
+            duration = round(time.monotonic() - started, 3)
+            exit_code = None
+            status = "failed"
+            stdout_tail = []
+            stderr_tail = [self._redact(str(exc))]
+
+        return {
+            "generated_utc": self.utc_now(),
+            "workspace_id": workspace_id,
+            "session_id": session_id or "",
+            "check_name": spec.name,
+            "label": spec.label,
+            "status": status,
+            "exit_code": exit_code,
+            "duration_seconds": duration,
+            "timeout_seconds": spec.timeout_seconds,
+            "command_display": " ".join(spec.argv),
+            "stdout_tail": stdout_tail,
+            "stderr_tail": stderr_tail,
+            "summary": f"Navigator check {spec.name} {status}.",
+            "allowed_checks": sorted(NAVIGATOR_CHECKS),
         }

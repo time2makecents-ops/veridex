@@ -94,6 +94,7 @@ Responsibilities:
 - detect conflicts  
 - inspect system health, recent incidents, and redacted runtime logs
 - explain common failures and safe next steps
+- run explicitly allowlisted diagnostic checks such as smoke tests and backend validation
 
 Navigator oversees the system and can run read-only diagnostics. It does not perform department work, external sends, destructive changes, or arbitrary shell commands.
 

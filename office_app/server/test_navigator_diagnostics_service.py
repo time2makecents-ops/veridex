@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from office_app.server.navigator_diagnostics_service import NavigatorDiagnosticsService
 
@@ -78,6 +79,59 @@ class NavigatorDiagnosticsServiceTests(unittest.TestCase):
         self.assertEqual(result["category"], "capability_policy")
         self.assertIn("room capability", result["summary"].lower())
         self.assertIn("move to the correct room", result["next_step"].lower())
+
+    def test_run_check_executes_only_allowlisted_check_and_redacts_output(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def fake_runner(*, argv, cwd, timeout_seconds):
+            calls.append({"argv": argv, "cwd": cwd, "timeout_seconds": timeout_seconds})
+            return SimpleNamespace(
+                returncode=0,
+                stdout="line 1\nAPI_KEY=super-secret\nSMOKE TEST PASSED\n",
+                stderr="",
+            )
+
+        service = NavigatorDiagnosticsService(
+            health_provider=lambda: {"ok": True},
+            tool_names_provider=lambda: [],
+            state_provider=lambda workspace_id: {},
+            incident_log_path=Path("missing.csv"),
+            backend_log_path=Path("missing-backend.log"),
+            frontend_log_path=Path("missing-frontend.log"),
+            env_getter=lambda name: "",
+            utc_now=lambda: "2026-07-07T10:02:00Z",
+            command_runner=fake_runner,
+        )
+
+        result = service.run_check("ws1", check_name="standard_smoke", session_id="sess1")
+
+        self.assertEqual(result["check_name"], "standard_smoke")
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(result["session_id"], "sess1")
+        self.assertIn("SMOKE TEST PASSED", "\n".join(result["stdout_tail"]))
+        self.assertIn("[REDACTED]", "\n".join(result["stdout_tail"]))
+        self.assertNotIn("super-secret", "\n".join(result["stdout_tail"]))
+        self.assertIn("smoke_test.ps1", " ".join(calls[0]["argv"]))
+
+    def test_run_check_rejects_unlisted_check_name(self) -> None:
+        service = NavigatorDiagnosticsService(
+            health_provider=lambda: {"ok": True},
+            tool_names_provider=lambda: [],
+            state_provider=lambda workspace_id: {},
+            incident_log_path=Path("missing.csv"),
+            backend_log_path=Path("missing-backend.log"),
+            frontend_log_path=Path("missing-frontend.log"),
+            env_getter=lambda name: "",
+            utc_now=lambda: "2026-07-07T10:02:00Z",
+            command_runner=lambda **kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        )
+
+        result = service.run_check("ws1", check_name="powershell arbitrary command")
+
+        self.assertEqual(result["status"], "rejected")
+        self.assertEqual(result["check_name"], "powershell arbitrary command")
+        self.assertIn("not allowlisted", result["summary"])
 
 
 if __name__ == "__main__":

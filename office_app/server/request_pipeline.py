@@ -2072,12 +2072,28 @@ class RequestPipeline:
                 lowered,
             )
         )
+        run_check_name = ""
+        if re.search(r"\b(?:standard\s+)?smoke\s+test\b", lowered):
+            run_check_name = "standard_smoke"
+        elif re.search(r"\bwork\s+context\s+smoke\b", lowered):
+            run_check_name = "work_context_smoke"
+        elif re.search(r"\bbackend\s+(?:unit\s+)?tests?\b", lowered):
+            run_check_name = "backend_tests"
+        elif re.search(r"\bfrontend\s+(?:build|production\s+build)\b", lowered):
+            run_check_name = "frontend_build"
         recent_errors_match = bool(
             re.search(r"\b(?:recent\s+errors|recent\s+incidents|show\s+errors|show\s+logs|error\s+log|incident\s+log)\b", lowered)
         )
         explain_error_match = bool(
             re.search(r"\b(?:why\s+did\s+that\s+fail|why\s+did\s+it\s+fail|what\s+went\s+wrong|explain\s+(?:the\s+)?error|diagnose\s+(?:that|this))\b", lowered)
         )
+        if run_check_name and (mentions_navigator or "veridex" in lowered):
+            return {
+                "capability": "navigator.run_check",
+                "tool": "office.navigator_run_check",
+                "arguments": {"check_name": run_check_name},
+                "reason": "Matched an allowlisted Navigator diagnostic check request.",
+            }
         if recent_errors_match and (mentions_navigator or "error" in lowered or "incident" in lowered or "log" in lowered):
             return {
                 "capability": "navigator.recent_errors",

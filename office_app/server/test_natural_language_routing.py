@@ -131,6 +131,17 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "navigator.status_report")
         self.assertEqual(routed["tool"], "office.navigator_status_report")
 
+    def test_navigator_run_smoke_test_routes_to_allowed_check_tool(self) -> None:
+        routed = self.pipeline.route_user_request("default", "Navigator, run the standard smoke test")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "navigator.run_check")
+        self.assertEqual(routed["tool"], "office.navigator_run_check")
+        self.assertEqual(routed["arguments"]["check_name"], "standard_smoke")
+
+    def test_bare_run_tests_does_not_route_to_navigator_check(self) -> None:
+        routed = self.pipeline.route_navigator_diagnostics_request("ws_test", "run tests")
+        self.assertIsNone(routed)
+
     def test_complete_active_work_number_routes_to_work_context_complete_index(self) -> None:
         routed = self.pipeline.route_user_request("default", "complete active work 2")
         self.assertEqual(routed["route_kind"], "tool")

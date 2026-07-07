@@ -70,6 +70,12 @@ VERIDEX_TOOL_DEFINITIONS = {
         "Explain a Veridex error and suggest a safe next step.",
         requires_workspace=True,
     ),
+    "office.navigator_run_check": tool_definition(
+        "office.navigator_run_check",
+        "navigator.run_check",
+        "Run an allowlisted Veridex diagnostic check and return structured output.",
+        requires_workspace=True,
+    ),
     "office.ai_generate": tool_definition("office.ai_generate", "ai.respond", "Generate a model response.", requires_workspace=True),
     "office.search_web": tool_definition("office.search_web", "search.web", "Search the web.", requires_workspace=True),
     "office.search_reviews": tool_definition("office.search_reviews", "search.reviews", "Search reviews.", requires_workspace=True),

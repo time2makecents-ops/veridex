@@ -39,6 +39,16 @@ def _recent_errors_text(result: Dict[str, Any]) -> str:
     )
 
 
+def _check_text(result: Dict[str, Any]) -> str:
+    check_name = str(result.get("check_name") or "unknown")
+    status = str(result.get("status") or "unknown")
+    if status == "rejected":
+        return str(result.get("summary") or f"Navigator rejected check {check_name}.")
+    exit_code = result.get("exit_code")
+    duration = result.get("duration_seconds")
+    return f"Navigator check {check_name} {status}. Exit code: {exit_code}. Duration: {duration}s."
+
+
 def build_navigator_handlers(deps: HandlerDeps) -> Dict[str, Any]:
     def handle_status_report(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = deps.resolve_workspace_id("office.navigator_status_report", args)
@@ -88,8 +98,28 @@ def build_navigator_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "content": [{"type": "text", "text": text}],
         }
 
+    def handle_run_check(args: Dict[str, Any]) -> Dict[str, Any]:
+        workspace_id = deps.resolve_workspace_id("office.navigator_run_check", args)
+        session_id = str(args.get("session_id") or "").strip() or None
+        check_name = str(args.get("check_name") or "").strip()
+        result = deps.navigator_diagnostics_service.run_check(
+            workspace_id,
+            session_id=session_id,
+            check_name=check_name,
+        )
+        return {
+            "structuredContent": {
+                "speaker": "Navigator",
+                "workspace_id": workspace_id,
+                "session_id": session_id or "",
+                "check": result,
+            },
+            "content": [{"type": "text", "text": _check_text(result)}],
+        }
+
     return {
         "office.navigator_status_report": handle_status_report,
         "office.navigator_recent_errors": handle_recent_errors,
         "office.navigator_explain_error": handle_explain_error,
+        "office.navigator_run_check": handle_run_check,
     }
