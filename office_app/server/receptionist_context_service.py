@@ -183,6 +183,17 @@ class ReceptionistContextService:
     MODEL_CONTEXT_SUMMARY_CHARS = 1400
     MODEL_CONTEXT_SESSION_FACT_LIMIT = 6
     MODEL_CONTEXT_SESSION_FACT_CHARS = 240
+    MODEL_CONTEXT_DIAGNOSTIC_MARKERS = (
+        "known diagnostic category",
+        "run recent errors",
+        "recent errors",
+        "status report",
+        "logs and incidents",
+        "recent incident",
+        "backend log line",
+        "navigator found",
+        "diagnostic",
+    )
 
     def __init__(self, *, kernel, runtime_dir: Path, utc_now_fn):
         self.kernel = kernel
@@ -556,6 +567,14 @@ class ReceptionistContextService:
             return text
         return text[: max(0, max_chars - 1)].rstrip() + "â€¦"
 
+    @classmethod
+    def _is_model_context_diagnostic_turn(cls, turn: Dict[str, Any]) -> bool:
+        speaker = str(turn.get("speaker") or turn.get("persona_name") or "").strip().lower()
+        text = str(turn.get("text") or "").strip().lower()
+        if speaker == "navigator":
+            return True
+        return any(marker in text for marker in cls.MODEL_CONTEXT_DIAGNOSTIC_MARKERS)
+
     @staticmethod
     def _clean_fact_value(value: str) -> str:
         value = re.sub(r"\s+", " ", str(value or "").strip())
@@ -696,7 +715,13 @@ class ReceptionistContextService:
             )
         recent_turns = []
         recent_turn_records = []
-        for turn in transcript_rows[-self.MODEL_CONTEXT_TURN_LIMIT :]:
+        context_rows = transcript_rows
+        if active_room != "control_room":
+            context_rows = [
+                turn for turn in transcript_rows
+                if not self._is_model_context_diagnostic_turn(turn)
+            ]
+        for turn in context_rows[-self.MODEL_CONTEXT_TURN_LIMIT :]:
             role = str(turn.get("role") or "assistant").strip()
             if role not in {"user", "assistant", "system"}:
                 role = "assistant"

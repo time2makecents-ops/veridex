@@ -1555,6 +1555,19 @@ class RequestPipeline:
                 **file_list_route,
             }
 
+        transcript_provenance_route = self.route_transcript_provenance_followup(
+            workspace_id,
+            request_text,
+            recent_turns=recent_turns,
+            session_id=session_id,
+        )
+        if transcript_provenance_route is not None:
+            return {
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **transcript_provenance_route,
+            }
+
         session_thread_route = self.route_session_thread_request(workspace_id, request_text, session_id=session_id)
         if session_thread_route is not None:
             return {
@@ -1594,7 +1607,11 @@ class RequestPipeline:
                 **session_route,
                 }
 
-        navigator_diagnostics_route = self.route_navigator_diagnostics_request(workspace_id, request_text)
+        navigator_diagnostics_route = self.route_navigator_diagnostics_request(
+            workspace_id,
+            request_text,
+            recent_turns=recent_turns,
+        )
         if navigator_diagnostics_route is not None:
             return {
                 "route_kind": "tool",
@@ -2060,11 +2077,64 @@ class RequestPipeline:
             "reason": f"Answered a {capability} capability question without running a tool.",
         }
 
-    def route_navigator_diagnostics_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+    def _navigator_evidence_followup(
+        self,
+        request_text: str,
+        *,
+        recent_turns: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip().lower()).strip(" .?!")
+        if not text:
+            return None
+        recent_turns = recent_turns or []
+        last_navigator_text = ""
+        for row in reversed(recent_turns[-6:]):
+            role = str(row.get("role") or "").strip().lower()
+            speaker = str(row.get("speaker") or "").strip().lower()
+            if role == "assistant" and speaker == "navigator":
+                last_navigator_text = re.sub(r"\s+", " ", str(row.get("text") or "").strip().lower())
+                break
+        if not last_navigator_text:
+            return None
+        evidence_prompt = (
+            "run recent errors" in last_navigator_text
+            or "status report" in last_navigator_text
+            or "logs and incidents" in last_navigator_text
+            or "recent incident" in last_navigator_text
+            or "backend log line" in last_navigator_text
+        )
+        if not evidence_prompt:
+            return None
+        if text in {"do that", "proceed", "procede", "make it so", "run it", "yes", "ok", "okay"}:
+            return {
+                "capability": "navigator.recent_errors",
+                "tool": "office.navigator_recent_errors",
+                "arguments": {},
+                "reason": "Matched a follow-up to run Navigator evidence diagnostics.",
+            }
+        if re.fullmatch(r"(?:report|give me (?:a )?(?:detailed )?report|detailed report|status report)", text):
+            return {
+                "capability": "navigator.status_report",
+                "tool": "office.navigator_status_report",
+                "arguments": {},
+                "reason": "Matched a follow-up to generate an evidence-based Navigator status report.",
+            }
+        return None
+
+    def route_navigator_diagnostics_request(
+        self,
+        workspace_id: str,
+        request_text: str,
+        *,
+        recent_turns: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
         text = re.sub(r"\s+", " ", str(request_text or "").strip())
         lowered = text.lower().strip(" .?!")
         if not lowered:
             return None
+        followup = self._navigator_evidence_followup(request_text, recent_turns=recent_turns)
+        if followup is not None:
+            return followup
         mentions_navigator = bool(re.search(r"\bnavigator\b", lowered))
         status_match = bool(
             re.search(
@@ -4454,6 +4524,83 @@ class RequestPipeline:
                 if candidate in aliases:
                     return str(room.get("id") or "").strip()
         return ""
+
+    def _mentioned_room_id(self, request_text: str) -> str:
+        text = normalize_room_text(request_text)
+        if not text:
+            return ""
+        for room in rooms_payload():
+            room_id = str(room.get("id") or "").strip()
+            if not room_id:
+                continue
+            aliases = sorted(room_reference_aliases(room), key=len, reverse=True)
+            if any(re.search(rf"\b{re.escape(alias)}\b", text) for alias in aliases):
+                return room_id
+        return ""
+
+    def route_transcript_provenance_followup(
+        self,
+        workspace_id: str,
+        request_text: str,
+        *,
+        recent_turns: Optional[List[Dict[str, Any]]] = None,
+        session_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        text = normalize_room_text(request_text)
+        if not text:
+            return None
+        if not re.search(r"\b(?:was|is|isn t|isnt|wasn t|wasnt|that|this)\b", text):
+            return None
+        if not re.search(r"\b(?:chat|log|thread|transcript|from)\b", text):
+            return None
+        last_transcript_text = ""
+        last_session_id = str(session_id or "").strip()
+        for row in reversed((recent_turns or [])[-8:]):
+            if str(row.get("role") or "").strip().lower() != "assistant":
+                continue
+            row_text = str(row.get("text") or "")
+            if "Transcript entries for " not in row_text:
+                continue
+            last_transcript_text = row_text
+            last_session_id = str(row.get("session_id") or last_session_id).strip()
+            break
+        if not last_transcript_text:
+            return None
+        match = re.search(r"Transcript entries for ([a-z0-9_]+) in this session:", last_transcript_text)
+        if not match:
+            return None
+        displayed_room_id = str(match.group(1) or "").strip()
+        if not displayed_room_id:
+            return None
+        displayed_title = self.room_title_for_id(displayed_room_id)
+        mentioned_room_id = self._mentioned_room_id(request_text)
+        entry_count = sum(1 for line in last_transcript_text.splitlines() if line.strip().startswith("["))
+        count_text = f"{entry_count} entry" if entry_count == 1 else f"{entry_count} entries"
+        session_text = f"session {last_session_id}" if last_session_id else "the current session"
+        if mentioned_room_id and mentioned_room_id != displayed_room_id:
+            mentioned_title = self.room_title_for_id(mentioned_room_id)
+            response_text = (
+                f"No. The last displayed transcript was filtered to {displayed_title} ({displayed_room_id}) "
+                f"in {session_text} and included {count_text}. "
+                f"It was not filtered to {mentioned_title} ({mentioned_room_id})."
+            )
+        else:
+            response_text = (
+                f"Yes. The last displayed transcript was filtered to {displayed_title} ({displayed_room_id}) "
+                f"in {session_text} and included {count_text}."
+            )
+        return {
+            "route_kind": "clarify",
+            "capability": "workspace.transcript.provenance",
+            "tool": "office.capability_info",
+            "arguments": {
+                "response_text": response_text,
+                "room_id": displayed_room_id,
+                "session_id": last_session_id,
+                "count": entry_count,
+            },
+            "reason": "Answered a follow-up about the provenance of the last displayed room transcript.",
+        }
 
     def route_session_thread_request(
         self,

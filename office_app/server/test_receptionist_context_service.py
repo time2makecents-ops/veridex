@@ -199,6 +199,56 @@ class ReceptionistContextServiceTests(unittest.TestCase):
         finally:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 
+    def test_diagnostic_turns_are_hidden_from_non_control_room_model_context(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_receptionist_context_diagnostics_test"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-21T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-21T12:00:00Z")
+            kernel.create_workspace("ws_test", "Test")
+            service = ReceptionistContextService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-21T12:00:00Z")
+
+            store.append_transcript(
+                "ws_test",
+                "assistant",
+                "control_room",
+                "Navigator found 2 known diagnostic category incidents. Run recent errors for details.",
+                speaker="Navigator",
+                session_id="sess_alpha",
+            )
+            store.append_transcript(
+                "ws_test",
+                "user",
+                "art_department",
+                "what is an important part of visual marketing?",
+                speaker="You",
+                session_id="sess_alpha",
+            )
+            store.append_transcript(
+                "ws_test",
+                "assistant",
+                "art_department",
+                "A clear visual hierarchy helps people understand the offer quickly.",
+                speaker="Creative Director",
+                session_id="sess_alpha",
+            )
+
+            kernel.enter_room("ws_test", "art_department")
+            art_context = service.build_model_context(workspace_id="ws_test", session_id="sess_alpha")
+            self.assertNotIn("known diagnostic category", art_context["conversation_history_text"])
+            self.assertNotIn("Run recent errors", art_context["session_summary_text"])
+            self.assertFalse(any("Navigator found" in item for item in art_context["recent_turns_text"]))
+            self.assertTrue(any("visual marketing" in item for item in art_context["recent_turns_text"]))
+
+            kernel.enter_room("ws_test", "control_room")
+            control_context = service.build_model_context(workspace_id="ws_test", session_id="sess_alpha")
+            self.assertIn("known diagnostic category", control_context["conversation_history_text"])
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

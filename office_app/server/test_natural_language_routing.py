@@ -142,6 +142,58 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         routed = self.pipeline.route_navigator_diagnostics_request("ws_test", "run tests")
         self.assertIsNone(routed)
 
+    def test_navigator_evidence_followup_routes_to_recent_errors(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "speaker": "Navigator",
+                        "text": (
+                            "I can see the failure text, but it does not match a known diagnostic category. "
+                            "Next step: Run recent errors and a status report so I can compare it with logs and incidents."
+                        ),
+                    }
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+
+        routed = pipeline.route_user_request("default", "do that", session_id="sess_1")
+
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "navigator.recent_errors")
+        self.assertEqual(routed["tool"], "office.navigator_recent_errors")
+
+    def test_navigator_report_followup_routes_to_status_report(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "speaker": "Navigator",
+                        "text": (
+                            "Navigator found 1 recent incident(s), 2 backend log line(s), "
+                            "and 0 frontend log line(s)."
+                        ),
+                    }
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+
+        routed = pipeline.route_user_request("default", "give me a detailed report", session_id="sess_1")
+
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "navigator.status_report")
+        self.assertEqual(routed["tool"], "office.navigator_status_report")
+
     def test_complete_active_work_number_routes_to_work_context_complete_index(self) -> None:
         routed = self.pipeline.route_user_request("default", "complete active work 2")
         self.assertEqual(routed["route_kind"], "tool")
@@ -3466,6 +3518,67 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["route_kind"], "tool")
         self.assertEqual(routed["tool"], "office.transcript_get")
         self.assertEqual(routed["arguments"]["room_id"], "art_department")
+
+    def test_room_log_provenance_followup_confirms_requested_room(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "speaker": "Archivist",
+                        "session_id": "sess_1",
+                        "text": (
+                            "Transcript entries for art_department in this session:\n"
+                            "[2026-07-07T13:09:07Z] art_department | You: what is visual marketing?\n"
+                            "[2026-07-07T13:09:16Z] art_department | Creative Director: Storytelling matters."
+                        ),
+                    }
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+
+        routed = pipeline.route_user_request("default", "was that the chat log for art department?", session_id="sess_1")
+
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "workspace.transcript.provenance")
+        self.assertEqual(routed["tool"], "office.capability_info")
+        self.assertIn("Yes.", routed["arguments"]["response_text"])
+        self.assertIn("Art Department (art_department)", routed["arguments"]["response_text"])
+        self.assertIn("session sess_1", routed["arguments"]["response_text"])
+        self.assertIn("2 entries", routed["arguments"]["response_text"])
+
+    def test_room_log_provenance_followup_rejects_wrong_room(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "speaker": "Archivist",
+                        "session_id": "sess_1",
+                        "text": (
+                            "Transcript entries for art_department in this session:\n"
+                            "[2026-07-07T13:09:07Z] art_department | You: what is visual marketing?"
+                        ),
+                    }
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+
+        routed = pipeline.route_user_request("default", "isn't that from the control room chat?", session_id="sess_1")
+
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "workspace.transcript.provenance")
+        self.assertIn("No.", routed["arguments"]["response_text"])
+        self.assertIn("Art Department (art_department)", routed["arguments"]["response_text"])
+        self.assertIn("not filtered to Control Room (control_room)", routed["arguments"]["response_text"])
 
 
 if __name__ == "__main__":
