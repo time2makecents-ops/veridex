@@ -92,8 +92,10 @@ Responsibilities:
 - prevent invalid operations  
 - maintain scope boundaries  
 - detect conflicts  
+- inspect system health, recent incidents, and redacted runtime logs
+- explain common failures and safe next steps
 
-Navigator oversees the system but does not execute operational tasks.
+Navigator oversees the system and can run read-only diagnostics. It does not perform department work, external sends, destructive changes, or arbitrary shell commands.
 
 ---
 

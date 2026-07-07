@@ -3,6 +3,9 @@
     "navigation": [
       "office.commands_list",
       "office.nancy_route",
+      "office.navigator_explain_error",
+      "office.navigator_recent_errors",
+      "office.navigator_status_report",
       "office.room_capabilities",
       "office.room_set",
       "office.state_get",

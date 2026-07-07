@@ -64,6 +64,13 @@ class RoomCapabilityRegistryTests(unittest.TestCase):
         self.assertTrue(self.registry.is_tool_allowed("my_office", "office.integration_confirm"))
         self.assertTrue(self.registry.is_tool_allowed("my_office", "office.integration_cancel"))
 
+    def test_navigator_diagnostics_allowed_from_general_rooms(self) -> None:
+        for room_id in ("lobby", "control_room", "my_office"):
+            with self.subTest(room_id=room_id):
+                self.assertTrue(self.registry.is_tool_allowed(room_id, "office.navigator_status_report"))
+                self.assertTrue(self.registry.is_tool_allowed(room_id, "office.navigator_recent_errors"))
+                self.assertTrue(self.registry.is_tool_allowed(room_id, "office.navigator_explain_error"))
+
     def test_policy_engine_enforces_room_capability_profile(self) -> None:
         engine = ToolPolicyEngine(room_capability_registry=self.registry)
         definition = VERIDEX_TOOL_DEFINITIONS["office.image_generate"]

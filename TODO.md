@@ -1,6 +1,6 @@
 # Veridex TODO
 
-Last updated: 2026-07-06
+Last updated: 2026-07-07
 
 ## Current Focus
 
@@ -10,7 +10,7 @@ Last updated: 2026-07-06
 - Make normal chat feel conversational while keeping explicit system commands deterministic.
 - Keep startup and smoke testing simple enough to diagnose without guessing.
 - Current branch: `feat/routing-followup-reliability`.
-- Current active slice: durable cross-room work context continuity. Active work is now persisted per workspace, surfaced in chat, injected into AI context, and carried through state, room, session, and workspace transitions.
+- Current active slice: Navigator read-only diagnostics. Navigator can now report Veridex health, recent incidents/log tails, safe config readiness, active room/persona state, and explain common error categories without arbitrary shell access.
 
 ## Immediate Priorities
 
@@ -20,6 +20,7 @@ Last updated: 2026-07-06
    - Ambiguous requests should ask a clarifying question.
    - Recent chat context should only be used for clear follow-ups, not broad room/capability questions.
    - Routing follow-up reliability is in place for ambiguous short choice follow-ups after unverified/no-info entity answers while anchored option-list follow-ups still rewrite safely.
+   - Ambiguous and reflective follow-ups after unverified/no-info entity answers now fail closed with clarification instead of falling through to normal model chat.
 
 2. Request orchestration cleanup
    - Search/tool execution flow is now extracted from `app.py` into a focused helper module.
@@ -43,6 +44,11 @@ Last updated: 2026-07-06
    - `VERIDEX_THREAD_HANDOFF.md` now tracks branch `feat/routing-followup-reliability`, the durable cross-room work context slice, and the latest validation baseline.
    - Treat older architecture docs as design intent unless recently updated.
    - Update handoff docs after major stabilization milestones.
+
+6. Navigator diagnostics
+   - `office.navigator_status_report`, `office.navigator_recent_errors`, and `office.navigator_explain_error` are read-only governed tools.
+   - Navigator diagnostics are available through the shared navigation capability group so they can be used from normal rooms.
+   - Future Navigator expansion should stay allowlisted: add safe test execution before any proactive or self-healing behavior.
 
 ## Suggested Future Steps
 

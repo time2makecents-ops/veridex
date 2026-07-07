@@ -41,6 +41,7 @@ from office_app.server.handlers.image_handlers import build_image_handlers
 from office_app.server.handlers.integration_handlers import build_integration_handlers
 from office_app.server.handlers.meeting_handlers import build_meeting_handlers
 from office_app.server.handlers.memo_handlers import build_memo_handlers
+from office_app.server.handlers.navigator_handlers import build_navigator_handlers
 from office_app.server.handlers.room_capability_handlers import build_room_capability_handlers
 from office_app.server.handlers.session_handlers import build_session_handlers
 from office_app.server.handlers.work_context_handlers import build_work_context_handlers
@@ -54,6 +55,7 @@ from office_app.server.workspace_file_service import PrivateFileService, Workspa
 from office_app.server.workspace_kernel import WorkspaceKernel, WorkspaceStore
 from office_app.server.integration_service import IntegrationService
 from office_app.server.image_generation_service import ImageGenerationService
+from office_app.server.navigator_diagnostics_service import NavigatorDiagnosticsService
 from office_app.server.room_capability_registry import RoomCapabilityRegistry
 
 SERVER_DIR = Path(__file__).resolve().parent
@@ -112,6 +114,16 @@ nancy_service = NancyService(
     utc_now_fn=utc_now,
 )
 debug_notes_store = DebugNotesStore(runtime_dir=RUNTIME_DIR, utc_now_fn=utc_now)
+navigator_diagnostics_service = NavigatorDiagnosticsService(
+    health_provider=lambda: pipeline.health_response(),
+    tool_names_provider=lambda: router.tool_names(),
+    state_provider=lambda workspace_id: kernel.get_state(workspace_id),
+    incident_log_path=INCIDENT_LOG_PATH,
+    backend_log_path=Path("C:/Office-App/backend.out.log"),
+    frontend_log_path=Path("C:/Office-App/frontend-https.out.log"),
+    env_getter=lambda name: os.getenv(name, ""),
+    utc_now=utc_now,
+)
 
 NANCY_GOVERNED_TOOL_NAMES = {
     "office.gmail_search",
@@ -2341,6 +2353,9 @@ def refresh_handler_bindings() -> None:
     global handle_office_room_set
     global handle_office_nancy_route
     global handle_room_capabilities
+    global handle_navigator_status_report
+    global handle_navigator_recent_errors
+    global handle_navigator_explain_error
     global handle_mailroom_dispatch
     global handle_memos_list
     global handle_memo_get
@@ -2425,6 +2440,7 @@ def refresh_handler_bindings() -> None:
         error_missing_required_field=error_missing_required_field,
         resolve_workspace_id=resolve_workspace_id,
         room_capability_registry=room_capability_registry,
+        navigator_diagnostics_service=navigator_diagnostics_service,
     )
 
     workspace_handlers = build_workspace_handlers(handler_deps)
@@ -2436,6 +2452,7 @@ def refresh_handler_bindings() -> None:
     ai_handlers = build_ai_handlers(handler_deps)
     image_handlers = build_image_handlers(handler_deps)
     room_capability_handlers = build_room_capability_handlers(handler_deps)
+    navigator_handlers = build_navigator_handlers(handler_deps)
     meeting_handlers = build_meeting_handlers(handler_deps)
     integration_handlers = build_integration_handlers(
         integration_service=integration_service,
@@ -2463,6 +2480,9 @@ def refresh_handler_bindings() -> None:
     handle_office_room_set = workspace_handlers["office.room_set"]
     handle_office_nancy_route = workspace_handlers["office.nancy_route"]
     handle_room_capabilities = room_capability_handlers["office.room_capabilities"]
+    handle_navigator_status_report = navigator_handlers["office.navigator_status_report"]
+    handle_navigator_recent_errors = navigator_handlers["office.navigator_recent_errors"]
+    handle_navigator_explain_error = navigator_handlers["office.navigator_explain_error"]
 
     handle_mailroom_dispatch = memo_handlers["mailroom.dispatch"]
     handle_memos_list = memo_handlers["office.memos_list"]
@@ -2552,6 +2572,9 @@ def refresh_handler_bindings() -> None:
             "office.room_set": handle_office_room_set,
             "office.nancy_route": handle_office_nancy_route,
             "office.room_capabilities": handle_room_capabilities,
+            "office.navigator_status_report": handle_navigator_status_report,
+            "office.navigator_recent_errors": handle_navigator_recent_errors,
+            "office.navigator_explain_error": handle_navigator_explain_error,
             "office.ai_generate": handle_ai_generate,
             "office.search_web": handle_search_web,
             "office.search_reviews": handle_search_reviews,
@@ -2643,6 +2666,9 @@ register_tools(
         "office.room_set": handle_office_room_set,
         "office.nancy_route": handle_office_nancy_route,
         "office.room_capabilities": handle_room_capabilities,
+        "office.navigator_status_report": handle_navigator_status_report,
+        "office.navigator_recent_errors": handle_navigator_recent_errors,
+        "office.navigator_explain_error": handle_navigator_explain_error,
         "office.ai_generate": handle_ai_generate,
         "office.search_web": handle_search_web,
     "office.search_reviews": handle_search_reviews,

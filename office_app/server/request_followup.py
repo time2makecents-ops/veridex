@@ -105,10 +105,25 @@ CHOICE_REFERENCE_RE = re.compile(
     r"\b(?:which\s+one|what\s+one|which\s+level|what\s+level|most\s+(?:powerful|effective)\s+one|strongest\s+one|best\s+one)\b",
     re.IGNORECASE,
 )
+UNSAFE_REFLECTIVE_FOLLOWUP_RE = re.compile(
+    r"^(?:how\s+did\s+you\s+come\s+to\s+that\s+conclusion|why\s+did\s+you\s+come\s+to\s+that\s+conclusion|"
+    r"what\s+makes\s+you\s+say\s+that|why\s+do\s+you\s+think\s+that|why\s+that\s+conclusion)\??$",
+    re.IGNORECASE,
+)
+UNSAFE_AMBIGUOUS_FOLLOWUP_RE = re.compile(
+    r"^(?:which\s+one|what\s+one|why\s+that\s+one|why\s+that|"
+    r"(?:what|how)\s+about\s+(?:it|that|this|those|them|one|ones))\??$",
+    re.IGNORECASE,
+)
 UNVERIFIED_CONTEXT_RE = re.compile(
     r"\b(?:do\s+not|don't|doesn't|does\s+not|cannot|can't)\s+have\s+(?:any\s+)?verified\s+information\b|"
     r"\bno\s+verified\s+(?:information|source|evidence)\b|"
     r"\bsearch\s+(?:the\s+web|the\s+internet|your\s+other\s+sessions)\b",
+    re.IGNORECASE,
+)
+NO_VERIFIED_ANSWER_RE = re.compile(
+    r"\b(?:do\s+not|don't|doesn't|does\s+not|cannot|can't)\s+have\s+(?:any\s+)?verified\s+information\b|"
+    r"\bno\s+verified\s+(?:information|source|evidence)\b",
     re.IGNORECASE,
 )
 
@@ -519,6 +534,26 @@ class RequestFollowupRouter:
 
         return f"Yes. You asked {matched_user}."
 
+    @classmethod
+    def _unsafe_unverified_followup_response(cls, recent_turns: List[Dict[str, Any]], request_text: str) -> Optional[str]:
+        normalized_request = re.sub(r"\s+", " ", str(request_text or "").strip())
+        if not normalized_request:
+            return None
+        recent_assistant = cls._recent_assistant_text(recent_turns)
+        if not recent_assistant or not NO_VERIFIED_ANSWER_RE.search(recent_assistant):
+            return None
+        if UNSAFE_REFLECTIVE_FOLLOWUP_RE.match(normalized_request):
+            return (
+                "There was no verified conclusion to explain. The prior answer said I do not have a verified answer "
+                "for that entity. Ask me to search the web if you want me to verify it."
+            )
+        if UNSAFE_AMBIGUOUS_FOLLOWUP_RE.match(normalized_request) or CHOICE_REFERENCE_RE.search(normalized_request):
+            return (
+                "I do not have a verified answer or grounded option list to resolve that follow-up. "
+                "Ask me to search the web, or tell me exactly which item you mean."
+            )
+        return None
+
     def route_contextual_followup(
         self,
         workspace_id: str,
@@ -622,6 +657,19 @@ class RequestFollowupRouter:
             }
         if self._is_session_workspace_request(text):
             return None
+        unsafe_response = self._unsafe_unverified_followup_response(recent_turns, request_text)
+        if unsafe_response is not None:
+            return {
+                "route_kind": "clarify",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                "capability": "clarification.unsafe_followup",
+                "tool": "office.capability_info",
+                "arguments": {
+                    "response_text": unsafe_response,
+                },
+                "reason": "Stopped an ambiguous follow-up after an unverified prior answer.",
+            }
         grounded_context = self.load_grounded_search_context(workspace_id, session_id)
         grounded_context_response = grounded_search_followup_response(request_text, grounded_context or {})
         if grounded_context_response is not None:

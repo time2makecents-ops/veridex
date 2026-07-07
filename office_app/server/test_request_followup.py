@@ -303,7 +303,11 @@ class RequestFollowupRouterTests(unittest.TestCase):
                 {"role": "assistant", "text": "I do not have verified information about blairally."},
             ],
         )
-        self.assertIsNone(routed)
+        self.assertIsNotNone(routed)
+        assert routed is not None
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "clarification.unsafe_followup")
+        self.assertIn("do not have a verified answer", routed["arguments"]["response_text"])
 
     def test_choice_followup_after_numbered_list_still_routes_to_model(self) -> None:
         self.grounded_context = None

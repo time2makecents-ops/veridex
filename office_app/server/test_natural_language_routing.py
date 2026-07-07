@@ -107,6 +107,30 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["tool"], "office.work_context_complete")
         self.assertTrue(routed["arguments"]["all_active"])
 
+    def test_navigator_status_report_routes_to_diagnostics_tool(self) -> None:
+        routed = self.pipeline.route_user_request("default", "Navigator, run a Veridex status report")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "navigator.status_report")
+        self.assertEqual(routed["tool"], "office.navigator_status_report")
+
+    def test_navigator_recent_errors_routes_to_recent_errors_tool(self) -> None:
+        routed = self.pipeline.route_user_request("default", "Navigator, show recent errors")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "navigator.recent_errors")
+        self.assertEqual(routed["tool"], "office.navigator_recent_errors")
+
+    def test_navigator_explain_error_routes_to_error_explanation_tool(self) -> None:
+        routed = self.pipeline.route_user_request("default", "Navigator, why did that fail?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "navigator.explain_error")
+        self.assertEqual(routed["tool"], "office.navigator_explain_error")
+
+    def test_navigator_what_is_wrong_routes_to_status_report(self) -> None:
+        routed = self.pipeline.route_user_request("default", "Navigator, what is wrong?")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "navigator.status_report")
+        self.assertEqual(routed["tool"], "office.navigator_status_report")
+
     def test_complete_active_work_number_routes_to_work_context_complete_index(self) -> None:
         routed = self.pipeline.route_user_request("default", "complete active work 2")
         self.assertEqual(routed["route_kind"], "tool")
@@ -1096,7 +1120,7 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         )
         self.assertIsNone(routed)
 
-    def test_ambiguous_choice_followup_with_unverified_entity_stays_normal_chat(self) -> None:
+    def test_ambiguous_choice_followup_with_unverified_entity_fails_closed(self) -> None:
         pipeline = RequestPipeline(
             kernel=DummyKernel(
                 transcript_rows=[
@@ -1110,9 +1134,45 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
             app_version="1.3.0",
         )
         routed = pipeline.route_user_request("default", "which one?", session_id="sess_1")
-        self.assertEqual(routed["route_kind"], "model")
-        self.assertEqual(routed["reason"], "Conversation-first intent matched before broad tool routing.")
-        self.assertNotIn("blairally", routed["arguments"]["user_prompt"].lower())
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "clarification.unsafe_followup")
+        self.assertIn("do not have a verified answer", routed["arguments"]["response_text"])
+
+    def test_ambiguous_choice_followup_after_unverified_entity_asks_for_clarification(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                transcript_rows=[
+                    {"role": "user", "text": "tell me about blairally"},
+                    {"role": "assistant", "text": "I do not have verified information about blairally."},
+                ]
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "why that one?", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "clarification.unsafe_followup")
+        self.assertIn("do not have a verified answer", routed["arguments"]["response_text"])
+
+    def test_reflective_followup_after_unverified_entity_does_not_invent_reasoning(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                transcript_rows=[
+                    {"role": "user", "text": "tell me about blairally"},
+                    {"role": "assistant", "text": "I do not have verified information about blairally."},
+                ]
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+        routed = pipeline.route_user_request("default", "how did you come to that conclusion?", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "clarify")
+        self.assertEqual(routed["capability"], "clarification.unsafe_followup")
+        self.assertIn("There was no verified conclusion", routed["arguments"]["response_text"])
 
     def test_bar_repeat_customer_advice_prompt_is_rewritten(self) -> None:
         routed = self.pipeline.route_user_request("default", "what are the main ways bars increase repeat customers?")

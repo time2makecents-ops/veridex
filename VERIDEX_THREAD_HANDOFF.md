@@ -18,16 +18,16 @@ Use this when resuming on another computer.
 - PR #1 has been merged into `dev` at `f6bd164`.
 - Branch `feat/routing-followup-reliability` starts from the merged PR #1 baseline.
 - The merged stabilization baseline contains chat cleanup, request-tool extraction, runtime Git hygiene, room capability UI, governed room workflows, memo hardening, `/call` session-header propagation, and Conference Room internal meeting-state persistence through `MeetingStateStore`.
-- The branch now includes the routing follow-up reliability work, the Nancy email-entry slice, and the durable cross-room work context continuity slice.
-- The current active slice adds workspace-persisted active work context with backend tools, AI-context injection, transition hydration, and a chat active-work strip.
-- The routing follow-up reliability work keeps `/request` follow-up routing fail-closed for ambiguous short choice follow-ups after unverified/no-info entity answers, while preserving anchored list, grounded search, session-search, and explicit search-confirmation follow-ups.
+- The branch now includes the routing follow-up reliability work, the Nancy email-entry slice, the durable cross-room work context continuity slice, and Navigator read-only diagnostics.
+- The current active slice adds `office.navigator_status_report`, `office.navigator_recent_errors`, and `office.navigator_explain_error` as governed read-only diagnostic tools.
+- The routing follow-up reliability work keeps `/request` follow-up routing fail-closed for ambiguous and reflective follow-ups after unverified/no-info entity answers, while preserving anchored list, grounded search, session-search, and explicit search-confirmation follow-ups.
 - The onboarding page now lets users continue to PIN setup without a face photo when camera permission, preview, or capture fails. Backend and frontend proxy onboarding were verified with missing `face_photo_data`.
 - `office_app/backend/incident_log.csv` is intentionally removed from the Git index and ignored, but the local runtime file should remain on disk.
 
 Latest validation baseline for the durable work-context continuity slice:
 
 - `git diff --check` passed
-- `python -m unittest discover -s office_app/server -p "test_*.py"` passed with 480 tests
+- `python -m unittest discover -s office_app/server -p "test_*.py"` passed with 492 tests
 - frontend targeted `vitest` helper pass completed with 30 tests
 - `npm.cmd run build` passed
 - `C:\Office-App\office_app\smoke_test.ps1` passed
@@ -37,6 +37,7 @@ Latest validation baseline for the durable work-context continuity slice:
 - live connected-account Gmail confirmation audit proved a pending Gmail send can be created, surfaced through active work, and dismissed without sending the email
 - live connected-account Calendar confirmation audit proved a pending Calendar create can be created, surfaced through active work, survive a room switch, and be dismissed without creating the event
 - `C:\Office-App\office_app\work_context_smoke.ps1` covers active work save, state hydration, optional managed-restart persistence, room switch hydration, session activation hydration, workspace activation hydration, completion, and active-list clearing
+- Navigator diagnostics can now inspect health, tool registration, active room/persona state, safe config readiness, recent incident rows, and redacted backend/frontend log tails without arbitrary command execution.
 
 Re-run full validation after any additional backend or frontend continuity changes.
 

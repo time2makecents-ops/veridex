@@ -1594,6 +1594,15 @@ class RequestPipeline:
                 **session_route,
                 }
 
+        navigator_diagnostics_route = self.route_navigator_diagnostics_request(workspace_id, request_text)
+        if navigator_diagnostics_route is not None:
+            return {
+                "route_kind": "tool",
+                "workspace_id": workspace_id,
+                "request": request_text,
+                **navigator_diagnostics_route,
+            }
+
         status_route = self.route_room_status_request(workspace_id, request_text)
         if status_route is not None:
             return {
@@ -2050,6 +2059,47 @@ class RequestPipeline:
             },
             "reason": f"Answered a {capability} capability question without running a tool.",
         }
+
+    def route_navigator_diagnostics_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", str(request_text or "").strip())
+        lowered = text.lower().strip(" .?!")
+        if not lowered:
+            return None
+        mentions_navigator = bool(re.search(r"\bnavigator\b", lowered))
+        status_match = bool(
+            re.search(
+                r"\b(?:veridex\s+status\s+report|status\s+report|system\s+health|check\s+system\s+health|diagnostic\s+report|health\s+report|what\s+is\s+wrong|what's\s+wrong)\b",
+                lowered,
+            )
+        )
+        recent_errors_match = bool(
+            re.search(r"\b(?:recent\s+errors|recent\s+incidents|show\s+errors|show\s+logs|error\s+log|incident\s+log)\b", lowered)
+        )
+        explain_error_match = bool(
+            re.search(r"\b(?:why\s+did\s+that\s+fail|why\s+did\s+it\s+fail|what\s+went\s+wrong|explain\s+(?:the\s+)?error|diagnose\s+(?:that|this))\b", lowered)
+        )
+        if recent_errors_match and (mentions_navigator or "error" in lowered or "incident" in lowered or "log" in lowered):
+            return {
+                "capability": "navigator.recent_errors",
+                "tool": "office.navigator_recent_errors",
+                "arguments": {},
+                "reason": "Matched a Navigator recent-error diagnostics request.",
+            }
+        if explain_error_match and (mentions_navigator or "fail" in lowered or "error" in lowered or "diagnose" in lowered):
+            return {
+                "capability": "navigator.explain_error",
+                "tool": "office.navigator_explain_error",
+                "arguments": {"error_text": text},
+                "reason": "Matched a Navigator error-explanation request.",
+            }
+        if status_match and (mentions_navigator or "veridex" in lowered or "system" in lowered or "health" in lowered):
+            return {
+                "capability": "navigator.status_report",
+                "tool": "office.navigator_status_report",
+                "arguments": {},
+                "reason": "Matched a Navigator status diagnostics request.",
+            }
+        return None
 
     def route_room_capability_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
         text = normalize_room_text(request_text)
