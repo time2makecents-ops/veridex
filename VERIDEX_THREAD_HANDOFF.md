@@ -24,7 +24,7 @@ Use this when resuming on another computer.
 - The onboarding page now lets users continue to PIN setup without a face photo when camera permission, preview, or capture fails. Backend and frontend proxy onboarding were verified with missing `face_photo_data`.
 - `office_app/backend/incident_log.csv` is intentionally removed from the Git index and ignored, but the local runtime file should remain on disk.
 
-Latest validation baseline for the durable work-context continuity slice:
+Latest validation baseline for the current routing and Navigator diagnostics slice:
 
 - `git diff --check` passed
 - `python -m unittest discover -s office_app/server -p "test_*.py"` passed with 492 tests
@@ -38,6 +38,7 @@ Latest validation baseline for the durable work-context continuity slice:
 - live connected-account Calendar confirmation audit proved a pending Calendar create can be created, surfaced through active work, survive a room switch, and be dismissed without creating the event
 - `C:\Office-App\office_app\work_context_smoke.ps1` covers active work save, state hydration, optional managed-restart persistence, room switch hydration, session activation hydration, workspace activation hydration, completion, and active-list clearing
 - Navigator diagnostics can now inspect health, tool registration, active room/persona state, safe config readiness, recent incident rows, and redacted backend/frontend log tails without arbitrary command execution.
+- `office.navigator_status_report`, `office.navigator_recent_errors`, and `office.navigator_explain_error` are the current read-only Navigator diagnostics tools.
 
 Re-run full validation after any additional backend or frontend continuity changes.
 
