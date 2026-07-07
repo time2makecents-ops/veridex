@@ -243,26 +243,57 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
     def handle_office_transcript_get(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]
         session_id = str(args.get("session_id") or "").strip() or None
+        room_id = str(args.get("room_id") or "").strip()
+        speaker_filter = str(args.get("speaker") or "").strip().casefold()
+        role_filter = str(args.get("role") or "").strip().casefold()
+        include_system = bool(args.get("include_system", True))
         limit_value = args.get("limit")
         try:
             limit = int(limit_value) if limit_value is not None else 100
         except (TypeError, ValueError):
             limit = 100
         rows = deps.store.load_transcript(workspace_id, limit=max(1, min(limit, 500)), session_id=session_id)
-        lines = ["Current session thread:"]
+        filtered_rows = []
         for row in rows:
+            row_room = str(row.get("room") or "").strip()
+            row_role = str(row.get("role") or "").strip()
+            row_speaker = str(row.get("speaker") or "").strip()
+            if room_id and row_room != room_id:
+                continue
+            if speaker_filter and row_speaker.casefold() != speaker_filter:
+                continue
+            if role_filter and row_role.casefold() != role_filter:
+                continue
+            if not include_system and row_role.casefold() == "system":
+                continue
+            filtered_rows.append(row)
+        if room_id:
+            header = f"Transcript entries for {room_id} in this session:"
+            empty_text = f"No transcript entries found for {room_id} in this session."
+        else:
+            header = "Current session thread:"
+            empty_text = "Current session thread is empty."
+        lines = [header]
+        for row in filtered_rows:
             speaker = str(row.get("speaker") or row.get("role") or "Unknown").strip() or "Unknown"
             text = re.sub(r"\s+", " ", str(row.get("text") or "").strip())
             if not text:
                 continue
-            lines.append(f"{speaker}: {text}")
-        response_text = "\n".join(lines) if len(lines) > 1 else "Current session thread is empty."
+            row_room = str(row.get("room") or "").strip() or "unknown_room"
+            ts = str(row.get("ts") or "").strip()
+            prefix = f"[{ts}] {row_room} | {speaker}" if ts else f"{row_room} | {speaker}"
+            lines.append(f"{prefix}: {text}")
+        response_text = "\n".join(lines) if len(lines) > 1 else empty_text
         return {
             "structuredContent": {
                 "workspace_id": workspace_id,
                 "session_id": session_id,
-                "count": len(rows),
-                "entries": rows,
+                "room_id": room_id,
+                "speaker": str(args.get("speaker") or "").strip(),
+                "role": str(args.get("role") or "").strip(),
+                "include_system": include_system,
+                "count": len(filtered_rows),
+                "entries": filtered_rows,
                 "response_text": response_text,
             },
             "content": [{"type": "text", "text": response_text}],

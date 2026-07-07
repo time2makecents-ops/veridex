@@ -3452,6 +3452,21 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "workspace.transcript.get")
         self.assertEqual(routed["tool"], "office.transcript_get")
 
+    def test_art_department_chat_log_routes_to_room_filtered_transcript(self) -> None:
+        routed = self.pipeline.route_user_request("default", "pull up my latest chat log from the art department", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "workspace.transcript.get")
+        self.assertEqual(routed["tool"], "office.transcript_get")
+        self.assertEqual(routed["arguments"]["room_id"], "art_department")
+        self.assertEqual(routed["arguments"]["session_id"], "sess_1")
+        self.assertFalse(routed["arguments"]["include_system"])
+
+    def test_display_art_department_chat_log_routes_to_transcript_not_session_search(self) -> None:
+        routed = self.pipeline.route_user_request("default", "display chat log from art department", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["tool"], "office.transcript_get")
+        self.assertEqual(routed["arguments"]["room_id"], "art_department")
+
 
 if __name__ == "__main__":
     unittest.main()

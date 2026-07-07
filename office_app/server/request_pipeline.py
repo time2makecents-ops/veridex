@@ -1555,7 +1555,7 @@ class RequestPipeline:
                 **file_list_route,
             }
 
-        session_thread_route = self.route_session_thread_request(workspace_id, request_text)
+        session_thread_route = self.route_session_thread_request(workspace_id, request_text, session_id=session_id)
         if session_thread_route is not None:
             return {
                 "route_kind": "tool",
@@ -4422,10 +4422,62 @@ class RequestPipeline:
             return False
         return self.SESSION_THREAD_LIST_RE.search(text) is not None
 
-    def route_session_thread_request(self, workspace_id: str, request_text: str) -> Optional[Dict[str, Any]]:
+    def _room_log_request_room_id(self, request_text: str) -> str:
+        text = normalize_room_text(request_text)
+        if not text:
+            return ""
+        if not re.search(r"\b(?:chat log|chat logs|room log|room logs|transcript|thread)\b", text):
+            return ""
+        if re.search(r"\bthread\s+with\b", text):
+            return ""
+        candidate_texts: list[str] = []
+        after_match = re.search(
+            r"\b(?:from|in|of|for)\s+(?:the\s+)?(?P<target>[a-z0-9 ]+?)(?:\s+(?:room|department|office))?\s*$",
+            text,
+        )
+        if after_match:
+            candidate_texts.append(str(after_match.group("target") or "").strip())
+        before_match = re.search(
+            r"\b(?P<target>[a-z0-9 ]+?)\s+(?:chat log|chat logs|room log|room logs|transcript|thread)\b",
+            text,
+        )
+        if before_match:
+            candidate_texts.append(str(before_match.group("target") or "").strip())
+        for candidate in candidate_texts:
+            candidate = re.sub(r"^(?:latest|current|the|my|this|session)\s+", "", candidate).strip()
+            candidate = re.sub(r"\b(?:latest|current|this|session|chat)\b", " ", candidate).strip()
+            candidate = re.sub(r"\s+", " ", candidate)
+            if not candidate:
+                continue
+            for room in rooms_payload():
+                aliases = sorted(room_reference_aliases(room), key=len, reverse=True)
+                if candidate in aliases:
+                    return str(room.get("id") or "").strip()
+        return ""
+
+    def route_session_thread_request(
+        self,
+        workspace_id: str,
+        request_text: str,
+        *,
+        session_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         text = re.sub(r"\s+", " ", str(request_text or "").strip().lower())
         if not text:
             return None
+        room_log_id = self._room_log_request_room_id(request_text)
+        if room_log_id:
+            return {
+                "capability": "workspace.transcript.get",
+                "tool": "office.transcript_get",
+                "arguments": {
+                    "room_id": room_log_id,
+                    "limit": 120,
+                    "include_system": False,
+                    "session_id": str(session_id or "").strip(),
+                },
+                "reason": "Matched a request to show a room-filtered session transcript.",
+            }
         named_thread_query = self._session_named_thread_query(request_text)
         if named_thread_query:
             return {

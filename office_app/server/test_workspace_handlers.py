@@ -96,11 +96,61 @@ class FakeKernel:
 
 
 class FakeStore:
+    def __init__(self) -> None:
+        self.transcript_rows = [
+            {
+                "ts": "2026-07-07T13:00:00Z",
+                "role": "user",
+                "room": "control_room",
+                "speaker": "You",
+                "text": "display chat log from art department",
+                "session_id": "sess_1",
+            },
+            {
+                "ts": "2026-07-07T13:00:01Z",
+                "role": "assistant",
+                "room": "control_room",
+                "speaker": "Navigator",
+                "text": "A diagnostic report from Control Room.",
+                "session_id": "sess_1",
+            },
+            {
+                "ts": "2026-07-07T13:09:07Z",
+                "role": "user",
+                "room": "art_department",
+                "speaker": "You",
+                "text": "what is an important part of visual marketing?",
+                "session_id": "sess_1",
+            },
+            {
+                "ts": "2026-07-07T13:09:16Z",
+                "role": "assistant",
+                "room": "art_department",
+                "speaker": "Creative Director",
+                "text": "Storytelling through visuals is important.",
+                "session_id": "sess_1",
+            },
+            {
+                "ts": "2026-07-07T13:09:20Z",
+                "role": "system",
+                "room": "art_department",
+                "speaker": "System",
+                "text": "Now in Art Department. Persona: Creative Director.",
+                "session_id": "sess_1",
+            },
+        ]
+
     def state_path(self, workspace_id: str) -> str:
         return f"/tmp/{workspace_id}/state.json"
 
     def save_state(self, workspace_id: str, state: Dict[str, Any]) -> None:
         self.saved_state = dict(state)
+
+    def load_transcript(self, workspace_id: str, limit: int = 100, session_id: str | None = None) -> List[Dict[str, Any]]:
+        rows = [dict(row) for row in self.transcript_rows]
+        if session_id:
+            rows = [row for row in rows if row.get("session_id") == session_id]
+        return rows[-limit:]
 
 
 class FakeUserService:
@@ -294,6 +344,42 @@ class WorkspaceHandlerTests(unittest.TestCase):
         self.assertEqual(structured["pending_workspace_switch"]["workspace_id"], "ws_switch")
         self.assertEqual(structured["pending_room_navigation"]["room_id"], "marketing_room")
         self.assertEqual(structured["pending_break_room_joke"]["setup"], "Why did the launch plan cross the room?")
+
+    def test_transcript_get_filters_to_requested_room(self) -> None:
+        handlers = self._handlers(FakeWorkContextService())
+
+        response = handlers["office.transcript_get"](
+            {
+                "workspace_id": "ws_1",
+                "session_id": "sess_1",
+                "room_id": "art_department",
+                "include_system": False,
+            }
+        )
+
+        structured = response["structuredContent"]
+        self.assertEqual(structured["room_id"], "art_department")
+        self.assertEqual(structured["count"], 2)
+        self.assertEqual([entry["room"] for entry in structured["entries"]], ["art_department", "art_department"])
+        self.assertNotIn("Control Room", structured["response_text"])
+        self.assertIn("Creative Director: Storytelling through visuals is important.", structured["response_text"])
+
+    def test_transcript_get_reports_no_matching_room_entries(self) -> None:
+        handlers = self._handlers(FakeWorkContextService())
+
+        response = handlers["office.transcript_get"](
+            {
+                "workspace_id": "ws_1",
+                "session_id": "sess_1",
+                "room_id": "finance_department",
+            }
+        )
+
+        structured = response["structuredContent"]
+        self.assertEqual(structured["room_id"], "finance_department")
+        self.assertEqual(structured["count"], 0)
+        self.assertEqual(structured["entries"], [])
+        self.assertIn("No transcript entries found for finance_department in this session.", structured["response_text"])
 
 
 if __name__ == "__main__":
