@@ -359,10 +359,41 @@ class WorkspaceHandlerTests(unittest.TestCase):
 
         structured = response["structuredContent"]
         self.assertEqual(structured["room_id"], "art_department")
+        self.assertEqual(
+            structured["filters"],
+            {
+                "room_id": "art_department",
+                "speaker": "",
+                "role": "",
+                "include_system": False,
+                "since": "",
+                "until": "",
+            },
+        )
         self.assertEqual(structured["count"], 2)
         self.assertEqual([entry["room"] for entry in structured["entries"]], ["art_department", "art_department"])
         self.assertNotIn("Control Room", structured["response_text"])
         self.assertIn("Creative Director: Storytelling through visuals is important.", structured["response_text"])
+
+    def test_transcript_get_filters_to_timestamp_range(self) -> None:
+        handlers = self._handlers(FakeWorkContextService())
+
+        response = handlers["office.transcript_get"](
+            {
+                "workspace_id": "ws_1",
+                "session_id": "sess_1",
+                "since": "2026-07-07T13:09:00Z",
+                "until": "2026-07-07T13:09:17Z",
+                "include_system": False,
+            }
+        )
+
+        structured = response["structuredContent"]
+        self.assertEqual(structured["filters"]["since"], "2026-07-07T13:09:00Z")
+        self.assertEqual(structured["filters"]["until"], "2026-07-07T13:09:17Z")
+        self.assertEqual(structured["count"], 2)
+        self.assertEqual([entry["room"] for entry in structured["entries"]], ["art_department", "art_department"])
+        self.assertNotIn("A diagnostic report from Control Room.", structured["response_text"])
 
     def test_transcript_get_reports_no_matching_room_entries(self) -> None:
         handlers = self._handlers(FakeWorkContextService())

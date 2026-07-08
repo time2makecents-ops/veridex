@@ -3608,6 +3608,33 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["tool"], "office.transcript_get")
         self.assertEqual(routed["arguments"]["room_id"], "art_department")
 
+    def test_navigator_prefixed_room_chat_log_routes_to_transcript(self) -> None:
+        routed = self.pipeline.route_user_request("default", "Navigator, pull up my latest chat log from the art department", session_id="sess_1")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "workspace.transcript.get")
+        self.assertEqual(routed["tool"], "office.transcript_get")
+        self.assertEqual(routed["arguments"]["room_id"], "art_department")
+        self.assertEqual(routed["arguments"]["session_id"], "sess_1")
+        self.assertFalse(routed["arguments"]["include_system"])
+
+    def test_last_two_days_chat_logs_route_to_timestamped_transcript(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(active_room="records_archive", active_persona="Archivist"),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-07-08T08:41:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+
+        routed = pipeline.route_user_request("default", "can you give me dated chat logs for the last 2 days", session_id="sess_1")
+
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "workspace.transcript.get")
+        self.assertEqual(routed["tool"], "office.transcript_get")
+        self.assertEqual(routed["arguments"]["session_id"], "sess_1")
+        self.assertEqual(routed["arguments"]["since"], "2026-07-06T08:41:00Z")
+        self.assertEqual(routed["arguments"]["include_system"], True)
+
     def test_room_log_provenance_followup_confirms_requested_room(self) -> None:
         pipeline = RequestPipeline(
             kernel=DummyKernel(

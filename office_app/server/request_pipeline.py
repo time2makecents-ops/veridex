@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import difflib
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -4628,6 +4629,35 @@ class RequestPipeline:
         text = re.sub(r"\s+", " ", str(request_text or "").strip().lower())
         if not text:
             return None
+        dated_match = re.search(r"\blast\s+(?P<count>\d{1,3})\s+days?\b", text)
+        if dated_match and re.search(r"\b(?:chat logs?|room logs?|transcripts?|threads?)\b", text):
+            try:
+                day_count = max(1, min(int(dated_match.group("count")), 90))
+            except (TypeError, ValueError):
+                day_count = 2
+            now_text = str(self.utc_now() or "").strip()
+            try:
+                now = datetime.fromisoformat(now_text.replace("Z", "+00:00"))
+            except ValueError:
+                now = datetime.now(timezone.utc)
+            since = (
+                (now - timedelta(days=day_count))
+                .astimezone(timezone.utc)
+                .replace(microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+            return {
+                "capability": "workspace.transcript.get",
+                "tool": "office.transcript_get",
+                "arguments": {
+                    "session_id": str(session_id or "").strip(),
+                    "since": since,
+                    "limit": 500,
+                    "include_system": True,
+                },
+                "reason": "Matched a dated request to show persisted session transcript entries.",
+            }
         room_log_id = self._room_log_request_room_id(request_text)
         if room_log_id:
             return {

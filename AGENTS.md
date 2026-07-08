@@ -47,6 +47,12 @@ Use the smallest model that can safely handle the current slice.
 - If a stronger model is recommended, pause and switch before continuing the
   slice. During unattended automation, keep the current model and do not stop
   for a manual switch.
+- When implementation is complete and the next step is validation, stop before
+  running backend tests, frontend tests/builds, smoke tests, or live browser
+  automation. Prompt the user to switch to `gpt-5.4-mini`, then continue with
+  validation after the user resumes. Lightweight non-test checks such as
+  `git status`, `git diff`, and targeted file inspection may still run before
+  the model switch.
 - Before long runs, check `/status` and `/usage`, and compact the thread when
   the context starts to grow.
 - Prefer small reviewable slices and summarize tool output instead of dumping

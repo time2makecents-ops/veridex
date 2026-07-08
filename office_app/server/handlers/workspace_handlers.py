@@ -246,6 +246,8 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
         room_id = str(args.get("room_id") or "").strip()
         speaker_filter = str(args.get("speaker") or "").strip().casefold()
         role_filter = str(args.get("role") or "").strip().casefold()
+        since = str(args.get("since") or "").strip()
+        until = str(args.get("until") or "").strip()
         include_system = bool(args.get("include_system", True))
         limit_value = args.get("limit")
         try:
@@ -265,6 +267,11 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             if role_filter and row_role.casefold() != role_filter:
                 continue
             if not include_system and row_role.casefold() == "system":
+                continue
+            row_ts = str(row.get("ts") or "").strip()
+            if since and (not row_ts or row_ts < since):
+                continue
+            if until and (not row_ts or row_ts > until):
                 continue
             filtered_rows.append(row)
         if room_id:
@@ -292,6 +299,16 @@ def build_workspace_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                 "speaker": str(args.get("speaker") or "").strip(),
                 "role": str(args.get("role") or "").strip(),
                 "include_system": include_system,
+                "since": since,
+                "until": until,
+                "filters": {
+                    "room_id": room_id,
+                    "speaker": str(args.get("speaker") or "").strip(),
+                    "role": str(args.get("role") or "").strip(),
+                    "include_system": include_system,
+                    "since": since,
+                    "until": until,
+                },
                 "count": len(filtered_rows),
                 "entries": filtered_rows,
                 "response_text": response_text,
