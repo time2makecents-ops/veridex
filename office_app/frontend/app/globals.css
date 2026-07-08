@@ -125,6 +125,13 @@ button {
   gap: 10px;
 }
 
+.debug-notes-drag-handle {
+  min-width: 0;
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
 .debug-notes-title {
   font-size: 0.9rem;
   font-weight: 800;
@@ -536,8 +543,10 @@ button {
 .navigator-panel-close {
   min-height: 34px;
   padding: 6px 10px;
-  border-color: rgba(226, 232, 240, 0.28);
-  color: #f8fafc;
+  border-color: rgba(248, 250, 252, 0.72);
+  background: rgba(248, 250, 252, 0.14);
+  color: #ffffff;
+  font-weight: 800;
 }
 
 .navigator-panel-log {

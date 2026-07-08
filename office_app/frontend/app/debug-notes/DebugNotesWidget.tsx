@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { usePathname } from "next/navigation";
 
 import { getStoredSessionId } from "@/lib/session";
@@ -18,6 +18,16 @@ type PageContext = {
   workspaceId: string;
   activeRoom: string;
   activePersona: string;
+};
+
+type PanelOffset = {
+  x: number;
+  y: number;
+};
+
+type DragState = {
+  lastClientX: number;
+  lastClientY: number;
 };
 
 function currentPageContext(): PageContext {
@@ -51,8 +61,11 @@ export function DebugNotesWidget() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
+  const [panelOffset, setPanelOffset] = useState<PanelOffset>({ x: 0, y: 0 });
+  const panelRef = useRef<HTMLElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pendingSelectionRef = useRef<number | null>(null);
+  const dragStateRef = useRef<DragState | null>(null);
 
   async function loadNote() {
     setLoading(true);
@@ -146,6 +159,59 @@ export function DebugNotesWidget() {
     });
   }, [open, text]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    function handlePointerMove(event: globalThis.PointerEvent) {
+      const dragState = dragStateRef.current;
+      const panel = panelRef.current;
+      if (!dragState || !panel) {
+        return;
+      }
+      const rect = panel.getBoundingClientRect();
+      const deltaX = event.clientX - dragState.lastClientX;
+      const deltaY = event.clientY - dragState.lastClientY;
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const nextLeft = Math.min(Math.max(rect.left + deltaX, 8), Math.max(8, viewportWidth - rect.width - 8));
+      const nextTop = Math.min(Math.max(rect.top + deltaY, 8), Math.max(8, viewportHeight - rect.height - 8));
+      setPanelOffset((current) => ({
+        x: current.x + (nextLeft - rect.left),
+        y: current.y + (nextTop - rect.top),
+      }));
+      dragStateRef.current = {
+        lastClientX: event.clientX,
+        lastClientY: event.clientY,
+      };
+    }
+
+    function handlePointerUp() {
+      dragStateRef.current = null;
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+    };
+  }, []);
+
+  function startPanelDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+    dragStateRef.current = {
+      lastClientX: event.clientX,
+      lastClientY: event.clientY,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
   return (
     <div className={`debug-notes ${open ? "debug-notes-open" : ""}`}>
       <button
@@ -158,9 +224,19 @@ export function DebugNotesWidget() {
         Notes
       </button>
       {open ? (
-        <aside id="debug-notes-panel" className="debug-notes-panel" aria-label="Debug notes">
+        <aside
+          id="debug-notes-panel"
+          ref={panelRef}
+          className="debug-notes-panel"
+          aria-label="Debug notes"
+          style={{ transform: `translate(${panelOffset.x}px, ${panelOffset.y}px)` }}
+        >
           <div className="debug-notes-header">
-            <div>
+            <div
+              className="debug-notes-drag-handle"
+              title="Drag notes"
+              onPointerDown={startPanelDrag}
+            >
               <div className="debug-notes-title">Debug notes</div>
               <div className="debug-notes-path">{scopeLabel}</div>
             </div>

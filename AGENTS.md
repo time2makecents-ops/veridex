@@ -58,6 +58,14 @@ Use the smallest model that can safely handle the current slice.
 - Prefer small reviewable slices and summarize tool output instead of dumping
   it.
 
+## Operator Shorthand
+
+When the user says `analyze v session`, interpret it as a request to inspect
+the latest Veridex app/runtime session, not Codex or Git history. Check the
+newest runtime notes, workspace/session transcripts, incident/error logs, and
+current workspace/session state; then summarize observed user-facing errors,
+open notes, and likely next implementation steps.
+
 ## Coding Style & Naming Conventions
 
 Use four spaces, type annotations, and `snake_case` names in Python. Keep
