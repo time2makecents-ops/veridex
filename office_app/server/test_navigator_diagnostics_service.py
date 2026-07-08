@@ -80,6 +80,44 @@ class NavigatorDiagnosticsServiceTests(unittest.TestCase):
         self.assertIn("room capability", result["summary"].lower())
         self.assertIn("move to the correct room", result["next_step"].lower())
 
+    def test_explain_runtime_error_recommends_standard_smoke(self) -> None:
+        service = NavigatorDiagnosticsService(
+            health_provider=lambda: {"ok": True},
+            tool_names_provider=lambda: [],
+            state_provider=lambda workspace_id: {},
+            incident_log_path=Path("missing.csv"),
+            backend_log_path=Path("missing-backend.log"),
+            frontend_log_path=Path("missing-frontend.log"),
+            env_getter=lambda name: "",
+            utc_now=lambda: "2026-07-07T10:02:00Z",
+        )
+
+        result = service.explain_error("ws1", error_text="NetworkError: connection refused")
+
+        self.assertEqual(result["category"], "runtime_connection")
+        self.assertEqual(result["recommendations"][0]["action_id"], "run_standard_smoke")
+        self.assertEqual(result["recommendations"][0]["kind"], "run_check")
+        self.assertEqual(result["recommendations"][0]["check_name"], "standard_smoke")
+        self.assertTrue(result["recommendations"][0]["requires_confirmation"])
+
+    def test_explain_unknown_error_recommends_evidence_tools(self) -> None:
+        service = NavigatorDiagnosticsService(
+            health_provider=lambda: {"ok": True},
+            tool_names_provider=lambda: [],
+            state_provider=lambda workspace_id: {},
+            incident_log_path=Path("missing.csv"),
+            backend_log_path=Path("missing-backend.log"),
+            frontend_log_path=Path("missing-frontend.log"),
+            env_getter=lambda name: "",
+            utc_now=lambda: "2026-07-07T10:02:00Z",
+        )
+
+        result = service.explain_error("ws1", error_text="Unexpected provider failure")
+
+        action_ids = [item["action_id"] for item in result["recommendations"]]
+        self.assertIn("run_recent_errors", action_ids)
+        self.assertIn("run_status_report", action_ids)
+
     def test_run_check_executes_only_allowlisted_check_and_redacts_output(self) -> None:
         calls: list[dict[str, object]] = []
 

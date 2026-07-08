@@ -9,11 +9,13 @@ type ChatComposerProps = {
   draftRef: RefObject<HTMLTextAreaElement>;
   loading: boolean;
   memoMenuOpen: boolean;
+  navigatorPanelOpen: boolean;
   nancyMode: boolean;
   onDraftChange: (value: string) => void;
   onFileActionsToggle: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onMemoToggle: () => void;
+  onNavigatorToggle: () => void;
   onNancyToggle: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 };
@@ -25,11 +27,13 @@ export function ChatComposer({
   draftRef,
   loading,
   memoMenuOpen,
+  navigatorPanelOpen,
   nancyMode,
   onDraftChange,
   onFileActionsToggle,
   onKeyDown,
   onMemoToggle,
+  onNavigatorToggle,
   onNancyToggle,
   onSubmit,
 }: ChatComposerProps) {
@@ -59,6 +63,13 @@ export function ChatComposer({
           onClick={onNancyToggle}
         >
           Nancy
+        </button>
+        <button
+          type="button"
+          className={`ghost composer-inline-button ${navigatorPanelOpen ? "toolbar-button-active" : ""}`}
+          onClick={onNavigatorToggle}
+        >
+          Navigator
         </button>
       </form>
     </div>

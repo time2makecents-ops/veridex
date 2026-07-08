@@ -25,6 +25,15 @@ class DummyNavigatorDiagnostics:
             "summary": "The action was blocked by a room capability policy.",
             "next_step": "Move to the correct room or use the assistant that owns that capability, then retry.",
             "category": "capability_policy",
+            "recommendations": [
+                {
+                    "action_id": "move_to_room",
+                    "label": "Move to the correct room",
+                    "kind": "guidance",
+                    "requires_confirmation": True,
+                    "reason": "Capability policies are room-scoped.",
+                }
+            ],
         }
 
     def run_check(self, workspace_id: str, *, check_name: str = "", session_id: str | None = None):
@@ -60,7 +69,9 @@ class NavigatorHandlerTests(unittest.TestCase):
         )
 
         self.assertEqual(response["structuredContent"]["speaker"], "Navigator")
+        self.assertEqual(response["structuredContent"]["diagnostic"]["recommendations"][0]["action_id"], "move_to_room")
         self.assertIn("Next step:", response["content"][0]["text"])
+        self.assertIn("Recommendations:", response["content"][0]["text"])
 
     def test_run_check_returns_structured_navigator_result(self) -> None:
         response = self.handlers["office.navigator_run_check"](

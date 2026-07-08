@@ -503,6 +503,85 @@ button {
   min-height: 42px;
 }
 
+.navigator-panel {
+  position: fixed;
+  right: 20px;
+  bottom: max(20px, env(safe-area-inset-bottom));
+  z-index: 70;
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(680px, calc(100dvh - 40px));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.96);
+  color: #f8fafc;
+  box-shadow: 0 22px 60px rgba(2, 6, 23, 0.38);
+}
+
+.navigator-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.navigator-panel-title {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.navigator-panel-close {
+  min-height: 34px;
+  padding: 6px 10px;
+  border-color: rgba(226, 232, 240, 0.28);
+  color: #f8fafc;
+}
+
+.navigator-panel-log {
+  min-height: 180px;
+  max-height: 360px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.32);
+}
+
+.navigator-panel-message {
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.navigator-panel-message-user {
+  border-color: rgba(96, 165, 250, 0.34);
+  background: rgba(30, 64, 175, 0.22);
+}
+
+.navigator-panel-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.navigator-panel-composer textarea {
+  min-height: 72px;
+  border-radius: 8px;
+}
+
+.navigator-panel-composer button {
+  min-width: 86px;
+  border-radius: 8px;
+}
+
 .muted {
   color: var(--muted);
   font-size: 0.95rem;
@@ -1331,6 +1410,40 @@ button {
 
 .lobby-composer .composer-inline-button {
   min-width: 72px;
+}
+
+@media (max-width: 760px) {
+  .composer-actions {
+    align-items: stretch;
+  }
+
+  .lobby-composer {
+    flex-wrap: wrap;
+  }
+
+  .lobby-composer textarea {
+    flex: 1 1 100%;
+  }
+
+  .composer-inline-button {
+    flex: 1 1 120px;
+  }
+
+  .navigator-panel {
+    right: 10px;
+    left: 10px;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    width: auto;
+    max-height: min(78dvh, 680px);
+  }
+
+  .navigator-panel-log {
+    max-height: 42dvh;
+  }
+
+  .navigator-panel-composer {
+    grid-template-columns: 1fr;
+  }
 }
 
 .lobby-terminal-image-wrap {

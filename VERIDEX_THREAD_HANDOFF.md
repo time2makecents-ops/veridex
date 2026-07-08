@@ -1,7 +1,7 @@
 # VERIDEX THREAD HANDOFF
 Project: Veridex (formerly Office-App)
 Developer: JR
-Current branch: `feat/routing-followup-reliability`
+Current branch: `feat/navigator-proactive-behavior`
 Current base commit: `f6bd164 Merge pull request #1 from time2makecents-ops/fix/stabilization-setup`
 Remote: tracks `origin/feat/routing-followup-reliability`
 Environment: FastAPI backend + Next.js frontend
@@ -18,17 +18,17 @@ Use this when resuming on another computer.
 - PR #1 has been merged into `dev` at `f6bd164`.
 - Branch `feat/routing-followup-reliability` starts from the merged PR #1 baseline.
 - The merged stabilization baseline contains chat cleanup, request-tool extraction, runtime Git hygiene, room capability UI, governed room workflows, memo hardening, `/call` session-header propagation, and Conference Room internal meeting-state persistence through `MeetingStateStore`.
-- The branch now includes the routing follow-up reliability work, the Nancy email-entry slice, the durable cross-room work context continuity slice, Navigator read-only diagnostics, and Navigator allowlisted check execution.
-- The current active slice adds `office.navigator_run_check` as a governed diagnostic tool for explicit allowlisted checks such as standard smoke, work-context smoke, backend tests, and frontend build.
+- The branch now includes the routing follow-up reliability work, the Nancy email-entry slice, the durable cross-room work context continuity slice, Navigator read-only diagnostics, Navigator allowlisted check execution, structured Navigator recommendations, and the in-app Navigator chat panel.
+- The current active slice adds `office.navigator_run_check` as a governed diagnostic tool for explicit allowlisted checks such as standard smoke, work-context smoke, backend tests, and frontend build, and surfaces those recommendations in a dedicated Navigator panel.
 - The routing follow-up reliability work keeps `/request` follow-up routing fail-closed for ambiguous and reflective follow-ups after unverified/no-info entity answers, while preserving anchored list, grounded search, session-search, and explicit search-confirmation follow-ups.
 - The onboarding page now lets users continue to PIN setup without a face photo when camera permission, preview, or capture fails. Backend and frontend proxy onboarding were verified with missing `face_photo_data`.
 - `office_app/backend/incident_log.csv` is intentionally removed from the Git index and ignored, but the local runtime file should remain on disk.
 
-Latest validation baseline for the current Navigator allowlisted diagnostics slice:
+Latest validation baseline for the current Navigator allowlisted diagnostics and panel slice:
 
 - `git diff --check` passed
-- `python -m unittest discover -s office_app/server -p "test_*.py"` passed with 497 tests
-- frontend targeted `vitest` helper pass completed with 30 tests
+- `python -m unittest discover -s office_app/server -p "test_*.py"` passed with 513 tests
+- frontend targeted `vitest` helper pass completed with 57 tests
 - `npm.cmd run build` passed
 - `C:\Office-App\office_app\smoke_test.ps1` passed
 - live `office.state_get` smoke confirmed active work context hydration
@@ -40,6 +40,8 @@ Latest validation baseline for the current Navigator allowlisted diagnostics sli
 - Navigator diagnostics can now inspect health, tool registration, active room/persona state, safe config readiness, recent incident rows, and redacted backend/frontend log tails without arbitrary command execution.
 - `office.navigator_status_report`, `office.navigator_recent_errors`, and `office.navigator_explain_error` are the current read-only Navigator diagnostics tools.
 - `office.navigator_run_check` can run only explicit allowlisted checks; it does not accept arbitrary shell commands.
+- `office.navigator_explain_error` now returns structured recommendations that point to allowlisted follow-up actions.
+- The chat composer now includes a `Navigator` button that toggles a dedicated in-app Navigator panel for separate governance chat.
 
 Re-run full validation after any additional backend or frontend continuity changes.
 

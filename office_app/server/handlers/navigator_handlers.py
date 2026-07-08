@@ -49,6 +49,26 @@ def _check_text(result: Dict[str, Any]) -> str:
     return f"Navigator check {check_name} {status}. Exit code: {exit_code}. Duration: {duration}s."
 
 
+def _recommendations_text(result: Dict[str, Any]) -> str:
+    recommendations = result.get("recommendations")
+    if not isinstance(recommendations, list) or not recommendations:
+        return ""
+    lines = []
+    for index, recommendation in enumerate(recommendations[:4], start=1):
+        if not isinstance(recommendation, dict):
+            continue
+        label = str(recommendation.get("label") or recommendation.get("action_id") or "").strip()
+        action_id = str(recommendation.get("action_id") or "").strip()
+        check_name = str(recommendation.get("check_name") or "").strip()
+        if not label:
+            continue
+        suffix = f" ({action_id}{', ' + check_name if check_name else ''})" if action_id else ""
+        lines.append(f"{index}. {label}{suffix}.")
+    if not lines:
+        return ""
+    return " Recommendations:\n" + "\n".join(lines)
+
+
 def build_navigator_handlers(deps: HandlerDeps) -> Dict[str, Any]:
     def handle_status_report(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = deps.resolve_workspace_id("office.navigator_status_report", args)
@@ -87,7 +107,7 @@ def build_navigator_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             session_id=session_id,
             error_text=error_text,
         )
-        text = f"{result['summary']} Next step: {result['next_step']}"
+        text = f"{result['summary']} Next step: {result['next_step']}{_recommendations_text(result)}"
         return {
             "structuredContent": {
                 "speaker": "Navigator",

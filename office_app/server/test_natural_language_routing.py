@@ -227,6 +227,62 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["tool"], "office.navigator_run_check")
         self.assertEqual(routed["arguments"]["check_name"], "standard_smoke")
 
+    def test_navigator_recommendation_followup_routes_to_first_allowlisted_check(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "speaker": "Navigator",
+                        "text": (
+                            "A local backend or frontend connection failed. Next step: Restart Veridex and run the standard smoke test before retrying.\n"
+                            "Recommendations:\n"
+                            "1. Run standard smoke test (run_standard_smoke, standard_smoke)."
+                        ),
+                    }
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+
+        routed = pipeline.route_user_request("default", "run the first one", session_id="sess_1")
+
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "navigator.run_check")
+        self.assertEqual(routed["tool"], "office.navigator_run_check")
+        self.assertEqual(routed["arguments"]["check_name"], "standard_smoke")
+
+    def test_navigator_report_recommendation_followup_routes_to_status_report(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "speaker": "Navigator",
+                        "text": (
+                            "I can see the failure text, but it does not match a known diagnostic category.\n"
+                            "Recommendations:\n"
+                            "1. Run recent errors (run_recent_errors).\n"
+                            "2. Run status report (run_status_report)."
+                        ),
+                    }
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+
+        routed = pipeline.route_user_request("default", "show me the report", session_id="sess_1")
+
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "navigator.status_report")
+        self.assertEqual(routed["tool"], "office.navigator_status_report")
+
     def test_complete_active_work_number_routes_to_work_context_complete_index(self) -> None:
         routed = self.pipeline.route_user_request("default", "complete active work 2")
         self.assertEqual(routed["route_kind"], "tool")

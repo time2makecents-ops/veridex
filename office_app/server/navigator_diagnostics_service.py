@@ -185,6 +185,26 @@ class NavigatorDiagnosticsService:
             ),
         }
 
+    @staticmethod
+    def _recommendation(
+        *,
+        action_id: str,
+        label: str,
+        kind: str,
+        reason: str,
+        check_name: str = "",
+    ) -> Dict[str, Any]:
+        recommendation: Dict[str, Any] = {
+            "action_id": action_id,
+            "label": label,
+            "kind": kind,
+            "requires_confirmation": True,
+            "reason": reason,
+        }
+        if check_name:
+            recommendation["check_name"] = check_name
+        return recommendation
+
     def status_report(self, workspace_id: str, *, session_id: Optional[str] = None) -> Dict[str, Any]:
         tool_names = self.tool_names_provider()
         expected_tools = {
@@ -231,22 +251,69 @@ class NavigatorDiagnosticsService:
         category = "unknown"
         summary = "I need the exact error text or a recent failed action to diagnose this cleanly."
         next_step = "Run a Navigator status report, then retry the action and give me the exact failure text."
+        recommendations = [
+            self._recommendation(
+                action_id="run_status_report",
+                label="Run Navigator status report",
+                kind="status_report",
+                reason="A status report checks health, tool registration, active room/persona, config readiness, incidents, and log tails.",
+            )
+        ]
 
         if "not allowed from room" in lowered or "capability profile" in lowered:
             category = "capability_policy"
             summary = "The action was blocked by a room capability policy."
             next_step = "Move to the correct room or use the assistant that owns that capability, then retry."
+            recommendations = [
+                self._recommendation(
+                    action_id="move_to_room",
+                    label="Move to the correct room",
+                    kind="guidance",
+                    reason="Capability policies are room-scoped.",
+                )
+            ]
         elif "google is not connected" in lowered or "connect it from profile" in lowered:
             category = "google_connection"
             summary = "The Google integration is not connected for the current user/session."
             next_step = "Open Profile, connect Google, then retry the Gmail or Calendar action."
+            recommendations = [
+                self._recommendation(
+                    action_id="open_profile",
+                    label="Open Profile and connect Google",
+                    kind="guidance",
+                    reason="Google actions require a connected account before Veridex can prepare Gmail or Calendar work.",
+                )
+            ]
         elif "not listening" in lowered or "connection refused" in lowered or "networkerror" in lowered:
             category = "runtime_connection"
             summary = "A local backend or frontend connection failed."
             next_step = "Restart Veridex and run the standard smoke test before retrying."
+            recommendations = [
+                self._recommendation(
+                    action_id="run_standard_smoke",
+                    label="Run standard smoke test",
+                    kind="run_check",
+                    check_name="standard_smoke",
+                    reason="The standard smoke test verifies the backend, frontend, tool registry, and search-provider readiness.",
+                )
+            ]
         elif text:
             summary = f"I can see the failure text, but it does not match a known diagnostic category: {text}"
             next_step = "Run recent errors and a status report so I can compare it with logs and incidents."
+            recommendations = [
+                self._recommendation(
+                    action_id="run_recent_errors",
+                    label="Run recent errors",
+                    kind="recent_errors",
+                    reason="Recent errors show incident rows and redacted backend/frontend log tails.",
+                ),
+                self._recommendation(
+                    action_id="run_status_report",
+                    label="Run Navigator status report",
+                    kind="status_report",
+                    reason="A status report adds health, tool, active room/persona, and config context.",
+                ),
+            ]
 
         return {
             "generated_utc": self.utc_now(),
@@ -255,6 +322,7 @@ class NavigatorDiagnosticsService:
             "category": category,
             "summary": summary,
             "next_step": next_step,
+            "recommendations": recommendations,
             "error_text": self._redact(text),
         }
 

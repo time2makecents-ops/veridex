@@ -2123,7 +2123,7 @@ class RequestPipeline:
                 "arguments": {},
                 "reason": "Matched a follow-up to run Navigator evidence diagnostics.",
             }
-        if re.fullmatch(r"(?:report|give me (?:a )?(?:detailed )?report|detailed report|status report)", text):
+        if re.fullmatch(r"(?:report|show me (?:the )?report|give me (?:a )?(?:detailed )?report|detailed report|status report)", text):
             return {
                 "capability": "navigator.status_report",
                 "tool": "office.navigator_status_report",

@@ -9,8 +9,8 @@ Last updated: 2026-07-07
 - Preserve the current stripped-down UI until backend behavior is reliable.
 - Make normal chat feel conversational while keeping explicit system commands deterministic.
 - Keep startup and smoke testing simple enough to diagnose without guessing.
-- Current branch: `feat/routing-followup-reliability`.
-- Current active slice: Navigator allowlisted diagnostics. Navigator can now report Veridex health, recent incidents/log tails, safe config readiness, active room/persona state, explain common error categories, and run explicit allowlisted checks without arbitrary shell access.
+- Current branch: `feat/navigator-proactive-behavior`.
+- Current active slice: Navigator allowlisted diagnostics and panel workflow. Navigator can now report Veridex health, recent incidents/log tails, safe config readiness, active room/persona state, explain common error categories, run explicit allowlisted checks, and open a dedicated in-app Navigator chat panel without arbitrary shell access.
 
 ## Immediate Priorities
 
@@ -49,6 +49,8 @@ Last updated: 2026-07-07
    - `office.navigator_status_report`, `office.navigator_recent_errors`, and `office.navigator_explain_error` are read-only governed tools.
    - Navigator diagnostics are available through the shared navigation capability group so they can be used from normal rooms.
    - `office.navigator_run_check` is a governed allowlisted check runner for standard smoke, work-context smoke, backend tests, and frontend build.
+   - `Navigator` now has a dedicated in-app chat panel in the composer footer; it opens and closes from the button next to `Nancy` while still using the current session and request pipeline.
+   - `explain_error` now returns structured recommendations so Navigator can suggest safe next actions without arbitrary command execution.
    - Future Navigator expansion should stay allowlisted: add proactive or self-healing behavior only after the safe check surface remains stable.
 
 ## Suggested Future Steps

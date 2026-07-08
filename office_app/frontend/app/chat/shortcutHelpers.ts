@@ -1,5 +1,6 @@
 export const NANCY_MODE_PREFIX = "Nancy, ";
 export const NANCY_ROOM_ID = "my_office";
+export const NAVIGATOR_MODE_PREFIX = "Navigator, ";
 
 export function effectiveNancyMode(activeRoom: string, nancyMode: boolean): boolean {
   return activeRoom !== NANCY_ROOM_ID && nancyMode;
@@ -22,4 +23,12 @@ export function buildNancyModeRequest(text: string): string {
     return value;
   }
   return `${NANCY_MODE_PREFIX}${value}`;
+}
+
+export function buildNavigatorModeRequest(text: string): string {
+  const value = text.trim();
+  if (/^navigator\s*[,.:\-]/i.test(value)) {
+    return value;
+  }
+  return `${NAVIGATOR_MODE_PREFIX}${value}`;
 }

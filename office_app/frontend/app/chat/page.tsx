@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 
-import { callTool, listActiveWorkContexts, loadTranscript } from "@/lib/api";
+import { callTool, listActiveWorkContexts, loadTranscript, request, requestText } from "@/lib/api";
 import { clearStoredSessionId, getSessionShortLabel, getStoredSessionId } from "@/lib/session";
 
 import { ChatComposer } from "./ChatComposer";
@@ -14,7 +14,9 @@ import { DocumentReader } from "./DocumentReader";
 import { AttachmentPanel, LoadFilePanel, SaveFilePanel } from "./FilePanels";
 import { MeetingWorkspacePanel } from "./MeetingWorkspacePanel";
 import { MemoPanel } from "./MemoPanel";
+import { NavigatorPanel } from "./NavigatorPanel";
 import {
+  assistantMessageForResponse,
   backendDisconnectedMessage,
   createMessage,
   roomPersonaValues,
@@ -24,9 +26,10 @@ import {
 } from "./helpers";
 import { RoomDirectoryPanel } from "./RoomDirectoryPanel";
 import { SessionNamePrompt, SessionPanel } from "./SessionPanel";
-import { nextNancyMode } from "./shortcutHelpers";
+import { buildNavigatorModeRequest, nextNancyMode } from "./shortcutHelpers";
 import {
   type ChatScope,
+  type ChatStructuredResponse,
   type LobbyState,
   type Message,
   type NancyEmailComposeState,
@@ -58,6 +61,11 @@ export default function ChatPage() {
   const [confirmedIntegrationIds, setConfirmedIntegrationIds] = useState<string[]>([]);
   const [completingWorkContextId, setCompletingWorkContextId] = useState("");
   const [completedWorkContextIds, setCompletedWorkContextIds] = useState<string[]>([]);
+  const [navigatorPanelOpen, setNavigatorPanelOpen] = useState(false);
+  const [navigatorDraft, setNavigatorDraft] = useState("");
+  const [navigatorError, setNavigatorError] = useState("");
+  const [navigatorLoading, setNavigatorLoading] = useState(false);
+  const [navigatorMessages, setNavigatorMessages] = useState<Message[]>([]);
   const [activeWorkContexts, setActiveWorkContexts] = useState<WorkContextRecord[]>([]);
   const [pendingNancyCompose, setPendingNancyCompose] = useState<NancyEmailComposeState | undefined>(undefined);
   const [pendingBreakRoomJoke, setPendingBreakRoomJoke] = useState<LobbyState["pending_break_room_joke"] | undefined>(undefined);
@@ -382,6 +390,43 @@ export default function ChatPage() {
     setNancyMode((current) => nextNancyMode(activeRoom, current));
   }
 
+  async function sendNavigatorText(text: string) {
+    const value = text.trim();
+    if (!value || navigatorLoading || !sessionId) {
+      return;
+    }
+    setNavigatorDraft("");
+    setNavigatorError("");
+    setNavigatorLoading(true);
+    setNavigatorMessages((current) => [
+      ...current,
+      createMessage({ role: "user", text: value, room: "control_room", sessionId }),
+    ]);
+    try {
+      const response = await request(buildNavigatorModeRequest(value), sessionId);
+      const structuredResponse = response.structuredContent as ChatStructuredResponse | undefined;
+      setNavigatorMessages((current) => [
+        ...current,
+        assistantMessageForResponse(structuredResponse, requestText(response), "Navigator", "control_room", sessionId),
+      ]);
+      void refreshActiveWorkContexts();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Navigator request failed.";
+      setNavigatorError(message);
+      setNavigatorMessages((current) => [
+        ...current,
+        createMessage({ role: "assistant", speaker: "Navigator", text: message, room: "control_room", sessionId }),
+      ]);
+    } finally {
+      setNavigatorLoading(false);
+    }
+  }
+
+  function handleNavigatorSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void sendNavigatorText(navigatorDraft);
+  }
+
   async function handleCreateWorkspaceAndFocus() {
     await handleCreateWorkspace();
   }
@@ -563,6 +608,7 @@ export default function ChatPage() {
           draftRef={draftRef}
           loading={loading}
           memoMenuOpen={memoMenuOpen}
+          navigatorPanelOpen={navigatorPanelOpen}
           nancyMode={nancyMode}
           onDraftChange={setDraft}
           onFileActionsToggle={() => {
@@ -570,9 +616,22 @@ export default function ChatPage() {
           }}
           onKeyDown={handleDraftKeyDown}
           onMemoToggle={toggleMemoMenu}
+          onNavigatorToggle={() => setNavigatorPanelOpen((current) => !current)}
           onNancyToggle={toggleNancyMode}
           onSubmit={handleSubmit}
         />
+
+        {navigatorPanelOpen ? (
+          <NavigatorPanel
+            draft={navigatorDraft}
+            error={navigatorError}
+            loading={navigatorLoading}
+            messages={navigatorMessages}
+            onClose={() => setNavigatorPanelOpen(false)}
+            onDraftChange={setNavigatorDraft}
+            onSubmit={handleNavigatorSubmit}
+          />
+        ) : null}
 
         {attachmentOpen ? (
           <AttachmentPanel

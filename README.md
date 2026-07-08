@@ -95,6 +95,8 @@ Responsibilities:
 - inspect system health, recent incidents, and redacted runtime logs
 - explain common failures and safe next steps
 - run explicitly allowlisted diagnostic checks such as smoke tests and backend validation
+- surface structured safe recommendations after failures
+- open a dedicated in-app Navigator panel from the chat composer footer for separate governance chat
 
 Navigator oversees the system and can run read-only diagnostics. It does not perform department work, external sends, destructive changes, or arbitrary shell commands.
 
