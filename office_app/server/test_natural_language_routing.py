@@ -125,6 +125,12 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "navigator.explain_error")
         self.assertEqual(routed["tool"], "office.navigator_explain_error")
 
+    def test_navigator_explain_this_error_routes_to_error_explanation_tool(self) -> None:
+        routed = self.pipeline.route_user_request("default", "Navigator, explain this error: connection refused")
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "navigator.explain_error")
+        self.assertEqual(routed["tool"], "office.navigator_explain_error")
+
     def test_navigator_what_is_wrong_routes_to_status_report(self) -> None:
         routed = self.pipeline.route_user_request("default", "Navigator, what is wrong?")
         self.assertEqual(routed["route_kind"], "tool")
@@ -193,6 +199,33 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["route_kind"], "tool")
         self.assertEqual(routed["capability"], "navigator.status_report")
         self.assertEqual(routed["tool"], "office.navigator_status_report")
+
+    def test_navigator_check_followup_routes_to_allowlisted_check(self) -> None:
+        pipeline = RequestPipeline(
+            kernel=DummyKernel(
+                transcript_rows=[
+                    {
+                        "role": "assistant",
+                        "speaker": "Navigator",
+                        "text": (
+                            "A local backend or frontend connection failed. "
+                            "Next step: Restart Veridex and run the standard smoke test before retrying."
+                        ),
+                    }
+                ],
+            ),
+            navigator_control={"id": "NAVIGATOR", "status": "ACTIVE", "visibility": "INVISIBLE"},
+            utc_now_fn=lambda: "2026-04-17T12:00:00Z",
+            tool_names=[],
+            app_version="1.3.0",
+        )
+
+        routed = pipeline.route_user_request("default", "run the standard smoke", session_id="sess_1")
+
+        self.assertEqual(routed["route_kind"], "tool")
+        self.assertEqual(routed["capability"], "navigator.run_check")
+        self.assertEqual(routed["tool"], "office.navigator_run_check")
+        self.assertEqual(routed["arguments"]["check_name"], "standard_smoke")
 
     def test_complete_active_work_number_routes_to_work_context_complete_index(self) -> None:
         routed = self.pipeline.route_user_request("default", "complete active work 2")

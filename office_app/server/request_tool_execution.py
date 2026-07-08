@@ -116,5 +116,6 @@ def execute_tool_route(
         store=store,
         receptionist_context_service=receptionist_context_service,
         user_profile=user_profile,
+        speaker=response_speaker(enriched),
     )
     return enriched

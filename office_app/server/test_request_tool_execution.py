@@ -94,6 +94,42 @@ def set_pending_workspace_switch(state: dict, session_id: str, workspace_id: str
 
 
 class RequestToolExecutionTests(unittest.TestCase):
+    def test_execute_tool_route_records_structured_speaker_for_tool_response(self) -> None:
+        kernel = FakeKernel()
+        store = CapturingStore()
+        receptionist_context_service = CapturingReceptionistContextService()
+        router = CapturingRouter(
+            {
+                "structuredContent": {
+                    "speaker": "Navigator",
+                    "response_text": "A local backend or frontend connection failed.",
+                },
+                "content": [{"type": "text", "text": "A local backend or frontend connection failed."}],
+            }
+        )
+
+        execute_tool_route(
+            routed={
+                "capability": "navigator.explain_error",
+                "tool": "office.navigator_explain_error",
+                "reason": "Explain error.",
+                "arguments": {"error_text": "connection refused"},
+            },
+            workspace_id="ws_test",
+            session_id="sess_test",
+            user_profile=None,
+            kernel=kernel,
+            store=store,
+            router=router,
+            receptionist_context_service=receptionist_context_service,
+            utc_now=lambda: "2026-06-30T00:00:00Z",
+            apply_navigator_activation=apply_navigator_activation,
+            set_pending_workspace_switch=set_pending_workspace_switch,
+            response_speaker=response_speaker,
+        )
+
+        self.assertEqual(store.transcript[0]["speaker"], "Navigator")
+
     def test_execute_tool_route_records_clarify_response_with_navigator_speaker(self) -> None:
         kernel = FakeKernel()
         store = CapturingStore()

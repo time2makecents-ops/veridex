@@ -2096,6 +2096,17 @@ class RequestPipeline:
                 break
         if not last_navigator_text:
             return None
+        check_name = self._navigator_check_name_from_text(text) or self._navigator_check_name_from_text(last_navigator_text)
+        if check_name and (
+            text in {"do that", "proceed", "procede", "make it so", "run it", "yes", "ok", "okay"}
+            or re.search(r"\b(?:run|start|execute)\b", text)
+        ):
+            return {
+                "capability": "navigator.run_check",
+                "tool": "office.navigator_run_check",
+                "arguments": {"check_name": check_name},
+                "reason": "Matched a follow-up to run an allowlisted Navigator diagnostic check.",
+            }
         evidence_prompt = (
             "run recent errors" in last_navigator_text
             or "status report" in last_navigator_text
@@ -2121,6 +2132,19 @@ class RequestPipeline:
             }
         return None
 
+    @staticmethod
+    def _navigator_check_name_from_text(text: str) -> str:
+        lowered = re.sub(r"\s+", " ", str(text or "").strip().lower())
+        if re.search(r"\b(?:standard\s+)?smoke(?:\s+test)?\b", lowered):
+            return "standard_smoke"
+        if re.search(r"\bwork\s+context\s+smoke(?:\s+test)?\b", lowered):
+            return "work_context_smoke"
+        if re.search(r"\bbackend\s+(?:unit\s+)?tests?\b", lowered):
+            return "backend_tests"
+        if re.search(r"\bfrontend\s+(?:build|production\s+build)\b", lowered):
+            return "frontend_build"
+        return ""
+
     def route_navigator_diagnostics_request(
         self,
         workspace_id: str,
@@ -2142,20 +2166,12 @@ class RequestPipeline:
                 lowered,
             )
         )
-        run_check_name = ""
-        if re.search(r"\b(?:standard\s+)?smoke\s+test\b", lowered):
-            run_check_name = "standard_smoke"
-        elif re.search(r"\bwork\s+context\s+smoke\b", lowered):
-            run_check_name = "work_context_smoke"
-        elif re.search(r"\bbackend\s+(?:unit\s+)?tests?\b", lowered):
-            run_check_name = "backend_tests"
-        elif re.search(r"\bfrontend\s+(?:build|production\s+build)\b", lowered):
-            run_check_name = "frontend_build"
+        run_check_name = self._navigator_check_name_from_text(lowered)
         recent_errors_match = bool(
             re.search(r"\b(?:recent\s+errors|recent\s+incidents|show\s+errors|show\s+logs|error\s+log|incident\s+log)\b", lowered)
         )
         explain_error_match = bool(
-            re.search(r"\b(?:why\s+did\s+that\s+fail|why\s+did\s+it\s+fail|what\s+went\s+wrong|explain\s+(?:the\s+)?error|diagnose\s+(?:that|this))\b", lowered)
+            re.search(r"\b(?:why\s+did\s+that\s+fail|why\s+did\s+it\s+fail|what\s+went\s+wrong|explain\s+(?:the\s+|this\s+|that\s+)?error|diagnose\s+(?:that|this))\b", lowered)
         )
         if run_check_name and (mentions_navigator or "veridex" in lowered):
             return {
