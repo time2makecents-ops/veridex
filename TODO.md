@@ -1,6 +1,6 @@
 # Veridex TODO
 
-Last updated: 2026-07-07
+Last updated: 2026-07-09
 
 ## Current Focus
 
@@ -10,7 +10,7 @@ Last updated: 2026-07-07
 - Make normal chat feel conversational while keeping explicit system commands deterministic.
 - Keep startup and smoke testing simple enough to diagnose without guessing.
 - Current branch: `feat/navigator-proactive-behavior`.
-- Current active slice: Navigator allowlisted diagnostics and panel workflow. Navigator can now report Veridex health, recent incidents/log tails, safe config readiness, active room/persona state, explain common error categories, run explicit allowlisted checks, and open a dedicated in-app Navigator chat panel without arbitrary shell access.
+- Current active slice: Navigator / Records Archive live verification and next UX pass. Navigator can report Veridex health, recent incidents/log tails, safe config readiness, active room/persona state, explain common error categories, run explicit allowlisted checks, open a dedicated in-app Navigator panel, route transcript requests deterministically, and keep debug notes movable/readable without arbitrary shell access.
 
 ## Immediate Priorities
 
@@ -41,7 +41,9 @@ Last updated: 2026-07-07
    - Keep `.env.local`, local certs, storage, logs, and runtime databases ignored.
 
 5. Documentation alignment
-   - `VERIDEX_THREAD_HANDOFF.md` now tracks branch `feat/routing-followup-reliability`, the durable cross-room work context slice, and the latest validation baseline.
+   - `VERIDEX_THREAD_HANDOFF.md` now tracks branch `feat/navigator-proactive-behavior`, the durable cross-room work context slice, Navigator diagnostics, deterministic transcript retrieval, notes-panel usability, and the latest validation baseline.
+   - `AGENTS.md` records `analyze v session` as shorthand for inspecting latest Veridex runtime notes, chat logs, transcripts, incident/error logs, and current workspace/session state.
+   - Validation gates should pause before tests/builds/smoke/browser checks so the user can switch to `gpt-5.4-mini`.
    - Treat older architecture docs as design intent unless recently updated.
    - Update handoff docs after major stabilization milestones.
 
@@ -51,11 +53,46 @@ Last updated: 2026-07-07
    - `office.navigator_run_check` is a governed allowlisted check runner for standard smoke, work-context smoke, backend tests, and frontend build.
    - `Navigator` now has a dedicated in-app chat panel in the composer footer; it opens and closes from the button next to `Nancy` while still using the current session and request pipeline.
    - `explain_error` now returns structured recommendations so Navigator can suggest safe next actions without arbitrary command execution.
+   - Room-log and dated-log requests now route to deterministic transcript retrieval with persisted entries and filter metadata.
+   - Debug notes now support room/persona scoped notes, cursor placement after existing notes, a movable desktop panel, and improved Navigator close-button readability.
    - Future Navigator expansion should stay allowlisted: add proactive or self-healing behavior only after the safe check surface remains stable.
+
+7. Fresh PowerShell / token reset checkpoint
+   - Current branch is two local commits ahead of origin: `8ed8806 Improve notes panel usability` and `3f73b0d Tighten transcript retrieval routing`.
+   - Push is still pending unless a later checkpoint says otherwise.
+   - In a fresh PowerShell window, start with:
+     ```powershell
+     cd C:\Office-App
+     git status --short --branch
+     .\veridex.cmd restart
+     ```
+   - Suggested first prompt: `analyze v session, then verify current branch status and next TODO slice`.
 
 ## Suggested Future Steps
 
-1. Review the durable work-context continuity checkpoint
+1. Push current branch checkpoint
+   - Confirm `git status --short --branch` shows only intended changes.
+   - Push `feat/navigator-proactive-behavior` so the two local commits are on origin.
+   - Do not merge or start proactive Navigator behavior until the current branch has been reviewed or intentionally carried forward.
+
+2. Live-verify Records Archive and Navigator transcript trust
+   - Restart Veridex, then ask Records Archive for the latest Art Department chat log and confirm exact timestamped persisted entries are returned.
+   - Ask for dated chat logs from the last 2 days and confirm the response uses persisted transcript timestamps instead of summarized memory.
+   - Ask a Navigator-prefixed transcript request from Records Archive and confirm it does not drift into Archivist-only capabilities.
+   - Capture any remaining drift or fabricated-log behavior as a focused backend routing issue.
+
+3. Live-verify latest UI fixes
+   - Open the Navigator panel and confirm the close button is readable.
+   - Open notes and confirm the panel can be dragged on desktop without leaving the viewport.
+   - Confirm notes still autofocus and place the cursor after existing text.
+   - Add browser automation for Navigator panel and notes drag only after the manual check confirms the desired behavior.
+
+4. Plan the Records Archive clickable log browser
+   - List saved sessions/threads as records.
+   - Make entries clickable to open full timestamped chat logs.
+   - Keep this as a UI slice after deterministic transcript retrieval is stable.
+
+5. Review the durable work-context continuity checkpoint
    - Review `WorkContextService`, `office.work_context_*` tools, active-work routing, Nancy email context capture, memo context capture, and the chat active-work strip together.
    - Confirm active work survives reloads, room switches, session switches, workspace switches, and app restarts.
    - Confirm replacing the current manual work focus does not accumulate stale active items; `set current work to ...` should replace the singular current focus while `track active work: ...` can still append.
@@ -72,41 +109,41 @@ Last updated: 2026-07-07
    - Keep the branch focused on continuity stabilization before adding broader task/project management behavior.
    - Decide whether to keep this as a single stabilization review checkpoint or split it before opening review.
 
-2. Run a deeper behavior pass before more refactors
+6. Run a deeper behavior pass before more refactors
    - Exercise session switching, workspace switching, room switching, file upload/download, document reader, and integration confirmation.
    - Run `office_app\work_context_smoke.ps1` after continuity changes to verify active work survives state hydration, room switching, session activation, workspace activation, and completion.
    - Run `office_app\work_context_smoke.ps1 -RestartBackend` when persistence changes to verify active work survives a managed restart.
    - Capture any regressions as focused issues before editing more code.
    - Prefer fixing observed behavior over speculative cleanup.
 
-3. Finish live integration smoke checks
+7. Finish live integration smoke checks
    - Reconnect Canva so brand-kit access includes `brandkit:read`.
    - Connect Google from Profile, then run `office_app\integration_smoke.ps1` with the active Veridex `session_id`.
    - Keep the pass count-only unless deeper private-data testing is explicitly approved.
 
-4. Add targeted frontend tests around extracted chat pieces
+8. Add targeted frontend tests around extracted chat pieces
    - Minimal `vitest` coverage now exists for extracted pure chat helpers.
    - Cover `visibleMessagesForScope`, transcript rendering, confirmation buttons, and file panel empty states.
    - Keep tests close to the extracted helper/component boundaries.
    - Avoid broad browser automation until the chat behavior is stable.
 
-5. Finish Art Department image generation provider setup
+9. Finish Art Department image generation provider setup
    - Add Gemini image-generation quota or switch `GEMINI_IMAGE_MODEL`/provider to a key with image access.
    - Re-run `office_app\image_generation_smoke.ps1` when quota or provider access changes.
    - Verify the generated image appears as a room-scoped workspace file with `kind=generated_image`.
 
-6. Finish the free-first Bing image workflow
+10. Finish the free-first Bing image workflow
    - Manual workflow is now documented in `README.md`.
    - Use Microsoft Designer/Bing Image Creator manually for no-cost generations.
    - Keep the upload target as a room-scoped Art Department file after the user downloads the selected image.
    - Optional future improvement: add an in-app hint or helper note near Art Department image requests.
 
-7. Continue optional `page.tsx` controller cleanup only if needed
+11. Continue optional `page.tsx` controller cleanup only if needed
    - Best next target: workspace/session lifecycle logic.
    - Move one workflow at a time into a hook only when the inputs/outputs are clear.
    - Run `npm.cmd run build` and the smoke test after each slice.
 
-8. Extend department workflow coverage
+12. Extend department workflow coverage
    - Durable work context now persists active cross-room work in `work_context.json` per workspace and exposes `office.work_context_save`, `office.work_context_list`, and `office.work_context_complete`.
    - Active work context is included in `office.state_get`, `office.room_set`, `office.session_activate`, and `office.workspace_activate` so room/session/workspace transitions carry the same continuity state.
    - Nancy email compose/send-confirmation state and memo dispatch now record work context so ongoing cross-room work remains visible until completed.
@@ -124,7 +161,7 @@ Last updated: 2026-07-07
    - `/call` now forwards the `X-Session-Id` header into tool arguments so room switches persist into subsequent `/request` calls for the active session.
    - Keep routing additions narrow and covered by backend tests.
 
-9. Lock down runtime/Git hygiene
+13. Lock down runtime/Git hygiene
    - Confirm generated runtime files stay ignored.
    - Verify `.env.local`, local certs, logs, runtime databases, and user data are not staged.
    - Do not delete local runtime data while cleaning Git tracking.

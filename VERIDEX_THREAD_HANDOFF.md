@@ -3,7 +3,7 @@ Project: Veridex (formerly Office-App)
 Developer: JR
 Current branch: `feat/navigator-proactive-behavior`
 Current base commit: `f6bd164 Merge pull request #1 from time2makecents-ops/fix/stabilization-setup`
-Remote: tracks `origin/feat/routing-followup-reliability`
+Remote: tracks `origin/feat/navigator-proactive-behavior`
 Environment: FastAPI backend + Next.js frontend
 Purpose: Preserve system intent, architecture, and implementation state so development can continue in a new thread without design drift.
 
@@ -11,26 +11,33 @@ Purpose: Preserve system intent, architecture, and implementation state so devel
 
 # 0. CURRENT HANDOFF SNAPSHOT
 
-Use this when resuming on another computer.
+Use this when resuming on another computer or in a fresh PowerShell window.
 
 ## Current repository checkpoint
 
 - PR #1 has been merged into `dev` at `f6bd164`.
-- Branch `feat/routing-followup-reliability` starts from the merged PR #1 baseline.
+- Branch `feat/navigator-proactive-behavior` is the active development branch and currently has two local commits ahead of `origin/feat/navigator-proactive-behavior`.
+- Latest local commits:
+  - `8ed8806 Improve notes panel usability`
+  - `3f73b0d Tighten transcript retrieval routing`
+- Push is still pending unless a later handoff says otherwise.
 - The merged stabilization baseline contains chat cleanup, request-tool extraction, runtime Git hygiene, room capability UI, governed room workflows, memo hardening, `/call` session-header propagation, and Conference Room internal meeting-state persistence through `MeetingStateStore`.
-- The branch now includes the routing follow-up reliability work, the Nancy email-entry slice, the durable cross-room work context continuity slice, Navigator read-only diagnostics, Navigator allowlisted check execution, structured Navigator recommendations, and the in-app Navigator chat panel.
-- The current active slice adds `office.navigator_run_check` as a governed diagnostic tool for explicit allowlisted checks such as standard smoke, work-context smoke, backend tests, and frontend build, and surfaces those recommendations in a dedicated Navigator panel.
+- The branch now includes routing follow-up reliability, the Nancy email-entry slice, durable cross-room work context continuity, Navigator read-only diagnostics, Navigator allowlisted check execution, structured Navigator recommendations, the in-app Navigator chat panel, deterministic transcript retrieval routing, and notes-panel usability fixes.
+- Navigator governed diagnostics include `office.navigator_run_check` for explicit allowlisted checks such as standard smoke, work-context smoke, backend tests, and frontend build. It does not provide arbitrary shell access.
+- Transcript retrieval now routes room-log and dated-log requests through persisted transcript data with explicit filters instead of model-reconstructed chat logs.
+- Debug notes now support room/persona scoped notes, cursor placement after existing notes, a movable desktop notes panel, and a higher-contrast Navigator panel close button.
+- `AGENTS.md` records two active workflow rules: pause before validation so the user can switch to `gpt-5.4-mini`, and interpret `analyze v session` as an instruction to inspect Veridex runtime notes, chat logs, transcripts, incident/error logs, and current workspace/session state.
 - The routing follow-up reliability work keeps `/request` follow-up routing fail-closed for ambiguous and reflective follow-ups after unverified/no-info entity answers, while preserving anchored list, grounded search, session-search, and explicit search-confirmation follow-ups.
 - The onboarding page now lets users continue to PIN setup without a face photo when camera permission, preview, or capture fails. Backend and frontend proxy onboarding were verified with missing `face_photo_data`.
 - `office_app/backend/incident_log.csv` is intentionally removed from the Git index and ignored, but the local runtime file should remain on disk.
 
-Latest validation baseline for the current Navigator allowlisted diagnostics and panel slice:
+Latest validation baseline for the Navigator diagnostics, transcript retrieval, and notes-panel usability slices:
 
-- `git diff --check` passed
-- `python -m unittest discover -s office_app/server -p "test_*.py"` passed with 513 tests
-- frontend targeted `vitest` helper pass completed with 57 tests
+- `python -m unittest discover -s office_app/server -p "test_*.py"` passed with 516 tests
+- `npm.cmd run test` passed with 57 frontend tests
 - `npm.cmd run build` passed
 - `C:\Office-App\office_app\smoke_test.ps1` passed
+- `git diff --check` passed with CRLF warnings only
 - live `office.state_get` smoke confirmed active work context hydration
 - live `office.workspace_activate` smoke confirmed activation responses carry active work context
 - live `office.room_set` smoke confirmed room switches carry active work context
@@ -44,6 +51,22 @@ Latest validation baseline for the current Navigator allowlisted diagnostics and
 - The chat composer now includes a `Navigator` button that toggles a dedicated in-app Navigator panel for separate governance chat.
 
 Re-run full validation after any additional backend or frontend continuity changes.
+
+## Fresh PowerShell resume
+
+```powershell
+cd C:\Office-App
+git status --short --branch
+.\veridex.cmd restart
+```
+
+Good first prompt in a new Codex thread:
+
+```text
+analyze v session, then verify current branch status and next TODO slice
+```
+
+Before running validation tests, builds, smoke tests, or browser automation, stop and switch to `gpt-5.4-mini`; then resume and continue validation.
 
 ## Start
 
