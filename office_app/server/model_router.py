@@ -56,11 +56,20 @@ class ModelRouter:
                 pkg_dir / ".env.local",
             ]
         )
-        providers: List[BaseProvider] = [
-            CodexCliProvider.from_env(timeout_seconds=timeout_seconds),
-            GeminiProvider.from_env(timeout_seconds=timeout_seconds),
-            GroqProvider.from_env(timeout_seconds=timeout_seconds),
-        ]
+        providers: List[BaseProvider] = [CodexCliProvider.from_env(timeout_seconds=timeout_seconds)]
+        allow_external_fallback = str(os.getenv("VERIDEX_MODEL_ALLOW_EXTERNAL_FALLBACK", "false")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if allow_external_fallback:
+            providers.extend(
+                [
+                    GeminiProvider.from_env(timeout_seconds=timeout_seconds),
+                    GroqProvider.from_env(timeout_seconds=timeout_seconds),
+                ]
+            )
         openrouter = OpenRouterProvider.from_env(timeout_seconds=timeout_seconds)
         allow_openrouter = str(os.getenv("VERIDEX_MODEL_ALLOW_OPENROUTER", "")).strip().lower() in {"1", "true", "yes", "on"}
         return cls(providers, openrouter_scaffold=openrouter, allow_openrouter_by_default=allow_openrouter)

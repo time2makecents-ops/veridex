@@ -10,7 +10,7 @@ Planning: see [TODO.md](TODO.md) for active work items and the Apps SDK / app-in
 Local Codex integration: see `C:\codex2veridex\README.md` for the two-way bridge.
 It lets Codex activate a governed Veridex session and makes authenticated Codex
 the primary Veridex chat provider, without an OpenAI API key. Gemini and Groq
-remain fallback providers.
+remain available only as an explicit opt-in fallback.
 
 ---
 
