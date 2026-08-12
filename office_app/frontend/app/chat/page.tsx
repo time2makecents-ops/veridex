@@ -54,8 +54,21 @@ type Message = {
 
 type ProviderBadge = {
   provider: string;
+  model: string;
+  reasoningEffort: string;
+  taskType: string;
   fallbackUsed: boolean;
+  notice: string;
 };
+
+function readableRouteToken(value: string): string {
+  return value.replace(/_/g, " ").trim();
+}
+
+function readableProvider(value: string): string {
+  if (value === "codex_cli") return "Codex CLI";
+  return readableRouteToken(value);
+}
 
 type SavedFileNotice = {
   name: string;
@@ -168,6 +181,7 @@ export default function ChatPage() {
   const [roomStatus, setRoomStatus] = useState("Waiting for room state.");
   const [backendBanner, setBackendBanner] = useState("");
   const [providerBadge, setProviderBadge] = useState<ProviderBadge | null>(null);
+  const [modelRouteChecking, setModelRouteChecking] = useState(false);
   const [currentUser, setCurrentUser] = useState<UserRecord | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [confirmingIntegrationId, setConfirmingIntegrationId] = useState("");
@@ -859,6 +873,7 @@ export default function ChatPage() {
     setError("");
     setBackendBanner("");
     setLoading(true);
+    setModelRouteChecking(true);
     setMessages((current) => [
       ...current,
       { id: crypto.randomUUID(), role: "user", text: value, room: activeRoom, sessionId: outgoingSessionId },
@@ -875,6 +890,9 @@ export default function ChatPage() {
         navigator_activation?: { activated?: boolean };
         routing?: { route_kind?: string };
         provider?: string;
+        model?: string;
+        reasoning_effort?: string;
+        task_type?: string;
         fallback_used?: boolean;
         confirmation_id?: string;
         action_kind?: string;
@@ -891,10 +909,39 @@ export default function ChatPage() {
           ) || nextPersona,
       );
       if (structuredResponse?.provider) {
-        setProviderBadge({
+        const nextModelRoute: ProviderBadge = {
           provider: structuredResponse.provider,
+          model: String(structuredResponse.model || "unknown model"),
+          reasoningEffort: String(structuredResponse.reasoning_effort || "default"),
+          taskType: String(structuredResponse.task_type || "conversation"),
           fallbackUsed: Boolean(structuredResponse.fallback_used),
-        });
+          notice: "",
+        };
+        const modelChanged = Boolean(
+          providerBadge &&
+            (providerBadge.provider !== nextModelRoute.provider ||
+              providerBadge.model !== nextModelRoute.model ||
+              providerBadge.reasoningEffort !== nextModelRoute.reasoningEffort),
+        );
+        const taskChanged = Boolean(providerBadge && providerBadge.taskType !== nextModelRoute.taskType);
+        if (!providerBadge) {
+          nextModelRoute.notice =
+            `Model selected: ${nextModelRoute.model} · ${readableRouteToken(nextModelRoute.reasoningEffort)} reasoning.`;
+        } else if (modelChanged) {
+          nextModelRoute.notice =
+            `Model changed: ${providerBadge.model} → ${nextModelRoute.model} · ${readableRouteToken(nextModelRoute.reasoningEffort)} reasoning.`;
+        } else if (taskChanged) {
+          nextModelRoute.notice =
+            `Task route changed: ${readableRouteToken(providerBadge.taskType)} → ${readableRouteToken(nextModelRoute.taskType)}. Model remains ${nextModelRoute.model}.`;
+        } else {
+          nextModelRoute.notice =
+            `Continuing with ${nextModelRoute.model} · ${readableRouteToken(nextModelRoute.reasoningEffort)} reasoning.`;
+        }
+        setProviderBadge(nextModelRoute);
+      } else {
+        setProviderBadge((current) =>
+          current ? { ...current, notice: "No model was needed for this governed request." } : current,
+        );
       }
       if (nextSessionId && nextSessionId !== outgoingSessionId) {
         setStoredSessionId(nextSessionId);
@@ -934,6 +981,9 @@ export default function ChatPage() {
       const message = err instanceof Error ? err.message : "Request failed.";
       setError(message);
       setBackendBanner(backendDisconnectedMessage(message));
+      setProviderBadge((current) =>
+        current ? { ...current, notice: "The model route did not complete." } : current,
+      );
       setMessages((current) => [
         ...current,
         { id: crypto.randomUUID(), role: "assistant", text: message, room: activeRoom, sessionId: outgoingSessionId },
@@ -944,6 +994,7 @@ export default function ChatPage() {
       }
     } finally {
       setLoading(false);
+      setModelRouteChecking(false);
       window.requestAnimationFrame(() => {
         draftRef.current?.focus();
       });
@@ -1125,12 +1176,33 @@ export default function ChatPage() {
           <div className="lobby-title-row">
             <div className="stack" style={{ gap: 4 }}>
               <div className="terminal-label">Veridex</div>
-              {providerBadge ? (
-                <div className={`provider-badge ${providerBadge.fallbackUsed ? "provider-badge-fallback" : ""}`}>
-                  {providerBadge.provider}
-                  {providerBadge.fallbackUsed ? " fallback" : ""}
+              <div className="model-route-status" aria-live="polite" aria-atomic="true">
+                <div
+                  className={`provider-badge ${providerBadge?.fallbackUsed ? "provider-badge-fallback" : ""} ${
+                    modelRouteChecking ? "provider-badge-checking" : ""
+                  }`}
+                >
+                  <span className="model-route-dot" aria-hidden="true" />
+                  {modelRouteChecking ? (
+                    <span>Checking model route</span>
+                  ) : providerBadge ? (
+                    <span>
+                      {readableProvider(providerBadge.provider)} · {providerBadge.model}
+                    </span>
+                  ) : (
+                    <span>Model routing ready</span>
+                  )}
                 </div>
-              ) : null}
+                {providerBadge && !modelRouteChecking ? (
+                  <div className="model-route-meta">
+                    {readableRouteToken(providerBadge.reasoningEffort)} reasoning · {readableRouteToken(providerBadge.taskType)}
+                    {providerBadge.fallbackUsed ? " · fallback" : ""}
+                  </div>
+                ) : null}
+                {providerBadge?.notice && !modelRouteChecking ? (
+                  <div className="model-route-notice">{providerBadge.notice}</div>
+                ) : null}
+              </div>
               <h1 className="title">{currentTitle}</h1>
               <div className="muted">{currentSessionDescription || "No session description yet."}</div>
             </div>

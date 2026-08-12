@@ -10,12 +10,13 @@ from office_app.server.providers.base_provider import BaseProvider, ProviderResu
 class FakeProvider(BaseProvider):
     provider_name = "fake"
 
-    def __init__(self, *, name: str, text: str, available: bool = True, fail: bool = False):
+    def __init__(self, *, name: str, text: str, available: bool = True, fail: bool = False, reasoning_effort: str = ""):
         super().__init__(api_key="test", model_name=name, timeout_seconds=1)
         self.provider_name = name
         self._text = text
         self._available = available
         self._fail = fail
+        self._reasoning_effort = reasoning_effort
 
     def available(self) -> bool:
         return self._available
@@ -30,10 +31,20 @@ class FakeProvider(BaseProvider):
     ) -> ProviderResult:
         if self._fail:
             raise RuntimeError("boom")
-        return ProviderResult(provider=self.provider_name, model=self.model_name, text=self._text, raw={})
+        return ProviderResult(
+            provider=self.provider_name,
+            model=self.model_name,
+            text=self._text,
+            raw={"reasoning_effort": self._reasoning_effort} if self._reasoning_effort else {},
+        )
 
 
 class ModelRouterTests(unittest.TestCase):
+    def test_exposes_provider_reasoning_effort(self) -> None:
+        router = ModelRouter([FakeProvider(name="codex_cli", text="answer", reasoning_effort="high")])
+        result = router.generate_response(system_prompt="system", user_prompt="code this", task_type="coding")
+        self.assertEqual(result.reasoning_effort, "high")
+
     def test_forwards_task_type_to_provider_settings(self) -> None:
         provider = FakeProvider(name="codex_cli", text="primary")
         captured = {}

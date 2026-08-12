@@ -140,6 +140,7 @@ class FakeModelRouter:
             task_type=task_type,
             fallback_used=False,
             attempts=[],
+            reasoning_effort="medium",
         )
 
 
@@ -256,6 +257,22 @@ class FailingModelRouter:
 
 
 class AiHandlerTests(unittest.TestCase):
+    def test_ai_generate_exposes_exact_model_route_metadata(self) -> None:
+        handlers = build_ai_handlers(self._deps([], model_text="Implemented."))
+        result = handlers["office.ai_generate"](
+            {
+                "workspace_id": "ws_1",
+                "user_prompt": "implement this Python function",
+                "session_id": "sess_1",
+                "task_type": "coding",
+            }
+        )
+        structured = result["structuredContent"]
+        self.assertEqual(structured["provider"], "gemini")
+        self.assertEqual(structured["model"], "gemini-2.5-flash-lite")
+        self.assertEqual(structured["reasoning_effort"], "medium")
+        self.assertEqual(structured["task_type"], "coding")
+
     def _deps(
         self,
         workspace_rows: List[Dict[str, Any]],

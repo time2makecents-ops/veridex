@@ -21,6 +21,7 @@ class ModelRouteResult:
     task_type: str
     fallback_used: bool
     attempts: List[str]
+    reasoning_effort: str = ""
 
 
 class ModelRoutingError(ProviderError):
@@ -132,6 +133,9 @@ class ModelRouter:
                     task_type=task_type,
                     fallback_used=index > 0,
                     attempts=attempts,
+                    reasoning_effort=str(result.raw.get("reasoning_effort") or "").strip()
+                    if isinstance(result.raw, dict)
+                    else "",
                 )
             except ProviderError as exc:
                 attempts.append(f"{provider.provider_name}: {exc}")

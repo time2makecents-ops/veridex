@@ -609,6 +609,11 @@ def synthesize_search_response(
         return result
     updated = dict(result)
     structured = dict(updated.get("structuredContent") or {})
+    synthesized_structured = synthesized.get("structuredContent")
+    if isinstance(synthesized_structured, dict):
+        for key in ("provider", "model", "reasoning_effort", "task_type", "fallback_used"):
+            if key in synthesized_structured:
+                structured[key] = synthesized_structured[key]
     structured["raw_tool_summary"] = structured.get("summary_text") or request_text_from_response(result)
     source_sites = _search_source_sites(structured.get("results") or [])
     if source_sites:

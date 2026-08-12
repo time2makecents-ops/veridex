@@ -498,6 +498,8 @@ def _generate_break_room_joke(workspace_id: str, session_id: str) -> Dict[str, A
         "joke": joke,
         "provider": result.provider,
         "model": result.model,
+        "reasoning_effort": result.reasoning_effort,
+        "task_type": result.task_type,
         "attempts": result.attempts,
         "fallback_used": result.fallback_used,
     }
@@ -1151,6 +1153,8 @@ def handle_natural_language_request(
                 "joke_phase": "setup",
                 "provider": generated.get("provider"),
                 "model": generated.get("model"),
+                "reasoning_effort": generated.get("reasoning_effort"),
+                "task_type": generated.get("task_type"),
                 "fallback_used": generated.get("fallback_used"),
                 "attempts": generated.get("attempts"),
                 "routing": {

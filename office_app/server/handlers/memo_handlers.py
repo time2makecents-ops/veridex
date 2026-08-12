@@ -242,6 +242,7 @@ def build_memo_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             body=body,
             from_room=from_room_external,
         )
+        reply_result = None
         try:
             reply_result = deps.model_router.generate_response(
                 system_prompt=system_prompt,
@@ -306,7 +307,7 @@ def build_memo_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             state_sha256=deps.stable_state_sha(state),
         )
 
-        return deps.pipeline.mailroom_response(
+        response = deps.pipeline.mailroom_response(
             workspace_id=workspace_id,
             memo_id=memo_result["memo_id"],
             from_room=from_room_external,
@@ -320,6 +321,19 @@ def build_memo_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             is_refusal=reply_is_refusal,
             closure_appended=reply_closure_appended,
         )
+        if reply_result is not None:
+            structured = response.get("structuredContent")
+            if isinstance(structured, dict):
+                structured.update(
+                    {
+                        "provider": reply_result.provider,
+                        "model": reply_result.model,
+                        "reasoning_effort": reply_result.reasoning_effort,
+                        "task_type": reply_result.task_type,
+                        "fallback_used": reply_result.fallback_used,
+                    }
+                )
+        return response
 
     def handle_memos_list(args: Dict[str, Any]) -> Dict[str, Any]:
         workspace_id = args["workspace_id"]

@@ -689,8 +689,67 @@ button {
   color: #12331d;
   font-size: 0.68rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.025em;
+}
+
+.model-route-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-height: 24px;
+}
+
+.model-route-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: #29924b;
+  box-shadow: 0 0 0 3px rgba(41, 146, 75, 0.12);
+}
+
+.provider-badge-checking .model-route-dot {
+  animation: model-route-pulse 0.9s ease-in-out infinite alternate;
+}
+
+.model-route-meta,
+.model-route-notice {
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
+.model-route-meta {
+  color: var(--muted);
+  text-transform: capitalize;
+}
+
+.model-route-notice {
+  color: #245f36;
+  font-weight: 650;
+  animation: model-route-reveal 180ms ease-out both;
+}
+
+@keyframes model-route-pulse {
+  from {
+    opacity: 0.35;
+    transform: scale(0.78);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+}
+
+@keyframes model-route-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .provider-badge-fallback {

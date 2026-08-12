@@ -771,6 +771,7 @@ def build_ai_handlers(deps: HandlerDeps) -> Dict[str, Any]:
             "workspace_id": workspace_id,
             "provider": result.provider,
             "model": result.model,
+            "reasoning_effort": result.reasoning_effort,
             "task_type": result.task_type,
             "fallback_used": result.fallback_used,
             "attempts": result.attempts,
