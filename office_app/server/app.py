@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import csv
+import hmac
 import json
 import os
 import re
@@ -93,6 +94,7 @@ private_file_service = PrivateFileService(kernel=kernel, runtime_dir=RUNTIME_DIR
 search_service = SearchService()
 ocr_service = OcrService()
 model_router = ModelRouter.from_env()
+VERIDEX_CODEX_TOKEN = str(os.getenv("VERIDEX_CODEX_TOKEN") or "").strip()
 nancy_service = NancyService(
     kernel=kernel,
     archive_service=archive_service,
@@ -280,6 +282,28 @@ class IntegrationActionRequest(BaseModel):
 app = FastAPI(title="Veridex Office Server", version="1.3.0")
 
 
+def _require_codex_access(
+    authorization: Optional[str],
+    x_veridex_token: Optional[str],
+) -> None:
+    """Require the optional local Codex token when one is configured.
+
+    Existing browser clients remain compatible when the token is unset. Once
+    VERIDEX_CODEX_TOKEN is configured, integration callers must send either
+    Authorization: Bearer <token> or X-Veridex-Token: <token>.
+    """
+    expected = VERIDEX_CODEX_TOKEN
+    if not expected:
+        return
+    provided = str(x_veridex_token or "").strip()
+    if not provided:
+        auth = str(authorization or "").strip()
+        if auth.lower().startswith("bearer "):
+            provided = auth[7:].strip()
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="Valid Veridex integration token required.")
+
+
 @app.on_event("startup")
 def startup_init() -> None:
     BACKEND_DIR.mkdir(parents=True, exist_ok=True)
@@ -296,12 +320,21 @@ def health() -> Dict[str, Any]:
 
 
 @app.get("/tools")
-def tools() -> Dict[str, Any]:
+def tools(
+    authorization: Optional[str] = Header(default=None),
+    x_veridex_token: Optional[str] = Header(default=None, alias="X-Veridex-Token"),
+) -> Dict[str, Any]:
+    _require_codex_access(authorization, x_veridex_token)
     return pipeline.tools_response()
 
 
 @app.post("/call")
-def call_tool(call: ToolCall) -> Dict[str, Any]:
+def call_tool(
+    call: ToolCall,
+    authorization: Optional[str] = Header(default=None),
+    x_veridex_token: Optional[str] = Header(default=None, alias="X-Veridex-Token"),
+) -> Dict[str, Any]:
+    _require_codex_access(authorization, x_veridex_token)
     tool = call.tool.strip()
     args = dict(call.arguments or {})
     workspace_id = resolve_workspace_id(tool, args)
@@ -441,9 +474,8 @@ def _generate_break_room_joke(workspace_id: str, session_id: str) -> Dict[str, A
             settings={
                 "temperature": 0.8,
                 "max_output_tokens": 180,
-                "provider_by_task_type": {"conversation": "gemini"},
             },
-            task_type="conversation",
+            task_type="simple",
         )
     except ModelRoutingError as exc:
         raise HTTPException(
@@ -469,7 +501,10 @@ def _generate_break_room_joke(workspace_id: str, session_id: str) -> Dict[str, A
 def handle_natural_language_request(
     payload: NaturalLanguageRequest,
     x_session_id: Optional[str] = Header(default=None, alias="X-Session-Id"),
+    authorization: Optional[str] = Header(default=None),
+    x_veridex_token: Optional[str] = Header(default=None, alias="X-Veridex-Token"),
 ) -> Dict[str, Any]:
+    _require_codex_access(authorization, x_veridex_token)
     header_session_id = x_session_id if isinstance(x_session_id, str) else None
     session_id = str(header_session_id or payload.session_id or "").strip()
     if not session_id:

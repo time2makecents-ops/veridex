@@ -230,7 +230,7 @@ class NaturalLanguageRoutingTests(unittest.TestCase):
         self.assertEqual(routed["capability"], "ai.respond")
         self.assertEqual(routed["tool"], "office.ai_generate")
         self.assertEqual(routed["arguments"]["workspace_id"], "default")
-        self.assertEqual(routed["arguments"]["task_type"], "conversation")
+        self.assertEqual(routed["arguments"]["task_type"], "planning")
         self.assertIn("system_prompt", routed["arguments"])
 
     def test_explicit_room_navigation_routes_to_room_change(self) -> None:

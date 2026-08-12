@@ -259,9 +259,8 @@ def build_memo_handlers(deps: HandlerDeps) -> Dict[str, Any]:
                 settings={
                     "temperature": 0.2,
                     "max_output_tokens": 420,
-                    "provider_by_task_type": {"conversation": "gemini"},
                 },
-                task_type="conversation",
+                task_type="planning",
             )
             reply_text = _normalize_memo_reply(reply_result.text)
         except ModelRoutingError:

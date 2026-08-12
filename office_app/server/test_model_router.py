@@ -34,6 +34,26 @@ class FakeProvider(BaseProvider):
 
 
 class ModelRouterTests(unittest.TestCase):
+    def test_forwards_task_type_to_provider_settings(self) -> None:
+        provider = FakeProvider(name="codex_cli", text="primary")
+        captured = {}
+        original = provider.generate_response
+
+        def capture(**kwargs):
+            captured.update(kwargs.get("settings") or {})
+            return original(**kwargs)
+
+        provider.generate_response = capture  # type: ignore[method-assign]
+        router = ModelRouter([provider])
+        result = router.generate_response(
+            system_prompt="system",
+            user_prompt="plan this",
+            settings={"temperature": 0.2},
+            task_type="planning",
+        )
+        self.assertEqual(result.task_type, "planning")
+        self.assertEqual(captured["_task_type"], "planning")
+
     def test_uses_first_available_provider(self) -> None:
         router = ModelRouter([FakeProvider(name="gemini", text="primary"), FakeProvider(name="groq", text="fallback")])
         result = router.generate_response(

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from office_app.server.env_loader import load_env_files
 from office_app.server.providers.base_provider import BaseProvider, ProviderError, ProviderRequestError, ProviderResult, ProviderUnavailableError
+from office_app.server.providers.codex_cli_provider import CodexCliProvider
 from office_app.server.providers.gemini_provider import GeminiProvider
 from office_app.server.providers.groq_provider import GroqProvider
 from office_app.server.providers.openrouter_provider import OpenRouterProvider
@@ -56,6 +57,7 @@ class ModelRouter:
             ]
         )
         providers: List[BaseProvider] = [
+            CodexCliProvider.from_env(timeout_seconds=timeout_seconds),
             GeminiProvider.from_env(timeout_seconds=timeout_seconds),
             GroqProvider.from_env(timeout_seconds=timeout_seconds),
         ]
@@ -99,6 +101,8 @@ class ModelRouter:
     ) -> ModelRouteResult:
         attempts: List[str] = []
         ordered = self._ordered_providers(task_type=task_type, settings=settings)
+        provider_settings = dict(settings or {})
+        provider_settings["_task_type"] = task_type
 
         for index, provider in enumerate(ordered):
             if not provider.available():
@@ -110,7 +114,7 @@ class ModelRouter:
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     context=context,
-                    settings=settings,
+                    settings=provider_settings,
                 )
                 return ModelRouteResult(
                     provider=result.provider,

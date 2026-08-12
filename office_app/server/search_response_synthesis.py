@@ -584,7 +584,7 @@ def synthesize_search_response(
     args: Dict[str, Any] = {
         "workspace_id": workspace_id,
         "session_id": session_id,
-        "task_type": "conversation",
+        "task_type": "search_synthesis",
         "system_prompt": system_prompt,
         "user_prompt": user_prompt,
         "context": {
@@ -596,7 +596,6 @@ def synthesize_search_response(
         "settings": {
             "temperature": 0.3,
             "max_output_tokens": 700,
-            "provider_by_task_type": {"conversation": "gemini"},
         },
     }
     if user_profile:

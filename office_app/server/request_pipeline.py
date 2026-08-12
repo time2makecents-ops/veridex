@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from office_app.server.conversation_planner import ConversationPlanner
 from office_app.server.governance_registry_service import GovernanceRegistryService
+from office_app.server.model_task_router import classify_model_task
 from office_app.server.request_followup import RequestFollowupRouter
 from office_app.server.request_grounding import EntityGroundingRouter
 from office_app.server.persona_registry import persona_profile_for_name
@@ -1660,6 +1661,7 @@ class RequestPipeline:
         ctx = self.current_context(workspace_id)
         active_room = str(ctx["active_room"])
         active_persona = str(ctx["active_persona"])
+        task_type = classify_model_task(request_text, active_room=active_room)
         user_prompt = request_text
         if apply_conversation_plan:
             user_prompt = self.conversation_planner.plan_model_prompt(request_text).user_prompt
@@ -1678,7 +1680,7 @@ class RequestPipeline:
             "tool": "office.ai_generate",
             "arguments": {
                 "workspace_id": workspace_id,
-                "task_type": "conversation",
+                "task_type": task_type,
                 "system_prompt": system_prompt,
                 "user_prompt": user_prompt,
                 "context": {
@@ -1689,9 +1691,6 @@ class RequestPipeline:
                 "settings": {
                     "temperature": 0.4,
                     "max_output_tokens": 512,
-                    "provider_by_task_type": {
-                        "conversation": "gemini",
-                    },
                 },
             },
             "reason": reason,
