@@ -95,6 +95,12 @@ search_service = SearchService()
 ocr_service = OcrService()
 model_router = ModelRouter.from_env()
 VERIDEX_CODEX_TOKEN = str(os.getenv("VERIDEX_CODEX_TOKEN") or "").strip()
+VERIDEX_SINGLE_USER_MODE = str(os.getenv("VERIDEX_SINGLE_USER_MODE", "true") or "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 nancy_service = NancyService(
     kernel=kernel,
     archive_service=archive_service,
@@ -1320,6 +1326,29 @@ def lobby_enter(payload: LobbyEnterRequest) -> Dict[str, Any]:
                     f"Welcome back, {user['display_name']}.\n"
                     f"Restored workspace: {result['workspace_id']}.\n"
                     f"Session: {result['session_id']}."
+                ),
+            }
+        ],
+    }
+
+
+@app.post("/lobby/single-user")
+def lobby_single_user() -> Dict[str, Any]:
+    """Open the local testing account without a login or onboarding step."""
+    if not VERIDEX_SINGLE_USER_MODE:
+        raise HTTPException(status_code=404, detail="Single-user mode is disabled.")
+    user_service.ensure_admin_user()
+    result = user_service.enter_lobby(pin_code=UserService.ADMIN_PIN)
+    user = result["user"]
+    return {
+        "structuredContent": result,
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    f"Local account ready for {user['display_name']}.\n"
+                    f"Workspace restored: {result['workspace_id']}.\n"
+                    f"Session restored: {result['session_id']}."
                 ),
             }
         ],

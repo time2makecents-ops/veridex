@@ -102,7 +102,7 @@ function lobbyOrientationText(persona: string): string {
   return [
     `${persona} ready. You are in the Lobby.`,
     "",
-    "I can show you every room, help you start onboarding, or send you to a department.",
+    "I can show you every room, restore your work, or send you to a department.",
     "Try: what rooms are there, go to Conference Room, or go to My Office.",
   ].join("\n");
 }

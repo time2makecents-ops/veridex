@@ -270,6 +270,18 @@ export async function enter(pin_code: string): Promise<LobbyResponse> {
   return postJson<LobbyResponse>("/lobby/enter", { pin_code });
 }
 
+let singleUserBootstrap: Promise<LobbyResponse> | null = null;
+
+export async function enterSingleUser(): Promise<LobbyResponse> {
+  if (!singleUserBootstrap) {
+    singleUserBootstrap = postJson<LobbyResponse>("/lobby/single-user", {}).catch((error) => {
+      singleUserBootstrap = null;
+      throw error;
+    });
+  }
+  return singleUserBootstrap;
+}
+
 export async function request(text: string, sessionIdOverride?: string): Promise<RequestResponse> {
   const storedSessionId = typeof window === "undefined" ? "" : window.localStorage.getItem("veridex.session_id") ?? "";
   const sessionId = String(sessionIdOverride || storedSessionId || "");

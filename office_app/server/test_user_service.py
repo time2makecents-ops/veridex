@@ -13,6 +13,48 @@ from office_app.server.user_service import UserService
 
 
 class UserServiceTests(unittest.TestCase):
+    def test_single_local_account_keeps_multiple_workspaces_sessions_and_transcripts(self) -> None:
+        runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test_single_local"
+        workspaces_dir = runtime_dir / "workspaces"
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = WorkspaceStore(workspaces_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            kernel = WorkspaceKernel(store=store, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+            service = UserService(kernel=kernel, runtime_dir=runtime_dir, utc_now_fn=lambda: "2026-04-17T12:00:00Z")
+
+            local_user = service.ensure_admin_user()
+            first_entry = service.enter_lobby(pin_code=UserService.ADMIN_PIN)
+            first_session_id = str(first_entry["session_id"])
+            first_workspace_id = str(first_entry["workspace_id"])
+            store.append_transcript(
+                first_workspace_id,
+                "user",
+                "lobby",
+                "Remember this first chat.",
+                speaker="You",
+                session_id=first_session_id,
+            )
+
+            second_session = service.create_session(
+                user_id=str(local_user["user_id"]),
+                title="Second project",
+                workspace_label="Second workspace",
+            )
+            second_workspace_id = str(second_session["active_workspace_id"])
+            second_entry = service.enter_lobby(pin_code=UserService.ADMIN_PIN)
+
+            self.assertEqual(second_entry["user"]["user_id"], local_user["user_id"])
+            self.assertEqual(second_entry["session_id"], second_session["session_id"])
+            self.assertNotEqual(first_workspace_id, second_workspace_id)
+            self.assertEqual(len(service.list_user_workspaces(str(local_user["user_id"]))), 2)
+            self.assertEqual(len(service.list_sessions(str(local_user["user_id"]))), 2)
+            transcript = store.load_transcript(first_workspace_id, session_id=first_session_id)
+            self.assertTrue(any(row.get("text") == "Remember this first chat." for row in transcript))
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
     def test_onboard_creates_user_and_workspace(self) -> None:
         runtime_dir = Path.cwd() / "office_app" / "runtime" / "_user_service_test"
         workspaces_dir = runtime_dir / "workspaces"

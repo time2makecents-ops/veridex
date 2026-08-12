@@ -12,6 +12,11 @@ It lets Codex activate a governed Veridex session and makes authenticated Codex
 the primary Veridex chat provider, without an OpenAI API key. Gemini and Groq
 remain available only as an explicit opt-in fallback.
 
+The current local test build uses `VERIDEX_SINGLE_USER_MODE=true`. Opening the
+web UI bypasses PIN entry and onboarding, restores the stable local Admin
+account, and continues using separate workspaces and sessions. Chat turns are
+still persisted to each session transcript.
+
 ---
 
 # Overview
